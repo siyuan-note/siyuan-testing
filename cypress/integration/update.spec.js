@@ -14,9 +14,24 @@ describe('example to-do app', () => {
 
     cy.get('[data-node-id="20210428212840-8rqwn5o"]')
     cy.get('[data-node-id="20210428212840-859h45j"][data-type="NodeHeading"]').first().type("{ctrl+uparrow}")
+    cy.wait(1000)
     cy.get('[data-node-id="20210428212840-8rqwn5o"]').should("not.exist")
 
     cy.get('[data-node-id="20210428212840-859h45j"][data-type="NodeHeading"]').first().type("{ctrl+uparrow}")
+    cy.wait(1000)
     cy.get('[data-node-id="20210428212840-8rqwn5o"]').should("exist")
+  })
+
+  it("move folded heading", () => {
+    cy.get('[data-node-id="20210428212840-859h45j"][data-type="NodeHeading"]').first().type("{ctrl+uparrow}")
+    cy.wait(1000)
+    cy.get('[data-node-id="20210428212840-8rqwn5o"]').should("not.exist")
+
+    cy.get('[data-node-id="20210428212840-859h45j"][data-type="NodeHeading"]').first().type("{ctrl+shift+downarrow}")
+    cy.get('[data-node-id="20210428212840-859h45j"][data-type="NodeHeading"]').first().type("{ctrl+uparrow}")
+    cy.wait(1000)
+    cy.get('[data-node-id="20210428212840-8rqwn5o"]').should("exist")
+
+
   })
 })
