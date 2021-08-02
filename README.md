@@ -1,3 +1,3 @@
-# siyuan-testing
+# Siyuan Testing
 
-Testing.
+Integration testing for SiYuan.
