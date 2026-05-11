@@ -1,0 +1,12 @@
+{
+  "name": "siyuan-testing",
+  "version": "1.0.0",
+  "description": "Integration testing for SiYuan",
+  "scripts": {
+    "test": "cypress run",
+    "cypress:open": "cypress open"
+  },
+  "devDependencies": {
+    "cypress": "^8.7.0"
+  }
+}
