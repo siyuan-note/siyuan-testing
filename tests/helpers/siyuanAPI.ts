@@ -42,6 +42,20 @@ export interface IDocumentHistoryItem {
     notebook: string;
 }
 
+export interface ISearchBlock {
+    id: string;
+    rootID: string;
+    content: string;
+}
+
+export interface ISearchResult {
+    blocks: ISearchBlock[];
+    matchedBlockCount: number;
+    matchedRootCount: number;
+    pageCount: number;
+    docMode: boolean;
+}
+
 export interface IAppearanceSettings {
     mode: number;
     modeOS: boolean;
@@ -218,6 +232,26 @@ export class SiyuanAPI {
 
     async rollbackDocumentHistory(historyPath: string) {
         await this.post<null>("/api/history/rollbackDocHistory", {historyPath});
+    }
+
+    async searchBlocks(query: string) {
+        return this.post<ISearchResult>("/api/search/fullTextSearchBlock", {
+            query,
+            method: 0,
+            paths: [],
+            groupBy: 0,
+            orderBy: 0,
+            page: 1,
+            pageSize: 32,
+        });
+    }
+
+    async updateBlock(id: string, markdown: string) {
+        await this.post<unknown>("/api/block/updateBlock", {
+            id,
+            dataType: "markdown",
+            data: markdown,
+        });
     }
 
     async getBlockInfo(id: string) {
