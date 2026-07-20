@@ -21,7 +21,11 @@ test.describe("workspace", () => {
 
         await page.locator("#barDock").click();
         await page.waitForTimeout(500);
-        await expect(dock).toBeVisible();
+        if (isVisible) {
+            await expect(dock).toBeVisible();
+        } else {
+            await expect(dock).not.toBeVisible();
+        }
     });
 
     test("toggle theme", async ({page}) => {
