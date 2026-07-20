@@ -1,43 +1,35 @@
 import {expect, test} from "./fixtures";
+import {openWorkspace} from "./helpers/runtime";
 
 test.describe("workspace", () => {
-    test.describe.configure({mode: "parallel"});
-
-    test("toggle dock sidebar", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        const dock = page.locator("#dockLeft");
-        const isVisible = await dock.isVisible().catch(() => false);
+    test("toggles and restores the dock sidebar", async ({page}) => {
+        await openWorkspace(page);
+        const dockIcon = page.locator("#barDock use");
+        const originalIcon = await dockIcon.getAttribute("xlink:href");
+        const originalHidden = originalIcon === "#iconDock";
 
         await page.locator("#barDock").click();
-        await page.waitForTimeout(500);
-
-        if (isVisible) {
-            await expect(dock).not.toBeVisible();
-        } else {
-            await expect(dock).toBeVisible();
-        }
+        await expect(dockIcon).toHaveAttribute("xlink:href", originalHidden ? "#iconHideDock" : "#iconDock");
+        await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(!originalHidden);
 
         await page.locator("#barDock").click();
-        await page.waitForTimeout(500);
-        if (isVisible) {
-            await expect(dock).toBeVisible();
-        } else {
-            await expect(dock).not.toBeVisible();
-        }
+        await expect(dockIcon).toHaveAttribute("xlink:href", originalIcon as string);
+        await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(originalHidden);
     });
 
-    test("toggle theme", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
+    test("changes and restores the appearance mode", async ({page, globalSettings}) => {
+        const targetMode = globalSettings.appearance.mode === 1 && !globalSettings.appearance.modeOS ? 0 : 1;
+        const targetID = targetMode === 0 ? "themeLight" : "themeDark";
 
         await page.locator("#barMode").click();
-        await page.waitForTimeout(300);
+        const menuItem = page.locator(`[data-id="${targetID}"]`);
+        await expect(menuItem).toBeVisible();
+        await menuItem.click();
 
-        await page.locator('[data-id="themeDark"]').click();
-        await page.waitForTimeout(500);
-
-        await expect(page.locator(".b3-dialog--open")).toHaveCount(0, {timeout: 5000});
+        await expect.poll(() => page.evaluate(() => ({
+            mode: window.siyuan.config.appearance.mode,
+            modeOS: window.siyuan.config.appearance.modeOS,
+        }))).toEqual({mode: targetMode, modeOS: false});
+        await expect(page.locator("html")).toHaveAttribute("data-theme-mode", targetMode === 0 ? "light" : "dark");
     });
 });

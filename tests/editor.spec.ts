@@ -1,119 +1,116 @@
+import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
-import {createTestDocument} from "./helpers/testNotebook";
+
+const focusEditable = async (editable: Locator) => {
+    await expect(editable).toBeVisible();
+    await expect(async () => {
+        await editable.click();
+        expect(await editable.evaluate(element => element.contains(getSelection()?.anchorNode || null))).toBe(true);
+    }).toPass({timeout: 5000});
+};
+
+const typeInto = async (page: Page, editable: Locator, text: string) => {
+    await focusEditable(editable);
+    await page.keyboard.type(text, {delay: 10});
+};
 
 test.describe("editor", () => {
     test.describe.configure({mode: "parallel"});
 
-    test("create doc and type", async ({page}) => {
-        const {docID, title} = await createTestDocument(page, "E2E Test Doc");
+    test("creates formatted content and finds the document", async ({page, createTestDocument}) => {
+        const {docID, editor, title} = await createTestDocument("Editor Input E2E");
+        const initialEditable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
 
-        await page.evaluate(() => {
-            const editors = document.querySelectorAll(".protyle-wysiwyg");
-            (editors[editors.length - 1] as HTMLElement)?.click();
-            (editors[editors.length - 1] as HTMLElement)?.focus();
-        });
-        await page.waitForTimeout(500);
-        await page.locator(".protyle-wysiwyg").last().waitFor({state: "attached", timeout: 10000});
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("## Hello Heading");
+        await typeInto(page, initialEditable, "## ");
+        const heading = editor.locator('[data-type="NodeHeading"]');
+        await expect(heading).toBeVisible();
+        await typeInto(page, heading.locator('[contenteditable="true"]'), "Hello Heading");
         await page.keyboard.press("Enter");
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("This is a test paragraph.");
+        const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').last();
+        await expect(paragraph).toBeVisible();
+        await typeInto(page, paragraph.locator('[contenteditable="true"]'), "This is a test paragraph.");
         await page.keyboard.press("Enter");
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("- list item 1");
+        const nextParagraph = editor.locator(':scope > [data-type="NodeParagraph"]').last();
+        await expect(nextParagraph).toBeVisible();
+        await typeInto(page, nextParagraph.locator('[contenteditable="true"]'), "- ");
+        const list = editor.locator(':scope > [data-type="NodeList"]');
+        await expect(list).toBeVisible();
+        const listItems = list.locator(':scope > [data-type="NodeListItem"]');
+        await typeInto(page, listItems.first().locator('[contenteditable="true"]'), "list item 1");
         await page.keyboard.press("Enter");
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("list item 2");
-        await page.keyboard.press("Enter");
-        await page.waitForTimeout(1000);
+        await expect(listItems).toHaveCount(2);
+        await typeInto(page, listItems.nth(1).locator('[contenteditable="true"]'), "list item 2");
 
-        await expect(page.locator(".protyle-breadcrumb").first()).toBeTruthy();
-
-        await page.waitForTimeout(5000);
+        await expect(heading).toContainText("Hello Heading");
+        await expect(editor.locator('[data-type="NodeParagraph"]').filter({hasText: "This is a test paragraph."}))
+            .toBeVisible();
+        await expect(listItems.nth(0)).toContainText("list item 1");
+        await expect(listItems.nth(1)).toContainText("list item 2");
+        await expect(page.locator(".protyle-breadcrumb").last()).toBeVisible();
 
         await page.locator("#barSearch").click();
-        await page.waitForTimeout(1500);
-
-        await page.locator(".b3-dialog--open #searchInput").first().fill(title);
-
-        await expect(page.locator(".b3-dialog--open .search__list").first()).toBeTruthy();
+        const searchInput = page.locator(".b3-dialog--open #searchInput").first();
+        await expect(searchInput).toBeVisible();
+        await searchInput.fill(title);
         await expect(page.locator(`.b3-dialog--open .search__list .b3-list-item[data-node-id="${docID}"]`))
             .toBeVisible({timeout: 15000});
         await page.keyboard.press("Escape");
-        await page.waitForTimeout(500);
+        await expect(page.locator(".b3-dialog--open")).toHaveCount(0);
     });
 
-    test("heading fold unfold", async ({page}) => {
-        await createTestDocument(page, "Fold E2E Test");
-
-        await page.evaluate(() => {
-            const editors = document.querySelectorAll(".protyle-wysiwyg");
-            (editors[editors.length - 1] as HTMLElement)?.click();
-            (editors[editors.length - 1] as HTMLElement)?.focus();
-        });
-        await page.waitForTimeout(500);
-        await page.locator(".protyle-wysiwyg").last().waitFor({state: "attached", timeout: 10000});
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("## Fold Me");
-        await page.keyboard.press("Enter");
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("sub content under heading");
-        await page.keyboard.press("Enter");
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("more sub content");
-        await page.keyboard.press("Enter");
-        await page.waitForTimeout(1000);
-
-        await page.locator(".protyle-breadcrumb__item").last().click();
-        await page.waitForTimeout(500);
-
-        await page.locator('[data-type="NodeHeading"]').last().click();
-        await page.waitForTimeout(300);
+    test("folds and unfolds a heading", async ({page, createTestDocument}) => {
+        const {editor} = await createTestDocument(
+            "Heading Fold E2E",
+            "## Fold Me\n\nsub content under heading\n\nmore sub content",
+        );
+        const heading = editor.locator('[data-type="NodeHeading"]').filter({hasText: "Fold Me"});
+        await expect(heading).toBeVisible();
+        await heading.click();
 
         await page.keyboard.press("Control+ArrowUp");
-        await page.waitForTimeout(1000);
+        await expect(heading).toHaveAttribute("fold", "1");
+        const firstChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "sub content under heading"});
+        const secondChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "more sub content"});
+        await expect(firstChild).toHaveCount(0);
+        await expect(secondChild).toHaveCount(0);
 
         await page.keyboard.press("Control+ArrowUp");
-        await page.waitForTimeout(500);
-
-        await expect(page.locator('[data-type="NodeHeading"]').first()).toBeTruthy();
+        await expect(heading).not.toHaveAttribute("fold", "1");
+        await expect(firstChild).toBeVisible();
+        await expect(secondChild).toBeVisible();
     });
 
-    test("undo and redo", async ({page}) => {
-        await createTestDocument(page, "Undo Test");
-
-        await page.evaluate(() => {
-            const editors = document.querySelectorAll(".protyle-wysiwyg");
-            (editors[editors.length - 1] as HTMLElement)?.click();
-            (editors[editors.length - 1] as HTMLElement)?.focus();
-        });
-        await page.waitForTimeout(500);
-        await page.locator(".protyle-wysiwyg").last().waitFor({state: "attached", timeout: 10000});
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("This will be undone.");
-        await page.keyboard.press("Enter");
-        await page.waitForTimeout(500);
+    test("undoes and redoes persisted input", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("Undo Redo E2E");
+        const content = "This will be undone";
+        const editable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
+        await typeInto(page, editable, content);
+        const paragraph = editor.locator('[data-type="NodeParagraph"]').filter({hasText: content});
+        await expect(paragraph).toBeVisible();
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
 
         await page.keyboard.press("Control+Z");
-        await page.waitForTimeout(800);
+        await expect(paragraph).toHaveCount(0);
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
 
-        await page.keyboard.press("Control+Shift+Z");
-        await page.waitForTimeout(500);
-
-        await expect(page.locator(".protyle-wysiwyg").first()).toBeTruthy();
+        await page.keyboard.press("Control+Y");
+        await expect(paragraph).toBeVisible();
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
     });
 
-    test("code block", async ({page}) => {
-        await createTestDocument(page, "Code Block Test");
-
-        await page.evaluate(() => {
-            const editors = document.querySelectorAll(".protyle-wysiwyg");
-            (editors[editors.length - 1] as HTMLElement)?.click();
-            (editors[editors.length - 1] as HTMLElement)?.focus();
-        });
-        await page.waitForTimeout(500);
-        await page.locator(".protyle-wysiwyg").last().waitFor({state: "attached", timeout: 10000});
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("```js");
+    test("creates and persists a JavaScript code block", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("Code Block E2E");
+        const editable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
+        await typeInto(page, editable, "```js");
         await page.keyboard.press("Enter");
-        await page.waitForTimeout(800);
 
-        await page.locator(".protyle-wysiwyg").last().pressSequentially("console.log('hello')");
-        await page.waitForTimeout(500);
+        const codeBlock = editor.locator('[data-type="NodeCodeBlock"]');
+        await expect(codeBlock).toBeVisible();
+        await expect(codeBlock.locator(".protyle-action__language")).toHaveText("js");
 
-        await expect(page.locator('[data-type="NodeCodeBlock"], .code-block').first()).toBeTruthy();
+        const content = "console.log('hello')";
+        await typeInto(page, codeBlock.locator('.hljs [contenteditable="true"]'), content);
+        await expect(codeBlock).toContainText(content);
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
     });
-
 });

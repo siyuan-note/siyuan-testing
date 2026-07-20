@@ -1,4 +1,5 @@
 import {defineConfig} from "@playwright/test";
+import {getBaseURL} from "./tests/helpers/runtime";
 
 export default defineConfig({
     testDir: "./tests",
@@ -6,7 +7,7 @@ export default defineConfig({
     retries: 0,
     workers: 4,
     use: {
-        baseURL: "http://127.0.0.1:6806",
+        baseURL: getBaseURL(),
         headless: true,
         viewport: {width: 1440, height: 900},
         actionTimeout: 10000,

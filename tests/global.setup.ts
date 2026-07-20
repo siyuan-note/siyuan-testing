@@ -1,8 +1,13 @@
 import {test} from "@playwright/test";
 import {ensureTestNotebook, TEST_NOTEBOOK_NAME} from "./helpers/testNotebook";
+import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {validateTestTarget} from "./helpers/runtime";
 
-test(`ensure ${TEST_NOTEBOOK_NAME} notebook`, async ({page}) => {
-    await page.goto("http://127.0.0.1:6806");
-    await page.waitForTimeout(3000);
-    await ensureTestNotebook(page);
+test(`validate target and ensure ${TEST_NOTEBOOK_NAME} notebook`, async ({request, baseURL}) => {
+    if (!baseURL) {
+        throw new Error("playwright.config.ts must define use.baseURL");
+    }
+    const api = new SiyuanAPI(request, baseURL);
+    await validateTestTarget(api, baseURL);
+    await ensureTestNotebook(api);
 });

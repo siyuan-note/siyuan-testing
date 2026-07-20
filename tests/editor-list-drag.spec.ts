@@ -1,7 +1,7 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
-import {createTestDocument} from "./helpers/testNotebook";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface IDragSession {
     dataTransfer: JSHandle<DataTransfer>;
@@ -26,7 +26,7 @@ const startGutterBlockDrag = async (page: Page, source: Locator, expectedType: s
     const handle = page.locator(`.protyle-gutters button[data-node-id="${id}"] > span[draggable="true"]`);
     await expect(handle).toBeVisible();
     const endTarget = await handle.locator("xpath=../..").elementHandle() as ElementHandle<HTMLElement>;
-    expect(endTarget).toBeTruthy();
+    expect(endTarget).not.toBeNull();
     const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
     await handle.dispatchEvent("dragstart", {dataTransfer});
     await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
@@ -41,7 +41,7 @@ const startListItemDrag = async (page: Page, source: Locator) => {
     await expect(action).toBeVisible();
     const endTarget = await source.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), " +
         "' protyle-wysiwyg ')][1]").elementHandle() as ElementHandle<HTMLElement>;
-    expect(endTarget).toBeTruthy();
+    expect(endTarget).not.toBeNull();
     const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
     await action.dispatchEvent("dragstart", {dataTransfer});
     await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
@@ -102,8 +102,8 @@ const dragOverWithoutListTarget = async (session: IDragSession, eventTarget: Loc
 test.describe("content block dragging around list items", () => {
     test.describe.configure({mode: "parallel"});
 
-    test("rejects a content block as a direct child of NodeList", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "List Content Gap E2E", "X\n\n* A\n* B\n* C");
+    test("rejects a content block as a direct child of NodeList", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("List Content Gap E2E", "X\n\n* A\n* B\n* C");
         const source = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "X"}).first();
         const list = editor.locator(':scope > [data-type="NodeList"]');
         const firstItem = list.locator(':scope > [data-type="NodeListItem"]').first();
@@ -112,13 +112,13 @@ test.describe("content block dragging around list items", () => {
 
         await expect(source).toHaveCount(1);
         await expect.poll(() => source.evaluate(element => element.parentElement?.classList.contains("protyle-wysiwyg")))
-            .toBeTruthy();
+            .toBe(true);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("does not offer an invalid sibling drop between list items", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "List Content Real Gap E2E", "X\n\n* A\n* B\n* C");
+    test("does not offer an invalid sibling drop between list items", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("List Content Real Gap E2E", "X\n\n* A\n* B\n* C");
         const source = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "X"}).first();
         const list = editor.locator(':scope > [data-type="NodeList"]');
         const secondItemContent = list.locator(':scope > [data-type="NodeListItem"]').nth(1)
@@ -131,13 +131,13 @@ test.describe("content block dragging around list items", () => {
 
         await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "B", "C"]);
         await expect.poll(() => source.evaluate(element => element.parentElement?.classList.contains("protyle-wysiwyg")))
-            .toBeTruthy();
+            .toBe(true);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("inserts content blocks at an exact position inside a list item", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "List Content Position E2E", "X\n\nY\n\n* A\n* B\n* C");
+    test("inserts content blocks at an exact position inside a list item", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("List Content Position E2E", "X\n\nY\n\n* A\n* B\n* C");
         const sourceX = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "X"}).first();
         const sourceY = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "Y"}).first();
         const firstItem = editor.locator(':scope > [data-type="NodeList"] > [data-type="NodeListItem"]').first();
@@ -148,17 +148,17 @@ test.describe("content block dragging around list items", () => {
 
         await expect.poll(() => getDirectContentTexts(firstItem)).toEqual(["A", "Y", "X"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
 
         await page.reload();
-        const reloadedEditor = page.locator(".protyle-wysiwyg").last();
+        const reloadedEditor = await getDocumentEditor(page, docID);
         const reloadedFirstItem = reloadedEditor.locator(':scope > [data-type="NodeList"] > [data-type="NodeListItem"]').first();
         await expect.poll(() => getDirectContentTexts(reloadedFirstItem)).toEqual(["A", "Y", "X"]);
         await assertValidListDOM(reloadedEditor);
     });
 
-    test("places a content block before a nested list instead of beside its items", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "Nested List Gap E2E", "X\n\n* Parent\n  * Child");
+    test("places a content block before a nested list instead of beside its items", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("Nested List Gap E2E", "X\n\n* Parent\n  * Child");
         const source = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "X"}).first();
         const parentItem = editor.locator('[data-type="NodeListItem"]').filter({hasText: "Parent"}).first();
         const childItem = parentItem.locator(':scope > [data-type="NodeList"] > [data-type="NodeListItem"]').first();
@@ -169,16 +169,16 @@ test.describe("content block dragging around list items", () => {
         await expect.poll(() => getDirectListItemTexts(parentItem.locator(':scope > [data-type="NodeList"]')))
             .toEqual(["Child"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 });
 
 test.describe("list item dragging", () => {
     test.describe.configure({mode: "parallel"});
 
-    test("moves an item above the first item of another list with a precise tip", async ({page}) => {
+    test("moves an item above the first item of another list with a precise tip", async ({page, createTestDocument, siyuanAPI}) => {
         const markdown = "* A\n* B\n\nseparator\n\n* D\n* E";
-        const {docID, editor} = await createTestDocument(page, "List Item Before E2E", markdown);
+        const {docID, editor} = await createTestDocument("List Item Before E2E", markdown);
         const lists = editor.locator(':scope > [data-type="NodeList"]');
         const targetList = lists.nth(0);
         const sourceList = lists.nth(1);
@@ -195,12 +195,12 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("moves an item below another item with a precise tip", async ({page}) => {
+    test("moves an item below another item with a precise tip", async ({page, createTestDocument, siyuanAPI}) => {
         const markdown = "* A\n* B\n\nseparator\n\n* D\n* E";
-        const {docID, editor} = await createTestDocument(page, "List Item After E2E", markdown);
+        const {docID, editor} = await createTestDocument("List Item After E2E", markdown);
         const lists = editor.locator(':scope > [data-type="NodeList"]');
         const targetList = lists.nth(0);
         const sourceList = lists.nth(1);
@@ -217,12 +217,12 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["A", "D", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("nests an item under another item when dropped in the child zone", async ({page}) => {
+    test("nests an item under another item when dropped in the child zone", async ({page, createTestDocument, siyuanAPI}) => {
         const markdown = "* A\n* B\n\nseparator\n\n* D";
-        const {docID, editor} = await createTestDocument(page, "List Item Child E2E", markdown);
+        const {docID, editor} = await createTestDocument("List Item Child E2E", markdown);
         const lists = editor.locator(':scope > [data-type="NodeList"]');
         const targetList = lists.nth(0);
         const target = targetList.locator(':scope > [data-type="NodeListItem"]').first();
@@ -239,12 +239,12 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(target.locator(':scope > [data-type="NodeList"]')))
             .toEqual(["D"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("inserts items at both ends of an existing nested list", async ({page}) => {
+    test("inserts items at both ends of an existing nested list", async ({page, createTestDocument, siyuanAPI}) => {
         const markdown = "* A\n  * B\n  * C\n\nseparator\n\n* D\n* E";
-        const {docID, editor} = await createTestDocument(page, "Existing Nested List E2E", markdown);
+        const {docID, editor} = await createTestDocument("Existing Nested List E2E", markdown);
         const topLists = editor.locator(':scope > [data-type="NodeList"]');
         const parentItem = topLists.nth(0).locator(':scope > [data-type="NodeListItem"]').first();
         const nestedList = parentItem.locator(':scope > [data-type="NodeList"]');
@@ -266,11 +266,11 @@ test.describe("list item dragging", () => {
 
         await expect.poll(() => getDirectListItemTexts(nestedList)).toEqual(["D", "B", "C", "E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("reorders items within the same list", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "Same List Reorder E2E", "* A\n* B\n* C");
+    test("reorders items within the same list", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("Same List Reorder E2E", "* A\n* B\n* C");
         const list = editor.locator(':scope > [data-type="NodeList"]');
         const source = list.locator(':scope > [data-type="NodeListItem"]').filter({hasText: "C"}).first();
         const target = list.locator(':scope > [data-type="NodeListItem"]').filter({hasText: "A"}).first();
@@ -282,11 +282,11 @@ test.describe("list item dragging", () => {
 
         await expect.poll(() => getDirectListItemTexts(list)).toEqual(["C", "A", "B"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("does not move an item onto itself or its current adjacent position", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "List Item No-op E2E", "* A\n* B\n* C");
+    test("does not move an item onto itself or its current adjacent position", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("List Item No-op E2E", "* A\n* B\n* C");
         const list = editor.locator(':scope > [data-type="NodeList"]');
         const source = list.locator(':scope > [data-type="NodeListItem"]').nth(1);
         const sourceContent = source.locator(':scope > [data-node-id]').first();
@@ -303,11 +303,11 @@ test.describe("list item dragging", () => {
 
         await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "B", "C"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("does not move a parent item into its own descendant", async ({page}) => {
-        const {docID, editor} = await createTestDocument(page, "List Descendant No-op E2E", "* A\n  * B\n* C");
+    test("does not move a parent item into its own descendant", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument("List Descendant No-op E2E", "* A\n  * B\n* C");
         const list = editor.locator(':scope > [data-type="NodeList"]');
         const source = list.locator(':scope > [data-type="NodeListItem"]').first();
         const nestedList = source.locator(':scope > [data-type="NodeList"]');
@@ -321,12 +321,12 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "C"]);
         await expect.poll(() => getDirectListItemTexts(nestedList)).toEqual(["B"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
-    test("restores and reapplies a cross-list move with undo and redo", async ({page}) => {
+    test("restores and reapplies a cross-list move with undo and redo", async ({page, createTestDocument, siyuanAPI}) => {
         const markdown = "* A\n* B\n\nseparator\n\n* D\n* E";
-        const {docID, editor} = await createTestDocument(page, "List Move Undo E2E", markdown);
+        const {docID, editor} = await createTestDocument("List Move Undo E2E", markdown);
         const lists = editor.locator(':scope > [data-type="NodeList"]');
         const targetList = lists.nth(0);
         const sourceList = lists.nth(1);
@@ -338,19 +338,19 @@ test.describe("list item dragging", () => {
         await finishDrag(session);
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
 
         await page.keyboard.press("Control+Z");
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["D", "E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
 
         await page.keyboard.press("Control+Y");
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID, editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
     [
@@ -371,8 +371,8 @@ test.describe("list item dragging", () => {
             expectedMarkers: ["*", "*", "*"],
         },
     ].forEach((listType) => {
-        test(`converts an unordered item when moving it into ${listType.article} ${listType.name} list`, async ({page}) => {
-            const {docID, editor} = await createTestDocument(page, `List Type ${listType.name} E2E`, listType.markdown);
+        test(`converts an unordered item when moving it into ${listType.article} ${listType.name} list`, async ({page, createTestDocument, siyuanAPI}) => {
+            const {docID, editor} = await createTestDocument(`List Type ${listType.name} E2E`, listType.markdown);
             const lists = editor.locator(':scope > [data-type="NodeList"]');
             const targetList = lists.nth(0);
             const sourceList = lists.nth(1);
@@ -394,7 +394,7 @@ test.describe("list item dragging", () => {
                 await expect(targetItems.first()).toHaveAttribute("data-task", " ");
             }
             await assertValidListDOM(editor);
-            await assertValidSyListTree(page, docID, editor);
+            await assertValidSyListTree(siyuanAPI, docID, editor);
         });
     });
 

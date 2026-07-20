@@ -1,4 +1,5 @@
-import {expect, Locator, Page} from "@playwright/test";
+import {expect, Locator} from "@playwright/test";
+import {SiyuanAPI} from "./siyuanAPI";
 
 interface ISyNode {
     Type: string;
@@ -15,12 +16,6 @@ interface ISyNode {
     TaskListItemChecked?: boolean;
 }
 
-interface IAPIResponse<T> {
-    code: number;
-    msg: string;
-    data: T;
-}
-
 interface IDOMListNode {
     id: string;
     childIDs: string[];
@@ -32,6 +27,10 @@ export const assertValidListDOM = async (editor: Locator) => {
         const ids = new Set<string>();
         element.querySelectorAll<HTMLElement>("[data-node-id]").forEach(item => {
             const id = item.dataset.nodeId;
+            if (!id) {
+                result.push(`${item.getAttribute("data-type")} is missing a block ID`);
+                return;
+            }
             if (ids.has(id)) {
                 result.push(`duplicate block ID ${id}`);
             }
@@ -138,34 +137,7 @@ const validateSyListTree = (root: ISyNode) => {
     return errors;
 };
 
-const readSyDocument = (page: Page, docID: string) => page.evaluate(async (id) => {
-    const post = async <T>(path: string, body: object) => {
-        const request = await fetch(path, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(body),
-        });
-        if (request.status !== 200) {
-            throw new Error(await request.text());
-        }
-        return request.json() as Promise<IAPIResponse<T>>;
-    };
-    const info = await post<{box: string, path: string}>("/api/block/getBlockInfo", {id});
-    if (info.code !== 0) {
-        throw new Error(info.msg);
-    }
-    const request = await fetch("/api/file/getFile", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({path: `/data/${info.data.box}${info.data.path}`}),
-    });
-    if (request.status !== 200) {
-        throw new Error(await request.text());
-    }
-    return request.json() as Promise<ISyNode>;
-}, docID);
-
-export const assertValidSyListTree = async (page: Page, docID: string, editor?: Locator) => {
+export const assertValidSyListTree = async (api: SiyuanAPI, docID: string, editor?: Locator) => {
     const expectedNodes = editor ? await editor.evaluate((element, rootID) => {
         const nodes: IDOMListNode[] = [{
             id: rootID,
@@ -185,7 +157,7 @@ export const assertValidSyListTree = async (page: Page, docID: string, editor?: 
     }, docID) : [];
 
     await expect.poll(async () => {
-        const root = await readSyDocument(page, docID);
+        const root = await api.readDocument<ISyNode>(docID);
         const errors = validateSyListTree(root);
         const syNodes = new Map<string, ISyNode>();
         const collect = (node: ISyNode) => {
