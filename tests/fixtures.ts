@@ -5,6 +5,7 @@ import {
     preserveFailedTestDocuments,
     removeCreatedTestDocuments,
     TestDocumentFactory,
+    TestDocumentTracker,
 } from "./helpers/testNotebook";
 import {IAppearanceSettings, SiyuanAPI} from "./helpers/siyuanAPI";
 import {openWorkspace} from "./helpers/runtime";
@@ -16,6 +17,7 @@ interface IGlobalSettings {
 interface ITestFixtures {
     siyuanAPI: SiyuanAPI;
     createTestDocument: TestDocumentFactory;
+    trackTestDocument: TestDocumentTracker;
     globalSettings: IGlobalSettings;
     testDocumentCleanup: void;
 }
@@ -37,6 +39,13 @@ export const test = base.extend<ITestFixtures & IInternalFixtures>({
     createTestDocument: async ({page, siyuanAPI, createdTestDocuments}, use) => {
         await use((titlePrefix, markdown) =>
             createTestDocument(page, siyuanAPI, createdTestDocuments, titlePrefix, markdown));
+    },
+    trackTestDocument: async ({createdTestDocuments}, use) => {
+        await use((document) => {
+            if (!createdTestDocuments.some(item => item.id === document.id)) {
+                createdTestDocuments.push(document);
+            }
+        });
     },
     globalSettings: async ({page, siyuanAPI}, use) => {
         await openWorkspace(page);

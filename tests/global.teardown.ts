@@ -11,7 +11,7 @@ test(`remove empty ${TEST_NOTEBOOK_NAME} notebook`, async ({request, baseURL}) =
     if (!notebook) {
         return;
     }
-    const documents = await api.listDocuments(notebook.id);
+    const documents = await api.listAllDocuments(notebook.id);
     if (documents.length === 0) {
         await api.removeNotebook(notebook.id);
     }

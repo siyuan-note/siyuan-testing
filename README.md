@@ -29,3 +29,5 @@ Every test creates an independent document in the `SiYuan Testing` notebook. Doc
 Tests that change global settings must use the `globalSettings` fixture so the original values are restored. Document tests may run in parallel; tests that share global application state must remain serial.
 
 Reusable SiYuan HTTP operations belong in `tests/helpers/siyuanAPI.ts`. Tests should use the `createTestDocument` fixture instead of creating or deleting documents directly.
+
+The lifecycle suite covers document creation, rename, move, duplication, deletion, and history rollback. Documents created indirectly, such as duplicates, must be registered with the `trackTestDocument` fixture so the normal cleanup policy still applies. Cleanup locates tracked documents by ID and checks the complete document tree before removing the test notebook.

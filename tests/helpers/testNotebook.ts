@@ -18,6 +18,7 @@ export interface ITestDocument {
 }
 
 export type TestDocumentFactory = (titlePrefix: string, markdown?: string) => Promise<ITestDocument>;
+export type TestDocumentTracker = (document: ICreatedTestDocument) => void;
 
 export const ensureTestNotebook = async (api: SiyuanAPI) => {
     const notebooks = await api.listNotebooks();
@@ -67,8 +68,7 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
     while (Date.now() < deadline) {
         let found = false;
         for (const document of documents) {
-            const existingDocuments = await api.listDocuments(document.notebookID);
-            if (!existingDocuments.some(item => item.id === document.id)) {
+            if (!await api.findDocumentPath(document.id)) {
                 continue;
             }
             found = true;
