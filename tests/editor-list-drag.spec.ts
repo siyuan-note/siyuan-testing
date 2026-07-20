@@ -1,4 +1,5 @@
-import {ElementHandle, expect, JSHandle, Locator, Page, test} from "@playwright/test";
+import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
+import {expect, test} from "./fixtures";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {createTestDocument} from "./helpers/testNotebook";
 
@@ -18,7 +19,7 @@ const getDirectContentTexts = (listItem: Locator) => listItem.evaluate((element)
         .filter(item => item.hasAttribute("data-node-id") && item.getAttribute("data-type") !== "NodeList")
         .map(item => item.querySelector("[contenteditable=\"true\"]")?.textContent?.trim()));
 
-const startContentBlockDrag = async (page: Page, source: Locator) => {
+const startGutterBlockDrag = async (page: Page, source: Locator, expectedType: string) => {
     const id = await source.getAttribute("data-node-id");
     await page.mouse.move(0, 0);
     await source.hover();
@@ -29,9 +30,11 @@ const startContentBlockDrag = async (page: Page, source: Locator) => {
     const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
     await handle.dispatchEvent("dragstart", {dataTransfer});
     await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
-        .toContain("nodeparagraph");
+        .toContain(expectedType);
     return {dataTransfer, endTarget} as IDragSession;
 };
+
+const startContentBlockDrag = (page: Page, source: Locator) => startGutterBlockDrag(page, source, "nodeparagraph");
 
 const startListItemDrag = async (page: Page, source: Locator) => {
     const action = source.locator(":scope > .protyle-action").first();
@@ -64,12 +67,36 @@ const dragOverListItem = async (session: IDragSession, target: Locator, position
     if (!itemBox || !contentBox) {
         throw new Error("list item is not visible");
     }
-    const clientX = child ? contentBox.x + 40 : contentBox.x + 4;
+    const clientX = child ? contentBox.x + 40 : itemBox.x + 4;
     const clientY = position === "top" ? contentBox.y + 2 : contentBox.y + contentBox.height - 2;
     await content.dispatchEvent("dragover", {dataTransfer: session.dataTransfer, clientX, clientY});
     const className = `dragover__${position}--${child ? "child" : "sibling"}`;
     await expect(target).toHaveClass(new RegExp(`(^|\\s)${className}(\\s|$)`));
     return content;
+};
+
+const dragOverWithoutListTarget = async (session: IDragSession, eventTarget: Locator, pointTarget: Locator,
+                                         position: "top" | "bottom") => {
+    const box = await pointTarget.boundingBox();
+    const listItemBox = await pointTarget.locator("xpath=ancestor-or-self::*[@data-type='NodeListItem'][1]")
+        .boundingBox();
+    if (!box) {
+        throw new Error("drop target is not visible");
+    }
+    await eventTarget.page().evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() =>
+        requestAnimationFrame(() => resolve()))));
+    const initialTip = await eventTarget.page().locator(".drag-tip__action").textContent().catch(() => null);
+    const clientX = (listItemBox || box).x + 4;
+    const clientY = position === "top" ? box.y + 2 : box.y + box.height - 2;
+    await eventTarget.dispatchEvent("dragover", {dataTransfer: session.dataTransfer, clientX, clientY});
+    const state = await eventTarget.page().evaluate(() => ({
+        indicators: Array.from(document.querySelectorAll('[class*="dragover__"]'))
+            .map(element => ({type: element.getAttribute("data-type"), className: element.className})),
+        tip: document.querySelector(".drag-tip__action")?.textContent || null,
+    }));
+    const moveTip = await eventTarget.page().evaluate(() => window.siyuan.languages.move);
+    expect(state.indicators).toEqual([]);
+    expect([initialTip, moveTip]).toContain(state.tip);
 };
 
 test.describe("content block dragging around list items", () => {
@@ -87,7 +114,26 @@ test.describe("content block dragging around list items", () => {
         await expect.poll(() => source.evaluate(element => element.parentElement?.classList.contains("protyle-wysiwyg")))
             .toBeTruthy();
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("does not offer an invalid sibling drop between list items", async ({page}) => {
+        const {docID, editor} = await createTestDocument(page, "List Content Real Gap E2E", "X\n\n* A\n* B\n* C");
+        const source = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "X"}).first();
+        const list = editor.locator(':scope > [data-type="NodeList"]');
+        const secondItemContent = list.locator(':scope > [data-type="NodeListItem"]').nth(1)
+            .locator(':scope > [data-node-id]').first();
+        const session = await startContentBlockDrag(page, source);
+
+        await dragOverWithoutListTarget(session, list, secondItemContent, "top");
+        await list.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+
+        await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "B", "C"]);
+        await expect.poll(() => source.evaluate(element => element.parentElement?.classList.contains("protyle-wysiwyg")))
+            .toBeTruthy();
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
     });
 
     test("inserts content blocks at an exact position inside a list item", async ({page}) => {
@@ -102,7 +148,7 @@ test.describe("content block dragging around list items", () => {
 
         await expect.poll(() => getDirectContentTexts(firstItem)).toEqual(["A", "Y", "X"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID);
+        await assertValidSyListTree(page, docID, editor);
 
         await page.reload();
         const reloadedEditor = page.locator(".protyle-wysiwyg").last();
@@ -123,7 +169,7 @@ test.describe("content block dragging around list items", () => {
         await expect.poll(() => getDirectListItemTexts(parentItem.locator(':scope > [data-type="NodeList"]')))
             .toEqual(["Child"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID);
+        await assertValidSyListTree(page, docID, editor);
     });
 });
 
@@ -149,7 +195,29 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("moves an item below another item with a precise tip", async ({page}) => {
+        const markdown = "* A\n* B\n\nseparator\n\n* D\n* E";
+        const {docID, editor} = await createTestDocument(page, "List Item After E2E", markdown);
+        const lists = editor.locator(':scope > [data-type="NodeList"]');
+        const targetList = lists.nth(0);
+        const sourceList = lists.nth(1);
+        const target = targetList.locator(':scope > [data-type="NodeListItem"]').first();
+        const source = sourceList.locator(':scope > [data-type="NodeListItem"]').first();
+        const session = await startListItemDrag(page, source);
+        const dropTarget = await dragOverListItem(session, target, "bottom");
+        const expectedTip = await page.evaluate(() => window.siyuan.languages.dragTipListItemAfter.replace("${x}", "A"));
+        await expect(page.locator(".drag-tip__action")).toHaveText(expectedTip);
+
+        await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+
+        await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["A", "D", "B"]);
+        await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
     });
 
     test("nests an item under another item when dropped in the child zone", async ({page}) => {
@@ -171,6 +239,163 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(target.locator(':scope > [data-type="NodeList"]')))
             .toEqual(["D"]);
         await assertValidListDOM(editor);
-        await assertValidSyListTree(page, docID);
+        await assertValidSyListTree(page, docID, editor);
     });
+
+    test("inserts items at both ends of an existing nested list", async ({page}) => {
+        const markdown = "* A\n  * B\n  * C\n\nseparator\n\n* D\n* E";
+        const {docID, editor} = await createTestDocument(page, "Existing Nested List E2E", markdown);
+        const topLists = editor.locator(':scope > [data-type="NodeList"]');
+        const parentItem = topLists.nth(0).locator(':scope > [data-type="NodeListItem"]').first();
+        const nestedList = parentItem.locator(':scope > [data-type="NodeList"]');
+        const sourceList = topLists.nth(1);
+
+        const firstSession = await startListItemDrag(page,
+            sourceList.locator(':scope > [data-type="NodeListItem"]').first());
+        const firstDropTarget = await dragOverListItem(firstSession,
+            nestedList.locator(':scope > [data-type="NodeListItem"]').first(), "top");
+        await firstDropTarget.dispatchEvent("drop", {dataTransfer: firstSession.dataTransfer});
+        await finishDrag(firstSession);
+
+        const secondSession = await startListItemDrag(page,
+            sourceList.locator(':scope > [data-type="NodeListItem"]').first());
+        const secondDropTarget = await dragOverListItem(secondSession,
+            nestedList.locator(':scope > [data-type="NodeListItem"]').filter({hasText: "C"}).first(), "bottom");
+        await secondDropTarget.dispatchEvent("drop", {dataTransfer: secondSession.dataTransfer});
+        await finishDrag(secondSession);
+
+        await expect.poll(() => getDirectListItemTexts(nestedList)).toEqual(["D", "B", "C", "E"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("reorders items within the same list", async ({page}) => {
+        const {docID, editor} = await createTestDocument(page, "Same List Reorder E2E", "* A\n* B\n* C");
+        const list = editor.locator(':scope > [data-type="NodeList"]');
+        const source = list.locator(':scope > [data-type="NodeListItem"]').filter({hasText: "C"}).first();
+        const target = list.locator(':scope > [data-type="NodeListItem"]').filter({hasText: "A"}).first();
+        const session = await startListItemDrag(page, source);
+        const dropTarget = await dragOverListItem(session, target, "top");
+
+        await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+
+        await expect.poll(() => getDirectListItemTexts(list)).toEqual(["C", "A", "B"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("does not move an item onto itself or its current adjacent position", async ({page}) => {
+        const {docID, editor} = await createTestDocument(page, "List Item No-op E2E", "* A\n* B\n* C");
+        const list = editor.locator(':scope > [data-type="NodeList"]');
+        const source = list.locator(':scope > [data-type="NodeListItem"]').nth(1);
+        const sourceContent = source.locator(':scope > [data-node-id]').first();
+
+        const selfSession = await startListItemDrag(page, source);
+        await dragOverWithoutListTarget(selfSession, sourceContent, sourceContent, "bottom");
+        await finishDrag(selfSession);
+
+        const adjacentSession = await startListItemDrag(page, source);
+        const adjacentContent = list.locator(':scope > [data-type="NodeListItem"]').first()
+            .locator(':scope > [data-node-id]').first();
+        await dragOverWithoutListTarget(adjacentSession, adjacentContent, adjacentContent, "bottom");
+        await finishDrag(adjacentSession);
+
+        await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "B", "C"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("does not move a parent item into its own descendant", async ({page}) => {
+        const {docID, editor} = await createTestDocument(page, "List Descendant No-op E2E", "* A\n  * B\n* C");
+        const list = editor.locator(':scope > [data-type="NodeList"]');
+        const source = list.locator(':scope > [data-type="NodeListItem"]').first();
+        const nestedList = source.locator(':scope > [data-type="NodeList"]');
+        const descendantContent = nestedList.locator(':scope > [data-type="NodeListItem"]')
+            .first().locator(':scope > [data-node-id]').first();
+        const session = await startListItemDrag(page, source);
+
+        await dragOverWithoutListTarget(session, descendantContent, descendantContent, "top");
+        await finishDrag(session);
+
+        await expect.poll(() => getDirectListItemTexts(list)).toEqual(["A", "C"]);
+        await expect.poll(() => getDirectListItemTexts(nestedList)).toEqual(["B"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    test("restores and reapplies a cross-list move with undo and redo", async ({page}) => {
+        const markdown = "* A\n* B\n\nseparator\n\n* D\n* E";
+        const {docID, editor} = await createTestDocument(page, "List Move Undo E2E", markdown);
+        const lists = editor.locator(':scope > [data-type="NodeList"]');
+        const targetList = lists.nth(0);
+        const sourceList = lists.nth(1);
+        const target = targetList.locator(':scope > [data-type="NodeListItem"]').first();
+        const source = sourceList.locator(':scope > [data-type="NodeListItem"]').first();
+        const session = await startListItemDrag(page, source);
+        const dropTarget = await dragOverListItem(session, target, "top");
+        await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+        await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
+        await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
+        await assertValidSyListTree(page, docID, editor);
+
+        await page.keyboard.press("Control+Z");
+        await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["A", "B"]);
+        await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["D", "E"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+
+        await page.keyboard.press("Control+Y");
+        await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
+        await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(page, docID, editor);
+    });
+
+    [
+        {
+            name: "ordered",
+            article: "an",
+            markdown: "1. O1\n2. O2\n\nseparator\n\n* S",
+            subtype: "o",
+            expectedTexts: ["S", "O1", "O2"],
+            expectedMarkers: ["1.", "2.", "3."],
+        },
+        {
+            name: "task",
+            article: "a",
+            markdown: "* [ ] T1\n* [x] T2\n\nseparator\n\n* S",
+            subtype: "t",
+            expectedTexts: ["S", "T1", "T2"],
+            expectedMarkers: ["*", "*", "*"],
+        },
+    ].forEach((listType) => {
+        test(`converts an unordered item when moving it into ${listType.article} ${listType.name} list`, async ({page}) => {
+            const {docID, editor} = await createTestDocument(page, `List Type ${listType.name} E2E`, listType.markdown);
+            const lists = editor.locator(':scope > [data-type="NodeList"]');
+            const targetList = lists.nth(0);
+            const sourceList = lists.nth(1);
+            await expect(targetList).toHaveAttribute("data-subtype", listType.subtype);
+            const target = targetList.locator(':scope > [data-type="NodeListItem"]').first();
+            const source = sourceList.locator(':scope > [data-type="NodeListItem"]').first();
+            const session = await startListItemDrag(page, source);
+            const dropTarget = await dragOverListItem(session, target, "top");
+
+            await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+            await finishDrag(session);
+
+            const targetItems = targetList.locator(':scope > [data-type="NodeListItem"]');
+            await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(listType.expectedTexts);
+            await expect.poll(() => targetItems.evaluateAll(items => items.map(item => item.getAttribute("data-marker"))))
+                .toEqual(listType.expectedMarkers);
+            await expect(targetItems.first()).toHaveAttribute("data-subtype", listType.subtype);
+            if (listType.subtype === "t") {
+                await expect(targetItems.first()).toHaveAttribute("data-task", " ");
+            }
+            await assertValidListDOM(editor);
+            await assertValidSyListTree(page, docID, editor);
+        });
+    });
+
 });

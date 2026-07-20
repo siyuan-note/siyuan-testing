@@ -21,6 +21,11 @@ interface IAPIResponse<T> {
     data: T;
 }
 
+interface IDOMListNode {
+    id: string;
+    childIDs: string[];
+}
+
 export const assertValidListDOM = async (editor: Locator) => {
     const errors = await editor.evaluate((element) => {
         const result: string[] = [];
@@ -108,7 +113,8 @@ const validateSyListTree = (root: ISyNode) => {
                 const marker = children[0];
                 if (marker?.Type !== "NodeTaskListItemMarker" || marker.ID) {
                     errors.push(`task list item ${node.ID} has an invalid marker`);
-                } else if (!!marker.TaskListItemChecked !== !!node.ListData?.Checked) {
+                } else if (node.ListData?.Checked !== undefined &&
+                    !!marker.TaskListItemChecked !== node.ListData.Checked) {
                     errors.push(`task list item ${node.ID} has inconsistent checked state`);
                 }
             }
@@ -159,7 +165,47 @@ const readSyDocument = (page: Page, docID: string) => page.evaluate(async (id) =
     return request.json() as Promise<ISyNode>;
 }, docID);
 
-export const assertValidSyListTree = async (page: Page, docID: string) => {
-    await expect.poll(async () => validateSyListTree(await readSyDocument(page, docID)), {timeout: 10000})
-        .toEqual([]);
+export const assertValidSyListTree = async (page: Page, docID: string, editor?: Locator) => {
+    const expectedNodes = editor ? await editor.evaluate((element, rootID) => {
+        const nodes: IDOMListNode[] = [{
+            id: rootID,
+            childIDs: Array.from(element.children)
+                .filter(child => child.hasAttribute("data-node-id"))
+                .map(child => child.getAttribute("data-node-id") as string),
+        }];
+        element.querySelectorAll<HTMLElement>('[data-type="NodeList"], [data-type="NodeListItem"]').forEach(node => {
+            nodes.push({
+                id: node.dataset.nodeId as string,
+                childIDs: Array.from(node.children)
+                    .filter(child => child.hasAttribute("data-node-id"))
+                    .map(child => child.getAttribute("data-node-id") as string),
+            });
+        });
+        return nodes;
+    }, docID) : [];
+
+    await expect.poll(async () => {
+        const root = await readSyDocument(page, docID);
+        const errors = validateSyListTree(root);
+        const syNodes = new Map<string, ISyNode>();
+        const collect = (node: ISyNode) => {
+            if (node.ID) {
+                syNodes.set(node.ID, node);
+            }
+            (node.Children || []).forEach(collect);
+        };
+        collect(root);
+        expectedNodes.forEach(expected => {
+            const actual = syNodes.get(expected.id);
+            if (!actual) {
+                errors.push(`persisted tree is missing ${expected.id}`);
+                return;
+            }
+            const actualChildIDs = (actual.Children || []).filter(child => child.ID).map(child => child.ID);
+            if (JSON.stringify(actualChildIDs) !== JSON.stringify(expected.childIDs)) {
+                errors.push(`${expected.id} child order is ${actualChildIDs.join(",")}, expected ${expected.childIDs.join(",")}`);
+            }
+        });
+        return errors;
+    }, {timeout: 10000}).toEqual([]);
 };

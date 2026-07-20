@@ -7,22 +7,24 @@ export default defineConfig({
     workers: 4,
     use: {
         baseURL: "http://127.0.0.1:6806",
-        headless: false,
-        viewport: null,
+        headless: true,
+        viewport: {width: 1440, height: 900},
         actionTimeout: 10000,
         channel: "chrome",
-        launchOptions: {
-            args: ["--start-maximized"],
-        },
     },
     projects: [
         {
             name: 'setup',
             testMatch: /global\.setup\.ts/,
+            teardown: 'cleanup',
         },
         {
             name: 'main',
             dependencies: ['setup'],
+        },
+        {
+            name: 'cleanup',
+            testMatch: /global\.teardown\.ts/,
         },
     ],
 });

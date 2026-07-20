@@ -6,17 +6,19 @@ SiYuan end-to-end testing guide. This repository contains Playwright tests for a
 
 - Use Node.js with pnpm; preserve `pnpm-lock.yaml` as the dependency source of truth.
 - Install dependencies with `pnpm install`.
-- Run all tests with `pnpm test`.
+- Run all tests in headless background mode with `pnpm test`.
 - Run one test file with `pnpm exec playwright test tests/<feature>.spec.ts --project=main`.
 - Use `pnpm test:headed` or `pnpm test:ui` only when interactive debugging is useful.
 
 ## 2. Test data
 
-- Run all tests in the notebook named `Test`. The global setup must create it when it does not exist and open it when it is closed.
+- Run all tests in the notebook named `SiYuan Testing`. The global setup must create it when it does not exist and open it when it is closed.
 - Create an independent document for every test. Do not use the user guide, an existing user document, or data created by another test.
 - Use `tests/helpers/testNotebook.ts` for notebook and document setup instead of duplicating API calls.
 - Give generated documents a feature-specific prefix and a unique suffix so failures can be identified after a run.
 - Tests may run in parallel. Do not depend on execution order or shared mutable document state.
+- Delete documents created by a successful test in the automatic fixture teardown; preserve documents created by failed, timed-out, or interrupted tests.
+- Delete the `SiYuan Testing` notebook only when the complete Playwright run passes; preserve it when any test does not pass.
 
 ## 3. Test organization
 

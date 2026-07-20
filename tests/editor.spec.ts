@@ -1,11 +1,11 @@
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures";
 import {createTestDocument} from "./helpers/testNotebook";
 
 test.describe("editor", () => {
     test.describe.configure({mode: "parallel"});
 
     test("create doc and type", async ({page}) => {
-        await createTestDocument(page, "E2E Test Doc");
+        const {docID, title} = await createTestDocument(page, "E2E Test Doc");
 
         await page.evaluate(() => {
             const editors = document.querySelectorAll(".protyle-wysiwyg");
@@ -31,12 +31,11 @@ test.describe("editor", () => {
         await page.locator("#barSearch").click();
         await page.waitForTimeout(1500);
 
-        await page.locator(".b3-dialog--open #searchInput").first().fill("E2E Test Doc");
-        await page.waitForTimeout(3000);
+        await page.locator(".b3-dialog--open #searchInput").first().fill(title);
 
         await expect(page.locator(".b3-dialog--open .search__list").first()).toBeTruthy();
-        const items = page.locator(".b3-dialog--open .search__list .b3-list-item");
-        await expect.poll(() => items.count()).toBeGreaterThanOrEqual(1);
+        await expect(page.locator(`.b3-dialog--open .search__list .b3-list-item[data-node-id="${docID}"]`))
+            .toBeVisible({timeout: 15000});
         await page.keyboard.press("Escape");
         await page.waitForTimeout(500);
     });
