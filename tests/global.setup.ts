@@ -1,16 +1,8 @@
-import {expect, test} from "@playwright/test";
+import {test} from "@playwright/test";
+import {ensureTestNotebook} from "./helpers/testNotebook";
 
-test("open user guide", async ({page}) => {
+test("ensure Test notebook", async ({page}) => {
     await page.goto("http://127.0.0.1:6806");
     await page.waitForTimeout(3000);
-
-    await page.locator("#barWorkspace").click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-id="userGuide"]').click();
-    await page.waitForTimeout(4000);
-
-    await expect(page.locator(".protyle-wysiwyg").first()).toBeTruthy();
-    await expect(page.locator(".protyle-breadcrumb").first()).toBeTruthy();
-
-    await page.waitForTimeout(1000);
+    await ensureTestNotebook(page);
 });

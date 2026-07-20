@@ -1,24 +1,11 @@
 import {expect, test} from "@playwright/test";
+import {createTestDocument} from "./helpers/testNotebook";
 
-test.describe("main", () => {
+test.describe("editor", () => {
     test.describe.configure({mode: "parallel"});
 
     test("create doc and type", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        await page.keyboard.press("Control+N");
-        await page.waitForTimeout(2000);
-
-        await page.evaluate((title) => {
-            const editors = document.querySelectorAll(".protyle-title__input");
-            const el = editors[editors.length - 1] as HTMLElement;
-            if (el) {
-                el.textContent = title;
-                el.dispatchEvent(new InputEvent("input", {bubbles: true}));
-            }
-        }, "E2E Test Doc");
-        await page.waitForTimeout(500);
+        await createTestDocument(page, "E2E Test Doc");
 
         await page.evaluate(() => {
             const editors = document.querySelectorAll(".protyle-wysiwyg");
@@ -55,21 +42,7 @@ test.describe("main", () => {
     });
 
     test("heading fold unfold", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        await page.keyboard.press("Control+N");
-        await page.waitForTimeout(2000);
-
-        await page.evaluate((title) => {
-            const editors = document.querySelectorAll(".protyle-title__input");
-            const el = editors[editors.length - 1] as HTMLElement;
-            if (el) {
-                el.textContent = title;
-                el.dispatchEvent(new InputEvent("input", {bubbles: true}));
-            }
-        }, "Fold E2E Test");
-        await page.waitForTimeout(500);
+        await createTestDocument(page, "Fold E2E Test");
 
         await page.evaluate(() => {
             const editors = document.querySelectorAll(".protyle-wysiwyg");
@@ -101,43 +74,8 @@ test.describe("main", () => {
         await expect(page.locator('[data-type="NodeHeading"]').first()).toBeTruthy();
     });
 
-    test("toggle dock sidebar", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        const dock = page.locator("#dockLeft");
-        const isVisible = await dock.isVisible().catch(() => false);
-
-        await page.locator("#barDock").click();
-        await page.waitForTimeout(500);
-
-        if (isVisible) {
-            await expect(dock).not.toBeVisible();
-        } else {
-            await expect(dock).toBeVisible();
-        }
-
-        await page.locator("#barDock").click();
-        await page.waitForTimeout(500);
-        await expect(dock).toBeVisible();
-    });
-
     test("undo and redo", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        await page.keyboard.press("Control+N");
-        await page.waitForTimeout(2000);
-
-        await page.evaluate((title) => {
-            const editors = document.querySelectorAll(".protyle-title__input");
-            const el = editors[editors.length - 1] as HTMLElement;
-            if (el) {
-                el.textContent = title;
-                el.dispatchEvent(new InputEvent("input", {bubbles: true}));
-            }
-        }, "Undo Test");
-        await page.waitForTimeout(500);
+        await createTestDocument(page, "Undo Test");
 
         await page.evaluate(() => {
             const editors = document.querySelectorAll(".protyle-wysiwyg");
@@ -160,21 +98,7 @@ test.describe("main", () => {
     });
 
     test("code block", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        await page.keyboard.press("Control+N");
-        await page.waitForTimeout(2000);
-
-        await page.evaluate((title) => {
-            const editors = document.querySelectorAll(".protyle-title__input");
-            const el = editors[editors.length - 1] as HTMLElement;
-            if (el) {
-                el.textContent = title;
-                el.dispatchEvent(new InputEvent("input", {bubbles: true}));
-            }
-        }, "Code Block Test");
-        await page.waitForTimeout(500);
+        await createTestDocument(page, "Code Block Test");
 
         await page.evaluate(() => {
             const editors = document.querySelectorAll(".protyle-wysiwyg");
@@ -193,29 +117,4 @@ test.describe("main", () => {
         await expect(page.locator('[data-type="NodeCodeBlock"], .code-block').first()).toBeTruthy();
     });
 
-    test("toggle theme", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        await page.locator("#barMode").click();
-        await page.waitForTimeout(300);
-
-        await page.locator('[data-id="themeDark"]').click();
-        await page.waitForTimeout(500);
-
-        await expect(page.locator(".b3-dialog--open")).toHaveCount(0, {timeout: 5000});
-    });
-
-    test("doc tree navigate", async ({page}) => {
-        await page.goto("http://127.0.0.1:6806");
-        await page.waitForTimeout(3000);
-
-        const docItem = page.locator('li.b3-list-item[data-type="navigation-file"]').first();
-        await expect(docItem).toBeVisible({timeout: 10000});
-        await docItem.click({force: true});
-        await page.waitForTimeout(1500);
-
-        await expect(page.locator(".protyle-wysiwyg").first()).toBeTruthy();
-        await expect(page.locator(".protyle-breadcrumb").first()).toBeTruthy();
-    });
 });
