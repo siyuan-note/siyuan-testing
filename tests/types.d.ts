@@ -18,6 +18,7 @@ declare global {
                 dragTipListItemChild: string;
                 move: string;
             };
+            storage: Record<string, unknown>;
         };
     }
 }

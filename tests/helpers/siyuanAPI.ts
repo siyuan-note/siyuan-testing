@@ -46,6 +46,7 @@ export interface ISearchBlock {
     id: string;
     rootID: string;
     content: string;
+    type: string;
 }
 
 export interface ISearchResult {

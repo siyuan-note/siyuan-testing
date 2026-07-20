@@ -1,12 +1,25 @@
-import {expect, Locator, Page} from "@playwright/test";
+import {expect, Locator, Page, Route} from "@playwright/test";
 import {ISiyuanResponse, ISearchResult, SiyuanAPI} from "./siyuanAPI";
 
 const KEYWORD_METHOD_ICON = "#iconExact";
+const SEARCH_STORAGE_KEYS = ["local-searchdata", "local-searchkeys", "local-movepath"];
 
-interface ISearchSession {
+export interface ISearchSession {
     dialog: Locator;
     input: Locator;
     results: Locator;
+}
+
+export interface ISearchRequest {
+    query: string;
+    method: number;
+    paths: string[];
+    types?: Record<string, boolean>;
+}
+
+interface ISearchResponse {
+    data: ISearchResult;
+    request: ISearchRequest;
 }
 
 const getMethodIcon = (dialog: Locator) => dialog.locator("#searchSyntaxCheck use").evaluate((element) =>
@@ -44,45 +57,117 @@ const openSearch = async (page: Page) => {
     return {dialog, input, results: dialog.locator("#searchList")};
 };
 
-export const withKeywordSearch = async (page: Page, action: (session: ISearchSession) => Promise<void>) => {
+export const withSearchMethod = async (page: Page, methodIcon: string,
+                                       action: (session: ISearchSession) => Promise<void>) => {
+    const originalStorage = await page.evaluate((keys) => Object.fromEntries(keys.map(key => [
+        key,
+        structuredClone(window.siyuan.storage[key]),
+    ])), SEARCH_STORAGE_KEYS);
+    await page.evaluate(() => {
+        const config = window.siyuan.storage["local-searchdata"] as {
+            removed: boolean;
+            page: number;
+            sort: number;
+            group: number;
+            hasReplace: boolean;
+            hPath: string;
+            idPath: string[];
+            k: string;
+            r: string;
+            types: Record<string, boolean>;
+            subTypes: Record<string, boolean>;
+            replaceTypes: Record<string, boolean>;
+        };
+        Object.assign(config, {
+            removed: true,
+            page: 1,
+            sort: 0,
+            group: 0,
+            hasReplace: false,
+            hPath: "",
+            idPath: [],
+            k: "",
+            r: "",
+        });
+        Object.keys(config.types).forEach(type => {
+            config.types[type] = true;
+        });
+        Object.keys(config.subTypes).forEach(type => {
+            config.subTypes[type] = false;
+        });
+        config.replaceTypes.text = true;
+    });
+    const storageRoute = async (route: Route) => {
+        const request = route.request();
+        let key = "";
+        try {
+            key = request.postDataJSON().key;
+        } catch {
+            await route.continue();
+            return;
+        }
+        if (!SEARCH_STORAGE_KEYS.includes(key)) {
+            await route.continue();
+            return;
+        }
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({code: 0, msg: "", data: null}),
+        });
+    };
+    await page.route("**/api/storage/setLocalStorageVal", storageRoute);
     let session = await openSearch(page);
-    const originalMethod = await getMethodIcon(session.dialog);
-    if (originalMethod !== KEYWORD_METHOD_ICON) {
-        await selectSearchMethod(page, session.dialog, KEYWORD_METHOD_ICON);
+    if (await getMethodIcon(session.dialog) !== methodIcon) {
+        await selectSearchMethod(page, session.dialog, methodIcon);
     }
     try {
         await action(session);
     } finally {
-        if (originalMethod !== KEYWORD_METHOD_ICON) {
-            if (!await session.dialog.isVisible()) {
-                session = await openSearch(page);
-            }
-            await selectSearchMethod(page, session.dialog, originalMethod);
-        }
         if (await session.dialog.isVisible()) {
             await page.keyboard.press("Escape");
             await expect(session.dialog).toHaveCount(0);
         }
+        await page.evaluate(({keys, storage}) => {
+            keys.forEach(key => {
+                window.siyuan.storage[key] = structuredClone(storage[key]);
+            });
+        }, {keys: SEARCH_STORAGE_KEYS, storage: originalStorage});
+        await page.unroute("**/api/storage/setLocalStorageVal", storageRoute);
     }
 };
 
-export const submitSearch = async (page: Page, session: ISearchSession, query: string) => {
+export const withKeywordSearch = async (page: Page, action: (session: ISearchSession) => Promise<void>) =>
+    withSearchMethod(page, KEYWORD_METHOD_ICON, action);
+
+export const runAndWaitForSearch = async (page: Page, session: ISearchSession,
+                                          matches: (request: ISearchRequest) => boolean,
+                                          action: () => Promise<void>): Promise<ISearchResponse> => {
     const responsePromise = page.waitForResponse((response) => {
         if (!response.url().endsWith("/api/search/fullTextSearchBlock") || response.request().method() !== "POST") {
             return false;
         }
         try {
-            return response.request().postDataJSON().query === query;
+            return matches(response.request().postDataJSON() as ISearchRequest);
         } catch {
             return false;
         }
     });
-    await session.input.fill(query);
+    await action();
     const response = await responsePromise;
     const result = await response.json() as ISiyuanResponse<ISearchResult>;
     expect(result.code).toBe(0);
     await expect(session.dialog.locator(".fn__loading").last()).toHaveClass(/fn__none/);
-    return result.data;
+    return {
+        data: result.data,
+        request: response.request().postDataJSON() as ISearchRequest,
+    };
+};
+
+export const submitSearch = async (page: Page, session: ISearchSession, query: string) => {
+    const response = await runAndWaitForSearch(page, session, request => request.query === query,
+        () => session.input.fill(query));
+    return response.data;
 };
 
 export const expectSearchIndex = async (api: SiyuanAPI, query: string, rootID: string, present = true) => {

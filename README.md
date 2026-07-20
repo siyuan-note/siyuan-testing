@@ -32,4 +32,4 @@ Reusable SiYuan HTTP operations belong in `tests/helpers/siyuanAPI.ts`. Tests sh
 
 The lifecycle suite covers document creation, rename, move, duplication, deletion, and history rollback. Documents created indirectly, such as duplicates, must be registered with the `trackTestDocument` fixture so the normal cleanup policy still applies. Cleanup locates tracked documents by ID and checks the complete document tree before removing the test notebook.
 
-The search suite covers title and multilingual content lookup, result navigation, index updates after editing or deletion, and special-character input. It waits for the kernel index through the public search API before asserting the search dialog.
+The search suite covers title and multilingual content lookup, result navigation, index updates after editing or deletion, special-character input, block-type and path filters, query syntax, regular expressions, and selected-result replacement. It waits for the kernel index through the public search API before asserting the search dialog and isolates persisted search settings from parallel workers.
