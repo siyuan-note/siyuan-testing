@@ -172,9 +172,10 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press("Control+V");
 
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
-        const pastedState = (await getDOMState(editor)).paragraphs;
-        expect(pastedState.map(item => item.text)).toEqual(["Paste anchor", "Cut source"]);
-        expect(pastedState[1].id).toBe(sourceID);
+        const pastedState = [
+            initialState.paragraphs[1],
+            {id: sourceID, text: "Cut source"},
+        ];
         await expectDocumentState(siyuanAPI, docID, editor, pastedState);
 
         await page.reload();

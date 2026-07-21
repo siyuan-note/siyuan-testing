@@ -6,15 +6,25 @@ test.describe("workspace", () => {
         await openWorkspace(page);
         const dockIcon = page.locator("#barDock use");
         const originalIcon = await dockIcon.getAttribute("xlink:href");
-        const originalHidden = originalIcon === "#iconDock";
+        expect(["#iconDock", "#iconHideDock"]).toContain(originalIcon);
+        const initialIcon = originalIcon as "#iconDock" | "#iconHideDock";
+        const originalHidden = initialIcon === "#iconDock";
 
-        await page.locator("#barDock").click();
-        await expect(dockIcon).toHaveAttribute("xlink:href", originalHidden ? "#iconHideDock" : "#iconDock");
-        await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(!originalHidden);
+        try {
+            await page.locator("#barDock").click();
+            await expect(dockIcon).toHaveAttribute("xlink:href", originalHidden ? "#iconHideDock" : "#iconDock");
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(!originalHidden);
 
-        await page.locator("#barDock").click();
-        await expect(dockIcon).toHaveAttribute("xlink:href", originalIcon as string);
-        await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(originalHidden);
+            await page.locator("#barDock").click();
+            await expect(dockIcon).toHaveAttribute("xlink:href", initialIcon);
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(originalHidden);
+        } finally {
+            if (await dockIcon.getAttribute("xlink:href") !== initialIcon) {
+                await page.locator("#barDock").click();
+            }
+            await expect(dockIcon).toHaveAttribute("xlink:href", initialIcon);
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(originalHidden);
+        }
     });
 
     test("changes and restores the appearance mode", async ({page, globalSettings}) => {

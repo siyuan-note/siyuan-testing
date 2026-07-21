@@ -87,17 +87,21 @@ test.describe("editor", () => {
         page.on("request", request => transactionPaths.push(new URL(request.url()).pathname));
         const editable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
         await focusEditable(editable);
+        const inputTransaction = page.waitForRequest(request =>
+            new URL(request.url()).pathname === "/api/transactions",
+        );
         await page.keyboard.type(content, {delay: 5});
         const paragraph = editor.locator('[data-type="NodeParagraph"]').filter({hasText: content});
         await expect(paragraph).toBeVisible();
         const undoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/undo");
         await editable.press("Control+Z");
-        await undoResponse;
+        await Promise.all([inputTransaction, undoResponse]);
         await expect(paragraph).toHaveCount(0);
-        await page.waitForTimeout(500);
+        expect(transactionPaths.lastIndexOf("/api/transactions")).toBeGreaterThanOrEqual(0);
+        expect(transactionPaths.indexOf("/api/transactions/undo")).toBeGreaterThanOrEqual(0);
         expect(transactionPaths.lastIndexOf("/api/transactions"))
             .toBeLessThan(transactionPaths.indexOf("/api/transactions/undo"));
-        expect(JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
 
         const redoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/redo");
         await editor.locator(":scope > [data-node-id] > [contenteditable=true]").first().press("Control+Y");

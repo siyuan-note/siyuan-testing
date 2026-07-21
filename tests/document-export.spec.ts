@@ -2,12 +2,34 @@ import {inflateRawSync} from "node:zlib";
 import type {Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 
+const findEndOfCentralDirectory = (archive: Buffer) => {
+    if (archive.length < 22) {
+        throw new Error("ZIP end of central directory was not found");
+    }
+    const minimumOffset = Math.max(0, archive.length - 22 - 0xffff);
+    for (let offset = archive.length - 22; offset >= minimumOffset; offset--) {
+        if (archive.readUInt32LE(offset) !== 0x06054b50) {
+            continue;
+        }
+        const commentLength = archive.readUInt16LE(offset + 20);
+        if (offset + 22 + commentLength === archive.length) {
+            return offset;
+        }
+    }
+    throw new Error("ZIP end of central directory was not found");
+};
+
 const readZipEntries = (archive: Buffer) => {
     const entries = new Map<string, Buffer>();
-    for (let offset = 0; offset <= archive.length - 46;) {
-        if (archive.readUInt32LE(offset) !== 0x02014b50) {
-            offset++;
-            continue;
+    const endOfCentralDirectory = findEndOfCentralDirectory(archive);
+    const totalEntries = archive.readUInt16LE(endOfCentralDirectory + 10);
+    let offset = archive.readUInt32LE(endOfCentralDirectory + 16);
+    if (totalEntries === 0xffff || offset === 0xffffffff) {
+        throw new Error("ZIP64 archives are not supported");
+    }
+    for (let index = 0; index < totalEntries; index++) {
+        if (offset > archive.length - 46 || archive.readUInt32LE(offset) !== 0x02014b50) {
+            throw new Error(`invalid ZIP central directory entry at offset ${offset}`);
         }
         const method = archive.readUInt16LE(offset + 10);
         const compressedSize = archive.readUInt32LE(offset + 20);
@@ -16,10 +38,15 @@ const readZipEntries = (archive: Buffer) => {
         const commentLength = archive.readUInt16LE(offset + 32);
         const localHeaderOffset = archive.readUInt32LE(offset + 42);
         const filename = archive.subarray(offset + 46, offset + 46 + filenameLength).toString("utf8");
-        expect(archive.readUInt32LE(localHeaderOffset)).toBe(0x04034b50);
+        if (localHeaderOffset > archive.length - 30 || archive.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+            throw new Error(`invalid ZIP local header for ${filename}`);
+        }
         const localFilenameLength = archive.readUInt16LE(localHeaderOffset + 26);
         const localExtraLength = archive.readUInt16LE(localHeaderOffset + 28);
         const dataOffset = localHeaderOffset + 30 + localFilenameLength + localExtraLength;
+        if (dataOffset + compressedSize > archive.length) {
+            throw new Error(`invalid ZIP entry data for ${filename}`);
+        }
         const compressed = archive.subarray(dataOffset, dataOffset + compressedSize);
         if (!filename.endsWith("/")) {
             if (method === 0) {
@@ -33,21 +60,6 @@ const readZipEntries = (archive: Buffer) => {
         offset += 46 + filenameLength + extraLength + commentLength;
     }
     return entries;
-};
-
-const getDocumentTreeItem = async (page: Page, notebookID: string, docID: string) => {
-    const item = page.locator(`li.b3-list-item[data-type="navigation-file"][data-node-id="${docID}"]`);
-    if (!await item.isVisible()) {
-        const notebookRoot = page.locator(
-            `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
-        );
-        await expect(notebookRoot).toBeVisible();
-        if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
-            await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
-        }
-    }
-    await expect(item).toBeVisible({timeout: 10000});
-    return item;
 };
 
 const createStandaloneHTML = (title: string, content: string, servePath = "") => `<!DOCTYPE html>
@@ -107,7 +119,6 @@ test.describe("document export", () => {
             "```",
         ].join("\n");
         const document = await createTestDocument("Document Markdown Export E2E", source);
-        const treeItem = await getDocumentTreeItem(page, document.notebookID, document.docID);
         await page.evaluate(() => {
             (window as Window & {__e2eOpenedURLs?: string[]}).__e2eOpenedURLs = [];
             window.open = ((url?: string | URL) => {
@@ -116,7 +127,10 @@ test.describe("document export", () => {
             }) as typeof window.open;
         });
 
-        await treeItem.click({button: "right", force: true});
+        const protyle = document.editor.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
+        );
+        await protyle.locator(".protyle-title__icon").click();
         const menu = page.locator("#commonMenu:not(.fn__none)");
         await expect(menu).toBeVisible();
         const exportItem = menu.locator('[data-id="export"]');

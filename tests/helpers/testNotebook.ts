@@ -32,7 +32,19 @@ export const ensureTestNotebook = async (api: SiyuanAPI) => {
 };
 
 export const getDocumentEditor = async (page: Page, docID: string) => {
-    const titleElement = page.locator(`.protyle-title[data-node-id="${docID}"]`);
+    const titleSelector = `.protyle-title[data-node-id="${docID}"]`;
+    const titleElements = page.locator(titleSelector);
+    await expect(page.locator(`${titleSelector}:visible`).last()).toBeVisible({timeout: 15000});
+    const visibleTitleIndex = await titleElements.evaluateAll(elements => {
+        let index = -1;
+        elements.forEach((element, currentIndex) => {
+            if (element.getClientRects().length > 0) {
+                index = currentIndex;
+            }
+        });
+        return index;
+    });
+    const titleElement = titleElements.nth(visibleTitleIndex);
     await expect(titleElement).toBeVisible({timeout: 15000});
     const protyle = titleElement.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
@@ -91,7 +103,18 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
 
 export const preserveFailedTestDocuments = async (api: SiyuanAPI, documents: ICreatedTestDocument[],
                                                    testInfo: TestInfo) => {
-    if (documents.length === 0) {
+    let hasExistingDocument = false;
+    try {
+        for (const document of documents) {
+            if (await api.findDocumentPath(document.id)) {
+                hasExistingDocument = true;
+                break;
+            }
+        }
+    } catch {
+        hasExistingDocument = documents.length > 0;
+    }
+    if (!hasExistingDocument) {
         const notebookID = await ensureTestNotebook(api);
         const safeTitle = testInfo.title.replace(/[^\w -]/g, " ");
         const title = `FAILED ${safeTitle} ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
