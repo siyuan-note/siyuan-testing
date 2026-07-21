@@ -27,7 +27,7 @@ During development, run only the changed spec or failing test. Run the affected 
 
 ## Coverage
 
-The suite covers workspace startup and settings restoration; document and file-tree lifecycle; editor input, undo and redo, concurrent editors, copy and paste, and cross-document transactions; block splitting, merging, batch operations, transformations, list dragging, super blocks, references, and query embeds; global search; attribute views; attachment and image persistence; Markdown and standalone HTML export; export-bundle rendering for highlighted code, math, and Mermaid; and document history preview, rollback, deletion recovery, and reload persistence.
+The suite covers workspace startup, settings restoration, and main WebSocket reconnection; document and file-tree lifecycle; editor input, undo and redo, concurrent editors, copy and paste, and cross-document transactions; block splitting, merging, batch operations, transformations, list dragging, super blocks, references, and query embeds; global search; attribute views and attribute-view history rollback; attachment and image persistence; Markdown and standalone HTML export; export-bundle rendering for highlighted code, math, and Mermaid; Markdown and SiYuan archive round trips with hierarchy, references, and assets; and document history preview, rollback, deletion recovery, and reload persistence.
 
 ## Test data and cleanup
 

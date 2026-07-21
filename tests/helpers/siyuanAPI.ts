@@ -252,6 +252,30 @@ export class SiyuanAPI {
         });
     }
 
+    async searchHistory(query: string, notebook: string, op: string, type: number) {
+        return this.post<IDocumentHistorySearch>("/api/history/searchHistory", {
+            notebook,
+            op,
+            page: 1,
+            query,
+            type,
+        });
+    }
+
+    async getHistoryItems(query: string, created: string, op: string, type: number) {
+        const data = await this.post<{items: IDocumentHistoryItem[]}>("/api/history/getHistoryItems", {
+            created,
+            op,
+            query,
+            type,
+        });
+        return data.items;
+    }
+
+    async rollbackAttributeViewHistory(historyPath: string) {
+        await this.post<null>("/api/history/rollbackAttributeViewHistory", {historyPath});
+    }
+
     async searchBlocks(query: string) {
         return this.post<ISearchResult>("/api/search/fullTextSearchBlock", {
             query,
@@ -294,6 +318,53 @@ export class SiyuanAPI {
 
     async removeWorkspaceFile(path: string) {
         await this.post<null>("/api/file/removeFile", {path});
+    }
+
+    async downloadFile(path: string) {
+        const response = await this.request.get(this.resolve(path));
+        if (!response.ok()) {
+            throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        return Buffer.from(await response.body());
+    }
+
+    async uploadAsset(id: string, name: string, mimeType: string, buffer: Buffer) {
+        const path = "/api/asset/upload";
+        const response = await this.request.post(this.resolve(path), {
+            multipart: {
+                "file[]": {buffer, mimeType, name},
+                id,
+            },
+        });
+        if (!response.ok()) {
+            throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        const result = await response.json() as ISiyuanResponse<{
+            errFiles: string[];
+            succMap: Record<string, string>;
+        }>;
+        if (result.code !== 0) {
+            throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
+        }
+        return result.data;
+    }
+
+    async importArchive(path: "/api/import/importSY" | "/api/import/importZipMd", archive: Buffer,
+                        name: string, notebook: string, toPath = "/") {
+        const response = await this.request.post(this.resolve(path), {
+            multipart: {
+                file: {buffer: archive, mimeType: "application/zip", name},
+                notebook,
+                toPath,
+            },
+        });
+        if (!response.ok()) {
+            throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        const result = await response.json() as ISiyuanResponse<null>;
+        if (result.code !== 0) {
+            throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
+        }
     }
 
     async readDocument<T>(id: string): Promise<T> {

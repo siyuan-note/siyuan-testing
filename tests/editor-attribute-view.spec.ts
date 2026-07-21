@@ -427,6 +427,64 @@ test.describe("attribute views", () => {
         )).toHaveCount(0);
     });
 
+    test("restores database values from attribute view history", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Rollback E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "History row");
+        const textColumn = await addColumn(page, block, "text", "Recoverable");
+        const cell = row.row.locator(`[data-col-id="${textColumn.id}"]`);
+        await editCell(page, cell, "Original history value");
+        await expect.poll(async () => {
+            const value = (await getAttributeView(siyuanAPI, avID)).keyValues
+                .find(item => item.key.id === textColumn.id)?.values
+                ?.find(item => item.blockID === row.id);
+            return value?.text?.content;
+        }, {timeout: 30000}).toBe("Original history value");
+
+        await siyuanAPI.createDocumentHistory(document.docID);
+        let snapshotPath = "";
+        await expect.poll(async () => {
+            const history = await siyuanAPI.searchHistory("", "", "update", 4);
+            for (const created of history.histories) {
+                const items = await siyuanAPI.getHistoryItems("", created, "update", 4);
+                const snapshot = items.find(item => item.path.endsWith(`/storage/av/${avID}.json`));
+                if (snapshot) {
+                    snapshotPath = snapshot.path;
+                    return snapshot;
+                }
+            }
+            return undefined;
+        }, {timeout: 15000}).toMatchObject({op: "update", title: avID});
+
+        await editCell(page, cell, "Changed history value");
+        await expect.poll(async () => {
+            const value = (await getAttributeView(siyuanAPI, avID)).keyValues
+                .find(item => item.key.id === textColumn.id)?.values
+                ?.find(item => item.blockID === row.id);
+            return value?.text?.content;
+        }, {timeout: 30000}).toBe("Changed history value");
+
+        await siyuanAPI.rollbackAttributeViewHistory(snapshotPath);
+        await expect.poll(async () => {
+            const value = (await getAttributeView(siyuanAPI, avID)).keyValues
+                .find(item => item.key.id === textColumn.id)?.values
+                ?.find(item => item.blockID === row.id);
+            return value?.text?.content;
+        }, {timeout: 30000}).toBe("Original history value");
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedCell = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] [data-col-id="${textColumn.id}"]`,
+        );
+        await expect(reloadedCell).toContainText("Original history value");
+        await expect(reloadedCell).not.toContainText("Changed history value");
+    });
+
     test("sorts and filters rows and restores the rules after reload", async ({
         createTestDocument,
         page,
