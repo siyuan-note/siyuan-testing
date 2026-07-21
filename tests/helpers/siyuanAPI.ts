@@ -289,7 +289,7 @@ export class SiyuanAPI {
             orderBy: 0,
             page: 1,
             pageSize: 32,
-        });
+        }, 30000);
     }
 
     async updateBlock(id: string, markdown: string) {

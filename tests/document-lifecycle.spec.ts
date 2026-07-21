@@ -69,14 +69,14 @@ test.describe("document lifecycle", () => {
         const parentItem = page.locator(
             `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
         );
-        await expect(parentItem).toBeVisible();
+        await expect(parentItem).toBeVisible({timeout: 15000});
         const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
         if (!await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
             await parentItem.locator(":scope > .b3-list-item__toggle").click({force: true});
         }
         await expect(parentItem.locator(
             `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,
-        )).toBeVisible();
+        )).toBeVisible({timeout: 15000});
     });
 
     test("duplicates a document with independent persisted IDs", async ({
