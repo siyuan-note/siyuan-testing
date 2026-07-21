@@ -267,6 +267,18 @@ export class SiyuanAPI {
         return response.json() as Promise<T>;
     }
 
+    async readWorkspaceText(path: string) {
+        const response = await this.request.post(this.resolve("/api/file/getFile"), {data: {path}});
+        if (!response.ok()) {
+            throw new Error(`/api/file/getFile returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        return response.text();
+    }
+
+    async removeWorkspaceFile(path: string) {
+        await this.post<null>("/api/file/removeFile", {path});
+    }
+
     async readDocument<T>(id: string): Promise<T> {
         const info = await this.getBlockInfo(id);
         return this.readWorkspaceFile<T>(`/data/${info.box}${info.path}`);

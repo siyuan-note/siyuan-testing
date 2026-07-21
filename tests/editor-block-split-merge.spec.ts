@@ -96,11 +96,20 @@ const setCaretOffset = async (editable: Locator, offset: number) => {
     return result.text;
 };
 
+const requestTransaction = async (page: Page, action: () => Promise<void>) => {
+    const response = page.waitForResponse(item =>
+        new URL(item.url()).pathname === "/api/transactions", {timeout: 15000});
+    await action();
+    await response;
+};
+
 const requestHistoryAction = async (page: Page, editable: Locator, shortcut: "Control+Z" | "Control+Y",
                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
-        new URL(item.url()).pathname === `/api/transactions/${action}`);
-    await editable.press(shortcut);
+        new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
+    const text = await editable.textContent();
+    await setCaretOffset(editable, text?.length || 0);
+    await page.keyboard.press(shortcut);
     await response;
 };
 
@@ -119,7 +128,7 @@ test.describe("paragraph splitting and merging", () => {
         const editable = editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').first();
         expect(await setCaretOffset(editable, 5)).toBe("AlphaBeta");
 
-        await page.keyboard.press("Enter");
+        await requestTransaction(page, () => page.keyboard.press("Enter"));
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
         const splitState = (await getDOMState(editor)).paragraphs;
         expect(splitState.map(item => item.text)).toEqual(["Alpha", "Beta"]);
@@ -157,7 +166,7 @@ test.describe("paragraph splitting and merging", () => {
             const editable = key === "Backspace" ? editables.nth(1) : editables.nth(0);
             expect(await setCaretOffset(editable, offset)).toBe(key === "Backspace" ? "Second" : "First");
 
-            await page.keyboard.press(key);
+            await requestTransaction(page, () => page.keyboard.press(key));
             await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(1);
             const mergedState = (await getDOMState(editor)).paragraphs;
             expect(mergedState.map(item => item.text)).toEqual(["FirstSecond"]);
