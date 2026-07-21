@@ -134,6 +134,8 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press("Control+V");
 
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(3);
+        await expect(editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').last())
+            .toHaveText("Copy source");
         const copiedState = (await getDOMState(editor)).paragraphs;
         expect(copiedState.map(item => item.text)).toEqual(["Copy source", "Paste anchor", "Copy source"]);
         expect(copiedState[2].id).not.toBe(copiedState[0].id);

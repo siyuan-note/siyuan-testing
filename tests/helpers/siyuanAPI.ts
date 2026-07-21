@@ -86,16 +86,16 @@ export class SiyuanAPI {
         return new URL(path, this.baseURL).toString();
     }
 
-    private async postResult<T>(path: string, data: object): Promise<ISiyuanResponse<T>> {
-        const response = await this.request.post(this.resolve(path), {data});
+    private async postResult<T>(path: string, data: object, timeout?: number): Promise<ISiyuanResponse<T>> {
+        const response = await this.request.post(this.resolve(path), {data, timeout});
         if (!response.ok()) {
             throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
         }
         return response.json() as Promise<ISiyuanResponse<T>>;
     }
 
-    async post<T>(path: string, data: object): Promise<T> {
-        const result = await this.postResult<T>(path, data);
+    async post<T>(path: string, data: object, timeout?: number): Promise<T> {
+        const result = await this.postResult<T>(path, data, timeout);
         if (result.code !== 0) {
             throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
         }
@@ -143,10 +143,6 @@ export class SiyuanAPI {
 
     async listAllDocuments(notebook: string) {
         const directories = ["/"];
-        const notebookDocument = await this.findDocumentPath(notebook);
-        if (notebookDocument?.notebook === notebook) {
-            directories.push(notebookDocument.path);
-        }
         const visitedDirectories = new Set<string>();
         const documents = new Map<string, IDocumentEntry>();
         while (directories.length > 0) {

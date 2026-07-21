@@ -55,7 +55,10 @@ test.describe("document history", () => {
         await expect(preview).toContainText(original);
         await expect(preview).not.toContainText(replacement);
 
-        await snapshot.locator('[data-type="rollback"]').click({force: true});
+        await snapshot.hover();
+        const rollbackAction = snapshot.locator('[data-type="rollback"]');
+        await expect(rollbackAction).toBeVisible();
+        await rollbackAction.click();
         const confirmButton = page.locator("#confirmDialogConfirmBtn:visible");
         await expect(confirmButton).toBeVisible();
         const rollbackResponse = page.waitForResponse(response =>

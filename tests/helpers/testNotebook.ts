@@ -82,13 +82,20 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
         };
     }));
     orderedDocuments.sort((left, right) => right.depth - left.depth);
+    const notebookIDs = [...new Set(documents.map(document => document.notebookID))];
     let absentSince = 0;
     const deletionRequested = new Set<string>();
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
+        const existingDocumentIDs = new Set<string>();
+        for (const notebookID of notebookIDs) {
+            for (const document of await api.listAllDocuments(notebookID)) {
+                existingDocumentIDs.add(document.id);
+            }
+        }
         let found = false;
         for (const {document} of orderedDocuments) {
-            if (!await api.findDocumentPath(document.id)) {
+            if (!existingDocumentIDs.has(document.id)) {
                 continue;
             }
             found = true;

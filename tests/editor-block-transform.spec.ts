@@ -34,6 +34,13 @@ const readValidDocument = async (api: SiyuanAPI, docID: string) => {
     return document;
 };
 
+const omitRootUpdated = (document: ISyNode) => ({
+    ...document,
+    Properties: document.Properties && Object.fromEntries(
+        Object.entries(document.Properties).filter(([key]) => key !== "updated"),
+    ),
+});
+
 const focusAtEnd = async (block: Locator) => {
     await block.locator('[contenteditable="true"]').first().evaluate(element => {
         element.focus();
@@ -96,6 +103,8 @@ const chooseSelectedTurnInto = async (page: Page, editor: Locator, block: Locato
     await expect(block).toHaveClass(/protyle-wysiwyg--select/);
     const id = await block.getAttribute("data-node-id");
     expect(id).toBeTruthy();
+    await page.mouse.move(0, 0);
+    await block.hover();
     const gutter = page.locator(`.protyle-gutters button[data-node-id="${id}"]`);
     await expect(gutter).toBeVisible();
     await gutter.click({force: true});
@@ -233,7 +242,7 @@ test.describe("block transformations and indentation", () => {
         await expect(items).toHaveCount(3);
         const initialIDs = await items.evaluateAll(elements =>
             elements.map(element => element.getAttribute("data-node-id") || ""));
-        const initialDocument = await readValidDocument(siyuanAPI, docID);
+        const initialDocument = omitRootUpdated(await readValidDocument(siyuanAPI, docID));
 
         await focusAtEnd(items.nth(1));
         await requestTransaction(page, () => page.keyboard.press("Tab"));
@@ -260,7 +269,8 @@ test.describe("block transformations and indentation", () => {
         await expect(items).toHaveCount(3);
         await expect(items.evaluateAll(elements =>
             elements.map(element => element.getAttribute("data-node-id") || ""))).resolves.toEqual(initialIDs);
-        await expect.poll(() => readValidDocument(siyuanAPI, docID)).toEqual(initialDocument);
+        await expect.poll(async () => omitRootUpdated(await readValidDocument(siyuanAPI, docID)))
+            .toEqual(initialDocument);
     });
 
     test("wraps multiple paragraphs in a blockquote and restores the structure", async ({

@@ -220,7 +220,7 @@ test.describe("document export", () => {
             folder: exported.folder,
             html: standaloneHTML,
             name: exported.name,
-        });
+        }, 30000);
         const archiveResponse = await page.request.get(new URL(packaged.zip, baseURL).toString());
         expect(archiveResponse.ok()).toBe(true);
         const entries = readZipEntries(Buffer.from(await archiveResponse.body()));

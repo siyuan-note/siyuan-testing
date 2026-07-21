@@ -180,6 +180,8 @@ test.describe("block references", () => {
             text: updatedText,
             type: "NodeTextMark",
         }]);
+        await expect(target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`))
+            .toHaveText(updatedText, {timeout: 15000});
 
         await page.keyboard.press("Control+[");
         const targetEditor = await getDocumentEditor(page, target.docID);
