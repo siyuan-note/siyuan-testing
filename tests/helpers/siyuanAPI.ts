@@ -86,7 +86,7 @@ export class SiyuanAPI {
         return new URL(path, this.baseURL).toString();
     }
 
-    private async postResult<T>(path: string, data: object, timeout?: number): Promise<ISiyuanResponse<T>> {
+    async postResult<T>(path: string, data: object, timeout?: number): Promise<ISiyuanResponse<T>> {
         const response = await this.request.post(this.resolve(path), {data, timeout});
         if (!response.ok()) {
             throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
