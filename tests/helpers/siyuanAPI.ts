@@ -239,6 +239,10 @@ export class SiyuanAPI {
         await this.post<null>("/api/history/createDocHistory", {id});
     }
 
+    async createAssetHistory(path: string) {
+        await this.post<null>("/api/history/createAssetHistory", {path});
+    }
+
     async getDocumentHistoryContent(historyPath: string) {
         return this.post<{
             content: string;
@@ -274,6 +278,10 @@ export class SiyuanAPI {
 
     async rollbackAttributeViewHistory(historyPath: string) {
         await this.post<null>("/api/history/rollbackAttributeViewHistory", {historyPath});
+    }
+
+    async rollbackAssetHistory(historyPath: string) {
+        await this.post<null>("/api/history/rollbackAssetsHistory", {historyPath});
     }
 
     async searchBlocks(query: string) {
@@ -318,6 +326,24 @@ export class SiyuanAPI {
 
     async removeWorkspaceFile(path: string) {
         await this.post<null>("/api/file/removeFile", {path});
+    }
+
+    async writeWorkspaceFile(path: string, name: string, mimeType: string, buffer: Buffer) {
+        const endpoint = "/api/file/putFile";
+        const response = await this.request.post(this.resolve(endpoint), {
+            multipart: {
+                file: {buffer, mimeType, name},
+                isDir: "false",
+                path,
+            },
+        });
+        if (!response.ok()) {
+            throw new Error(`${endpoint} returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        const result = await response.json() as ISiyuanResponse<null>;
+        if (result.code !== 0) {
+            throw new Error(`${endpoint} failed with code ${result.code}: ${result.msg}`);
+        }
     }
 
     async downloadFile(path: string) {
