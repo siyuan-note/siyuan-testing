@@ -75,6 +75,77 @@ test.describe("document import", () => {
         await expect(await getDocumentEditor(page, importedRootID)).toContainText(marker);
     });
 
+    test("uploads a Markdown ZIP from the notebook import menu", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+        trackTestDocument,
+    }) => {
+        const marker = `Markdown UI import ${Date.now()}`;
+        const source = await createTestDocument("Markdown UI Import E2E", `${marker}\n\nImported through the file picker`);
+        const exported = await siyuanAPI.post<{name: string; zip: string}>("/api/export/exportMd", {
+            addTitle: true,
+            id: source.docID,
+            includeRelatedDocs: false,
+            includeSubDocs: false,
+            markdownYFM: false,
+        });
+        const archive = await siyuanAPI.downloadFile(exported.zip);
+        expect(archive.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+        await siyuanAPI.removeDocument(source.docID);
+        await expect.poll(() => siyuanAPI.findDocumentPath(source.docID)).toBeUndefined();
+        await openWorkspace(page);
+        const notebookRoot = page.locator(
+            `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
+        );
+        await expect(notebookRoot).toBeVisible();
+        await notebookRoot.hover();
+        await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
+
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
+        const importItem = menu.locator('[data-id="import"]');
+        await expect(importItem).toBeVisible();
+        await importItem.hover();
+        const markdownImport = importItem.locator('[data-id="importMarkdownZip"]');
+        await expect(markdownImport).toBeVisible();
+        const uploadInput = markdownImport.locator('input[type="file"]');
+        await expect(uploadInput).toBeAttached();
+
+        const importResponse = page.waitForResponse(response =>
+            new URL(response.url()).pathname === "/api/import/importZipMd", {timeout: 30000});
+        await uploadInput.setInputFiles({
+            name: `${exported.name || source.title}.zip`,
+            mimeType: "application/zip",
+            buffer: archive,
+        });
+        const response = await importResponse;
+        const result = await response.json() as {code: number; msg: string};
+        expect(result).toMatchObject({code: 0});
+
+        let importedRootID = "";
+        await expect.poll(async () => {
+            const search = await siyuanAPI.searchBlocks(marker);
+            importedRootID = search.blocks.find(block => block.rootID !== source.docID)?.rootID || "";
+            return importedRootID;
+        }, {timeout: 30000}).not.toBe("");
+        const documents = await siyuanAPI.listAllDocuments(source.notebookID);
+        const imported = documents.find(item => item.id === importedRootID);
+        expect(imported).toBeTruthy();
+        const topLevelID = imported!.path.split("/").filter(Boolean)[0].replace(/\.sy$/, "");
+        const topLevel = documents.find(item => item.id === topLevelID);
+        expect(topLevel).toBeTruthy();
+        trackTestDocument({id: topLevelID, notebookID: source.notebookID, title: topLevel!.name});
+
+        await openWorkspace(page, `/?id=${importedRootID}`);
+        const editor = await getDocumentEditor(page, importedRootID);
+        await expect(editor).toContainText(marker);
+        await expect(editor).toContainText("Imported through the file picker");
+        await page.reload();
+        await expect(await getDocumentEditor(page, importedRootID)).toContainText(marker);
+    });
+
     test("round-trips SiYuan documents with hierarchy, references, and assets", async ({
         createTestDocument,
         page,

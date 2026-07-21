@@ -74,12 +74,20 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
         return;
     }
     await page.goto("about:blank");
+    const orderedDocuments = await Promise.all(documents.map(async document => {
+        const location = await api.findDocumentPath(document.id);
+        return {
+            depth: location?.path.split("/").filter(Boolean).length || 0,
+            document,
+        };
+    }));
+    orderedDocuments.sort((left, right) => right.depth - left.depth);
     let absentSince = 0;
     const deletionRequested = new Set<string>();
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
         let found = false;
-        for (const document of documents) {
+        for (const {document} of orderedDocuments) {
             if (!await api.findDocumentPath(document.id)) {
                 continue;
             }
