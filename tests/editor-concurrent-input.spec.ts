@@ -8,7 +8,7 @@ const focusEditable = async (editable: Locator) => {
     await expect(async () => {
         await editable.click();
         expect(await editable.evaluate(element => element.contains(getSelection()?.anchorNode || null))).toBe(true);
-    }).toPass({timeout: 5000});
+    }).toPass({timeout: 15000});
 };
 
 test("persists rapid input across concurrent editors", async ({

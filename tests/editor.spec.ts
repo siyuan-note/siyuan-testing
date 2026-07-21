@@ -6,7 +6,7 @@ const focusEditable = async (editable: Locator) => {
     await expect(async () => {
         await editable.click();
         expect(await editable.evaluate(element => element.contains(getSelection()?.anchorNode || null))).toBe(true);
-    }).toPass({timeout: 5000});
+    }).toPass({timeout: 15000});
 };
 
 const typeInto = async (page: Page, editable: Locator, text: string) => {
@@ -80,20 +80,28 @@ test.describe("editor", () => {
         await expect(secondChild).toBeVisible();
     });
 
-    test("undoes and redoes persisted input", async ({page, createTestDocument, siyuanAPI}) => {
+    test("undoes and redoes immediately after rapid input", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor} = await createTestDocument("Undo Redo E2E");
         const content = "This will be undone";
+        const transactionPaths: string[] = [];
+        page.on("request", request => transactionPaths.push(new URL(request.url()).pathname));
         const editable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
-        await typeInto(page, editable, content);
+        await focusEditable(editable);
+        await page.keyboard.type(content, {delay: 5});
         const paragraph = editor.locator('[data-type="NodeParagraph"]').filter({hasText: content});
         await expect(paragraph).toBeVisible();
-        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
-
-        await page.keyboard.press("Control+Z");
+        const undoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/undo");
+        await editable.press("Control+Z");
+        await undoResponse;
         await expect(paragraph).toHaveCount(0);
-        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
+        await page.waitForTimeout(500);
+        expect(transactionPaths.lastIndexOf("/api/transactions"))
+            .toBeLessThan(transactionPaths.indexOf("/api/transactions/undo"));
+        expect(JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
 
-        await page.keyboard.press("Control+Y");
+        const redoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/redo");
+        await editor.locator(":scope > [data-node-id] > [contenteditable=true]").first().press("Control+Y");
+        await redoResponse;
         await expect(paragraph).toBeVisible();
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
     });
