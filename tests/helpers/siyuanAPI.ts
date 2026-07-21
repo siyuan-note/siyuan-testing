@@ -211,7 +211,7 @@ export class SiyuanAPI {
         }
     }
 
-    async searchDocumentHistory(id: string, notebook: string, op: "all" | "delete" = "all") {
+    async searchDocumentHistory(id: string, notebook: string, op: "all" | "delete" | "update" = "all") {
         return this.post<IDocumentHistorySearch>("/api/history/searchHistory", {
             query: id,
             notebook,
@@ -221,7 +221,7 @@ export class SiyuanAPI {
         });
     }
 
-    async getDocumentHistoryItems(id: string, created: string, op: "all" | "delete" = "all") {
+    async getDocumentHistoryItems(id: string, created: string, op: "all" | "delete" | "update" = "all") {
         const data = await this.post<{items: IDocumentHistoryItem[]}>("/api/history/getHistoryItems", {
             query: id,
             created,
@@ -233,6 +233,23 @@ export class SiyuanAPI {
 
     async rollbackDocumentHistory(historyPath: string) {
         await this.post<null>("/api/history/rollbackDocHistory", {historyPath});
+    }
+
+    async createDocumentHistory(id: string) {
+        await this.post<null>("/api/history/createDocHistory", {id});
+    }
+
+    async getDocumentHistoryContent(historyPath: string) {
+        return this.post<{
+            content: string;
+            id: string;
+            isLargeDoc: boolean;
+            rootID: string;
+        }>("/api/history/getDocHistoryContent", {
+            highlight: false,
+            historyPath,
+            k: "",
+        });
     }
 
     async searchBlocks(query: string) {

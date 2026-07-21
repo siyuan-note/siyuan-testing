@@ -1,4 +1,5 @@
 import {inflateRawSync} from "node:zlib";
+import type {Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 
 const readZipEntries = (archive: Buffer) => {
@@ -34,7 +35,7 @@ const readZipEntries = (archive: Buffer) => {
     return entries;
 };
 
-const getDocumentTreeItem = async (page: import("@playwright/test").Page, notebookID: string, docID: string) => {
+const getDocumentTreeItem = async (page: Page, notebookID: string, docID: string) => {
     const item = page.locator(`li.b3-list-item[data-type="navigation-file"][data-node-id="${docID}"]`);
     if (!await item.isVisible()) {
         const notebookRoot = page.locator(
@@ -48,6 +49,47 @@ const getDocumentTreeItem = async (page: import("@playwright/test").Page, notebo
     await expect(item).toBeVisible({timeout: 10000});
     return item;
 };
+
+const createStandaloneHTML = (title: string, content: string, servePath = "") => `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <base href="${servePath}">
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="stage/build/export/base.css">
+    <link rel="stylesheet" href="appearance/themes/daylight/theme.css">
+    <title>${title}</title>
+</head>
+<body>
+<div class="protyle-wysiwyg" id="preview">${content}</div>
+<script src="stage/protyle/js/protyle-html.js"></script>
+<script src="stage/build/export/protyle-method.js"></script>
+<script src="stage/protyle/js/lute/lute.min.js"></script>
+<script>
+    window.siyuan = {
+        config: {
+            appearance: {
+                mode: 0,
+                codeBlockThemeDark: "base16/dracula",
+                codeBlockThemeLight: "github"
+            },
+            editor: {
+                codeLineWrap: true,
+                fontSize: 16,
+                codeLigatures: false,
+                plantUMLServePath: "",
+                codeSyntaxHighlightLineNum: true,
+                katexMacros: ""
+            }
+        },
+        languages: {copy: "Copy"}
+    };
+    const previewElement = document.getElementById("preview");
+    Protyle.highlightRender(previewElement, "stage/protyle");
+    Protyle.mathRender(previewElement, "stage/protyle", false);
+    Protyle.mermaidRender(previewElement, "stage/protyle");
+</script>
+</body>
+</html>`;
 
 test.describe("document export", () => {
     test("exports rich content as a Markdown ZIP from the document menu", async ({
@@ -110,5 +152,75 @@ test.describe("document export", () => {
         expect(markdown).toContain("## Rich export");
         expect(markdown).toContain(`**${marker}** 中文 🚀`);
         expect(markdown).toContain("const answer = 42;");
+    });
+
+    test("packages standalone HTML and renders rich content with the export bundle", async ({
+        baseURL,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        expect(baseURL).toBeTruthy();
+        const marker = `Standalone HTML marker ${Date.now()}`;
+        const source = [
+            "## Export bundle",
+            "",
+            `${marker} 中文 🚀`,
+            "",
+            "```javascript",
+            "const exportedAnswer = 42;",
+            "```",
+            "",
+            "$$",
+            "E = mc^2",
+            "$$",
+            "",
+            "```mermaid",
+            "graph TD",
+            "    Start --> Finish",
+            "```",
+        ].join("\n");
+        const document = await createTestDocument("Document HTML Export E2E", source);
+        const exported = await siyuanAPI.post<{
+            content: string;
+            folder: string;
+            id: string;
+            name: string;
+        }>("/api/export/exportHTML", {
+            id: document.docID,
+            keepFold: false,
+            merge: false,
+            pdf: false,
+            savePath: "",
+        });
+        expect(exported.id).toBe(document.docID);
+        expect(exported.name).toContain(document.title);
+        expect(exported.folder).toBeTruthy();
+        expect(exported.content).toContain(marker);
+        expect(exported.content).toContain("exportedAnswer");
+        expect(exported.content).toContain('data-subtype="math"');
+        expect(exported.content).toContain('data-subtype="mermaid"');
+
+        const standaloneHTML = createStandaloneHTML(exported.name, exported.content);
+        const packaged = await siyuanAPI.post<{zip: string}>("/api/export/exportBrowserHTML", {
+            folder: exported.folder,
+            html: standaloneHTML,
+            name: exported.name,
+        });
+        const archiveResponse = await page.request.get(new URL(packaged.zip, baseURL).toString());
+        expect(archiveResponse.ok()).toBe(true);
+        const entries = readZipEntries(Buffer.from(await archiveResponse.body()));
+        expect(entries.has("index.html")).toBe(true);
+        expect(entries.has("stage/build/export/base.css")).toBe(true);
+        expect(entries.has("stage/build/export/protyle-method.js")).toBe(true);
+        expect(entries.has("stage/protyle/js/lute/lute.min.js")).toBe(true);
+        expect(entries.get("index.html")?.toString("utf8")).toContain(marker);
+
+        const rootURL = new URL("/", baseURL).toString();
+        await page.setContent(createStandaloneHTML(exported.name, exported.content, rootURL), {waitUntil: "load"});
+        await expect(page.locator("#preview")).toContainText(marker);
+        await expect(page.locator("#preview .hljs")).toContainText("exportedAnswer", {timeout: 15000});
+        await expect(page.locator('#preview [data-subtype="math"] .katex')).toBeVisible({timeout: 15000});
+        await expect(page.locator('#preview [data-subtype="mermaid"] svg')).toBeVisible({timeout: 30000});
     });
 });

@@ -21,6 +21,13 @@ The setup prints the target URL, workspace path, and SiYuan version before runni
 - `pnpm test:repeat`: repeat the suite ten times to find synchronization problems.
 - `pnpm typecheck`: type-check the configuration, fixtures, helpers, and specs.
 - `pnpm exec playwright test tests/<feature>.spec.ts --project=main`: run one spec file.
+- `pnpm exec playwright test tests/<feature>.spec.ts --project=main --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
+
+During development, run only the changed spec or failing test. Run the affected feature group once after the change is stable, and reserve `pnpm test` for the final regression pass. Use `--workers=1` when diagnosing a workflow that depends on shared UI state or when preserving the order of diagnostic output matters.
+
+## Coverage
+
+The suite covers workspace startup and settings restoration; document and file-tree lifecycle; editor input, undo and redo, concurrent editors, copy and paste, and cross-document transactions; block splitting, merging, batch operations, transformations, list dragging, super blocks, references, and query embeds; global search; attribute views; attachment and image persistence; Markdown and standalone HTML export; export-bundle rendering for highlighted code, math, and Mermaid; and document history preview, rollback, deletion recovery, and reload persistence.
 
 ## Test data and cleanup
 
