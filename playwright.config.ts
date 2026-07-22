@@ -4,6 +4,7 @@ import {getBaseURL} from "./tests/helpers/runtime";
 const knowledgeNavigationTests = [
     "**/tag.spec.ts",
     "**/bookmark-outline.spec.ts",
+    "**/dock-filter.spec.ts",
     "**/backlink.spec.ts",
 ];
 
