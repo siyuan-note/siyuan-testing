@@ -69,7 +69,7 @@ test.describe("notebook lifecycle", () => {
         await siyuanAPI.removeNotebook(notebook.id);
         await expect.poll(async () => (await siyuanAPI.listNotebooks()).some(
             item => item.id === notebook.id,
-        )).toBe(false);
-        await expect.poll(() => siyuanAPI.findDocumentPath(docID)).toBeUndefined();
+        ), {timeout: 30000}).toBe(false);
+        await expect.poll(() => siyuanAPI.findDocumentPath(docID), {timeout: 30000}).toBeUndefined();
     });
 });

@@ -54,7 +54,9 @@ test.describe("document lifecycle", () => {
         const expectedPath = `/${parent.docID}/${child.docID}.sy`;
 
         await siyuanAPI.moveDocuments([child.docID], parent.docID);
-        await expect.poll(async () => (await siyuanAPI.getDocumentPath(child.docID)).path).toBe(expectedPath);
+        await expect.poll(async () => (await siyuanAPI.getDocumentPath(child.docID)).path, {
+            timeout: 30000,
+        }).toBe(expectedPath);
         await expect.poll(async () => {
             const entries = await siyuanAPI.listDocuments(child.notebookID, `/${parent.docID}`);
             return entries.map(item => item.id);

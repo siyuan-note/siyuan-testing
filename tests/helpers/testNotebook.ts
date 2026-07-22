@@ -90,6 +90,7 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
         return;
     }
     await page.goto("about:blank");
+    await api.flushTransactions();
     const notebookIDs = [...new Set(documents.map(document => document.notebookID))];
     const documentDepths = new Map<string, number>();
     for (const notebookID of notebookIDs) {
@@ -150,17 +151,21 @@ export const removeCreatedTestNotebooks = async (page: Page, api: SiyuanAPI,
         return;
     }
     await page.goto("about:blank");
+    await api.flushTransactions();
     for (const notebook of notebooks) {
         let absentSince = 0;
         let lastRemoval = 0;
+        let removalVerified = false;
         const deadline = Date.now() + 15000;
         while (Date.now() < deadline) {
             const existing = (await api.listNotebooks()).find(item => item.id === notebook.id);
             if (existing) {
                 absentSince = 0;
-                if (existing.encrypted || !existing.name.startsWith(`${TEMP_TEST_NOTEBOOK_PREFIX} `)) {
+                if (!removalVerified &&
+                    (existing.encrypted || !existing.name.startsWith(`${TEMP_TEST_NOTEBOOK_PREFIX} `))) {
                     throw new Error(`refusing to remove unverified test notebook ${notebook.id}`);
                 }
+                removalVerified = true;
                 if (Date.now() - lastRemoval >= 1000) {
                     await api.removeNotebook(notebook.id);
                     lastRemoval = Date.now();

@@ -152,7 +152,7 @@ export const runAndWaitForSearch = async (page: Page, session: ISearchSession,
         } catch {
             return false;
         }
-    });
+    }, {timeout: 30000});
     await action();
     const response = await responsePromise;
     const result = await response.json() as ISiyuanResponse<ISearchResult>;

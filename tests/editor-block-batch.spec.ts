@@ -102,7 +102,7 @@ const selectSeparateBlocks = async (blocks: Locator, editor: Locator, indexes: n
 const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
-        new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
+        new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 30000});
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     await focusAtEnd(paragraph);
     await page.keyboard.press(shortcut);

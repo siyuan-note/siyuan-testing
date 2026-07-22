@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {expectSearchIndex, submitSearch, withKeywordSearch} from "./helpers/search";
 
 const focusEditable = async (editable: Locator) => {
     await expect(editable).toBeVisible();
@@ -17,7 +18,7 @@ const typeInto = async (page: Page, editable: Locator, text: string) => {
 test.describe("editor", () => {
     test.describe.configure({mode: "parallel"});
 
-    test("creates formatted content and finds the document", async ({page, createTestDocument}) => {
+    test("creates formatted content and finds the document", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor, title} = await createTestDocument("Editor Input E2E");
         const initialEditable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
 
@@ -48,14 +49,12 @@ test.describe("editor", () => {
         await expect(listItems.nth(1)).toContainText("list item 2");
         await expect(page.locator(".protyle-breadcrumb").last()).toBeVisible();
 
-        await page.locator("#barSearch").click();
-        const searchInput = page.locator(".b3-dialog--open #searchInput").first();
-        await expect(searchInput).toBeVisible();
-        await searchInput.fill(title);
-        await expect(page.locator(`.b3-dialog--open .search__list .b3-list-item[data-node-id="${docID}"]`))
-            .toBeVisible({timeout: 15000});
-        await page.keyboard.press("Escape");
-        await expect(page.locator(".b3-dialog--open")).toHaveCount(0);
+        await expectSearchIndex(siyuanAPI, title, docID);
+        await withKeywordSearch(page, async (session) => {
+            const result = await submitSearch(page, session, title);
+            expect(result.blocks.some(block => block.rootID === docID)).toBe(true);
+            await expect(session.results.locator(`.b3-list-item[data-node-id="${docID}"]`)).toBeVisible();
+        });
     });
 
     test("folds and unfolds a heading", async ({page, createTestDocument}) => {

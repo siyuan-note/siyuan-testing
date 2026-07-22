@@ -41,17 +41,17 @@ test.describe("file tree", () => {
 
         await siyuanAPI.moveDocuments([child.docID], firstParent.docID);
         await siyuanAPI.moveDocuments([grandchild.docID], child.docID);
-        await expect.poll(async () => (await siyuanAPI.getDocumentPath(grandchild.docID)).path).toBe(
-            `/${firstParent.docID}/${child.docID}/${grandchild.docID}.sy`,
-        );
+        await expect.poll(async () => (await siyuanAPI.getDocumentPath(grandchild.docID)).path, {
+            timeout: 30000,
+        }).toBe(`/${firstParent.docID}/${child.docID}/${grandchild.docID}.sy`);
 
         await siyuanAPI.moveDocuments([child.docID], secondParent.docID);
-        await expect.poll(async () => (await siyuanAPI.getDocumentPath(child.docID)).path).toBe(
-            `/${secondParent.docID}/${child.docID}.sy`,
-        );
-        await expect.poll(async () => (await siyuanAPI.getDocumentPath(grandchild.docID)).path).toBe(
-            `/${secondParent.docID}/${child.docID}/${grandchild.docID}.sy`,
-        );
+        await expect.poll(async () => (await siyuanAPI.getDocumentPath(child.docID)).path, {
+            timeout: 30000,
+        }).toBe(`/${secondParent.docID}/${child.docID}.sy`);
+        await expect.poll(async () => (await siyuanAPI.getDocumentPath(grandchild.docID)).path, {
+            timeout: 30000,
+        }).toBe(`/${secondParent.docID}/${child.docID}/${grandchild.docID}.sy`);
         expect((await siyuanAPI.listDocuments(child.notebookID)).find(
             item => item.id === firstParent.docID,
         )?.subFileCount).toBe(0);

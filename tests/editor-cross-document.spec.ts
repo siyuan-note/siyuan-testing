@@ -38,6 +38,16 @@ const finishBlockMoveAfter = async (session: Awaited<ReturnType<typeof startBloc
 };
 
 const revealDocument = async (page: Page, notebookID: string, docID: string) => {
+    const fileTree = page.locator(".sy__file");
+    const fileTreeInitiallyVisible = await fileTree.locator(".block__logo:visible").isVisible();
+    const fileDockItem = page.locator('.dock__item[data-type="file"]').first();
+    if (!fileTreeInitiallyVisible) {
+        if (await fileDockItem.evaluate(element => element.classList.contains("dock__item--active"))) {
+            await fileDockItem.click();
+        }
+        await fileDockItem.click();
+        await expect(fileTree.locator(".block__logo:visible")).toBeVisible();
+    }
     const documentItem = page.locator(`li.b3-list-item[data-type="navigation-file"][data-node-id="${docID}"]`);
     if (!await documentItem.isVisible()) {
         const notebookRoot = page.locator(
@@ -49,7 +59,15 @@ const revealDocument = async (page: Page, notebookID: string, docID: string) => 
         }
     }
     await expect(documentItem).toBeVisible({timeout: 10000});
-    return documentItem;
+    return {
+        documentItem,
+        restoreFileTree: async () => {
+            if (!fileTreeInitiallyVisible &&
+                await fileDockItem.evaluate(element => element.classList.contains("dock__item--active"))) {
+                await fileDockItem.click();
+            }
+        },
+    };
 };
 
 test("moves a block across documents and broadcasts undo and redo", async ({
@@ -71,6 +89,7 @@ test("moves a block across documents and broadcasts undo and redo", async ({
     const sourcePage = await context.newPage();
     const destinationPage = await context.newPage();
     let sourceTab: Locator | undefined;
+    let restoreFileTree: (() => Promise<void>) | undefined;
     try {
         await Promise.all([
             openWorkspace(sourcePage, `/?id=${sourceID}`),
@@ -83,11 +102,39 @@ test("moves a block across documents and broadcasts undo and redo", async ({
         const destinationTab = page.locator('li[data-type="tab-header"] .item__text')
             .filter({hasText: destination.title}).locator("xpath=..");
         await expect(destinationTab).toBeVisible();
-        const sourceItem = await revealDocument(page, destination.notebookID, sourceID);
-        await sourceItem.click({force: true, modifiers: ["Alt", "Control"]});
-        sourceTab = page.locator('li[data-type="tab-header"] .item__text')
-            .filter({hasText: sourceTitle}).locator("xpath=..");
-        await expect(sourceTab).toBeVisible();
+        const revealedSource = await revealDocument(
+            page,
+            destination.notebookID,
+            sourceID,
+        );
+        const sourceItem = revealedSource.documentItem;
+        restoreFileTree = revealedSource.restoreFileTree;
+        const openFilesUseCurrentTab = await page.evaluate(() => {
+            const config = window.siyuan.config as unknown as {
+                fileTree: {openFilesUseCurrentTab: boolean};
+            };
+            return config.fileTree.openFilesUseCurrentTab;
+        });
+        await page.evaluate(() => {
+            const config = window.siyuan.config as unknown as {
+                fileTree: {openFilesUseCurrentTab: boolean};
+            };
+            config.fileTree.openFilesUseCurrentTab = false;
+        });
+        try {
+            await sourceItem.locator(":scope > .b3-list-item__text").click();
+            sourceTab = page.locator('li[data-type="tab-header"] .item__text')
+                .filter({hasText: sourceTitle}).locator("xpath=..");
+            await expect(sourceTab).toBeVisible({timeout: 30000});
+        } finally {
+            await page.evaluate(value => {
+                const config = window.siyuan.config as unknown as {
+                    fileTree: {openFilesUseCurrentTab: boolean};
+                };
+                config.fileTree.openFilesUseCurrentTab = value;
+            }, openFilesUseCurrentTab);
+        }
+        await restoreFileTree();
         await sourceTab.click({force: true});
         const sourceEditor = await getDocumentEditor(page, sourceID);
         const sourceBlock = sourceEditor.locator(':scope > [data-type="NodeParagraph"]')
@@ -180,6 +227,7 @@ test("moves a block across documents and broadcasts undo and redo", async ({
         await expect(sourceObserver.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(0);
         await expect(destinationObserver.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(1);
     } finally {
+        await restoreFileTree?.();
         await Promise.all([sourcePage.close(), destinationPage.close()]);
         if (sourceTab && await sourceTab.count() > 0) {
             await sourceTab.locator(".item__close").click({force: true});

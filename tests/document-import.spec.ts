@@ -1,5 +1,5 @@
 import {expect, test} from "./fixtures";
-import {openWorkspace} from "./helpers/runtime";
+import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface ISyNode {
@@ -96,33 +96,38 @@ test.describe("document import", () => {
         await siyuanAPI.removeDocument(source.docID);
         await expect.poll(() => siyuanAPI.findDocumentPath(source.docID)).toBeUndefined();
         await openWorkspace(page);
-        const notebookRoot = page.locator(
-            `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
-        );
-        await expect(notebookRoot).toBeVisible();
-        await notebookRoot.hover();
-        await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
+        const restoreFileTree = await showFileTree(page);
+        try {
+            const notebookRoot = page.locator(
+                `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
+            );
+            await expect(notebookRoot).toBeVisible();
+            await notebookRoot.hover();
+            await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
 
-        const menu = page.locator("#commonMenu:not(.fn__none)");
-        await expect(menu).toBeVisible();
-        const importItem = menu.locator('[data-id="import"]');
-        await expect(importItem).toBeVisible();
-        await importItem.hover();
-        const markdownImport = importItem.locator('[data-id="importMarkdownZip"]');
-        await expect(markdownImport).toBeVisible();
-        const uploadInput = markdownImport.locator('input[type="file"]');
-        await expect(uploadInput).toBeAttached();
+            const menu = page.locator("#commonMenu:not(.fn__none)");
+            await expect(menu).toBeVisible();
+            const importItem = menu.locator('[data-id="import"]');
+            await expect(importItem).toBeVisible();
+            await importItem.hover();
+            const markdownImport = importItem.locator('[data-id="importMarkdownZip"]');
+            await expect(markdownImport).toBeVisible();
+            const uploadInput = markdownImport.locator('input[type="file"]');
+            await expect(uploadInput).toBeAttached();
 
-        const importResponse = page.waitForResponse(response =>
-            new URL(response.url()).pathname === "/api/import/importZipMd", {timeout: 30000});
-        await uploadInput.setInputFiles({
-            name: `${exported.name || source.title}.zip`,
-            mimeType: "application/zip",
-            buffer: archive,
-        });
-        const response = await importResponse;
-        const result = await response.json() as {code: number; msg: string};
-        expect(result).toMatchObject({code: 0});
+            const importResponse = page.waitForResponse(response =>
+                new URL(response.url()).pathname === "/api/import/importZipMd", {timeout: 30000});
+            await uploadInput.setInputFiles({
+                name: `${exported.name || source.title}.zip`,
+                mimeType: "application/zip",
+                buffer: archive,
+            });
+            const response = await importResponse;
+            const result = await response.json() as {code: number; msg: string};
+            expect(result).toMatchObject({code: 0});
+        } finally {
+            await restoreFileTree();
+        }
 
         let importedRootID = "";
         await expect.poll(async () => {

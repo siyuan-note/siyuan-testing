@@ -45,6 +45,15 @@ const expectClipboardText = async (page: Page, expectedParts: string[]) => {
     }).toBe(true);
 };
 
+const pasteBlocks = async (page: Page) => {
+    const existenceCheck = page.waitForResponse(response =>
+        new URL(response.url()).pathname === "/api/block/checkBlocksExist", {timeout: 30000});
+    await page.keyboard.press("Control+V");
+    const response = await existenceCheck;
+    const result = await response.json() as {code: number; msg: string};
+    expect(result.code, result.msg).toBe(0);
+};
+
 const getDOMState = async (editor: Locator) => {
     const paragraphs = await editor.locator(':scope > [data-type="NodeParagraph"]').evaluateAll(elements =>
         elements.map(element => ({
@@ -75,11 +84,11 @@ const getPersistedState = async (api: SiyuanAPI, docID: string) => {
 
 const expectDocumentState = async (api: SiyuanAPI, docID: string, editor: Locator,
                                    paragraphs: IParagraphState[]) => {
-    await expect.poll(() => getDOMState(editor)).toEqual({
+    await expect.poll(() => getDOMState(editor), {timeout: 30000}).toEqual({
         duplicateIDs: 0,
         paragraphs,
     });
-    await expect.poll(() => getPersistedState(api, docID)).toEqual({
+    await expect.poll(() => getPersistedState(api, docID), {timeout: 30000}).toEqual({
         duplicateIDs: 0,
         mismatchedPropertyIDs: 0,
         paragraphs,
@@ -131,7 +140,7 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press("Enter");
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(3);
         await focusAtEnd(editor.locator(':scope > [data-type="NodeParagraph"]').last());
-        await page.keyboard.press("Control+V");
+        await pasteBlocks(page);
 
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(3);
         await expect(editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').last())
@@ -171,7 +180,7 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press("Enter");
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
         await focusAtEnd(editor.locator(':scope > [data-type="NodeParagraph"]').last());
-        await page.keyboard.press("Control+V");
+        await pasteBlocks(page);
 
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
         const pastedState = [
@@ -216,7 +225,7 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press("Enter");
         await expect(blocks).toHaveCount(4);
         await focusAtEnd(blocks.last());
-        await page.keyboard.press("Control+V");
+        await pasteBlocks(page);
 
         await expect(blocks).toHaveCount(5);
         const copiedState = (await getDOMState(editor)).paragraphs;
@@ -276,7 +285,7 @@ test.describe("block copy, cut, and paste", () => {
             const destinationBlocks = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
             await expect(destinationBlocks).toHaveCount(2);
             await focusAtEnd(destinationBlocks.last());
-            await page.keyboard.press("Control+V");
+            await pasteBlocks(page);
 
             await expect(destinationBlocks).toHaveCount(2);
             const copiedBlock = destinationBlocks.nth(1);

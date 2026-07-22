@@ -58,3 +58,33 @@ export const openWorkspace = async (page: Page, path = "/") => {
         await expect(dialog).toHaveCount(0);
     }
 };
+
+export const showFileTree = async (page: Page) => {
+    const fileTree = page.locator(".sy__file");
+    const fileTreeLogo = fileTree.locator(".block__logo:visible");
+    const fileDockItem = page.locator('.dock__item[data-type="file"]').first();
+    const initiallyVisible = await fileTreeLogo.isVisible();
+    const dockItems = fileDockItem.locator("xpath=parent::*");
+    const activeDockItem = dockItems.locator(".dock__item--activefocus").first();
+    const previousDockType = await activeDockItem.count() > 0 ? await activeDockItem.getAttribute("data-type") : null;
+    if (!initiallyVisible) {
+        await fileDockItem.click();
+        if (!await fileTreeLogo.isVisible()) {
+            await fileDockItem.click();
+        }
+        await expect(fileTreeLogo).toBeVisible();
+    }
+
+    return async () => {
+        if (initiallyVisible) {
+            return;
+        }
+        if (previousDockType && previousDockType !== "file") {
+            await dockItems.locator(`.dock__item[data-type="${previousDockType}"]`).click();
+            await expect(fileTreeLogo).toBeHidden();
+        } else if (await fileTreeLogo.isVisible()) {
+            await fileDockItem.click();
+            await expect(fileTreeLogo).toBeHidden();
+        }
+    };
+};

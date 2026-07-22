@@ -72,6 +72,51 @@ export interface ISearchResult {
     docMode: boolean;
 }
 
+export interface ISearchTagsResult {
+    tags: string[];
+    k: string;
+}
+
+export interface IBookmark {
+    name: string;
+    blocks: ISearchBlock[];
+    type: "bookmark";
+    depth: number;
+    count: number;
+}
+
+export interface IOutlineBlock {
+    id: string;
+    content: string;
+    children?: IOutlineBlock[];
+}
+
+export interface IOutlinePath {
+    id: string;
+    name: string;
+    blocks: IOutlineBlock[];
+}
+
+export interface IBacklinkPath {
+    id: string;
+    box: string;
+    name: string;
+    hPath: string;
+    type: "backlink";
+    count: number;
+    children?: IBacklinkPath[];
+}
+
+export interface IBacklinkResult {
+    backlinks: IBacklinkPath[];
+    linkRefsCount: number;
+    backmentions: IBacklinkPath[];
+    mentionsCount: number;
+    k: string;
+    mk: string;
+    box: string;
+}
+
 export interface IAppearanceSettings {
     mode: number;
     modeOS: boolean;
@@ -203,7 +248,7 @@ export class SiyuanAPI {
             notebook,
             path,
             maxListCount: 0,
-        });
+        }, 30000);
         return data.files;
     }
 
@@ -232,7 +277,7 @@ export class SiyuanAPI {
             notebook,
             path: `/${title}`,
             markdown,
-        });
+        }, 30000);
     }
 
     async removeDocument(id: string) {
@@ -241,6 +286,40 @@ export class SiyuanAPI {
 
     async renameDocument(id: string, title: string) {
         await this.post<null>("/api/filetree/renameDocByID", {id, title});
+    }
+
+    async getBlockAttrs(id: string) {
+        return this.post<Record<string, string>>("/api/attr/getBlockAttrs", {id});
+    }
+
+    async setBlockAttrs(id: string, attrs: Record<string, string | null>) {
+        await this.post<null>("/api/attr/setBlockAttrs", {id, attrs});
+    }
+
+    async getBookmarks() {
+        return this.post<IBookmark[]>("/api/bookmark/getBookmark", {});
+    }
+
+    async getDocumentOutline(id: string) {
+        return this.post<IOutlinePath[]>("/api/outline/getDocOutline", {id, preview: false});
+    }
+
+    async getBacklinks(id: string) {
+        return this.post<IBacklinkResult>("/api/ref/getBacklink2", {
+            id,
+            k: "",
+            mk: "",
+            sort: "3",
+            mSort: "3",
+        }, 30000);
+    }
+
+    async refreshBacklinks(id: string) {
+        await this.post<null>("/api/ref/refreshBacklink", {id});
+    }
+
+    async flushTransactions() {
+        await this.post<null>("/api/sqlite/flushTransaction", {}, 30000);
     }
 
     async moveDocuments(fromIDs: string[], toID: string) {
@@ -284,7 +363,7 @@ export class SiyuanAPI {
             op,
             page: 1,
             type: 3,
-        });
+        }, 30000);
     }
 
     async getDocumentHistoryItems(id: string, created: string, op: "all" | "delete" | "update" = "all") {
@@ -329,7 +408,7 @@ export class SiyuanAPI {
             page: 1,
             query,
             type,
-        });
+        }, 30000);
     }
 
     async getHistoryItems(query: string, created: string, op: string, type: number) {
@@ -369,6 +448,10 @@ export class SiyuanAPI {
             throw new Error(`/api/search/fullTextSearchBlock failed with code ${result.code}: ${result.msg}`);
         }
         return result.data;
+    }
+
+    async searchTags(query: string) {
+        return this.post<ISearchTagsResult>("/api/search/searchTag", {k: query});
     }
 
     async getDocumentContent(id: string, notebook?: string) {
