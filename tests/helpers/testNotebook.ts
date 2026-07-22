@@ -3,6 +3,7 @@ import {SiyuanAPI} from "./siyuanAPI";
 import {openWorkspace} from "./runtime";
 
 export const TEST_NOTEBOOK_NAME = "SiYuan Testing";
+export const TEMP_TEST_NOTEBOOK_PREFIX = "SiYuan Testing Notebook";
 
 export interface ICreatedTestDocument {
     id: string;
@@ -17,8 +18,14 @@ export interface ITestDocument {
     title: string;
 }
 
+export interface ICreatedTestNotebook {
+    id: string;
+    name: string;
+}
+
 export type TestDocumentFactory = (titlePrefix: string, markdown?: string) => Promise<ITestDocument>;
 export type TestDocumentTracker = (document: ICreatedTestDocument) => void;
+export type TestNotebookFactory = (namePrefix: string) => Promise<ICreatedTestNotebook>;
 
 export const ensureTestNotebook = async (api: SiyuanAPI) => {
     const notebooks = await api.listNotebooks();
@@ -66,6 +73,15 @@ export const createTestDocument = async (page: Page, api: SiyuanAPI,
     await openWorkspace(page, `/?id=${docID}`);
     const editor = await getDocumentEditor(page, docID);
     return {docID, editor, notebookID, title};
+};
+
+export const createTestNotebook = async (api: SiyuanAPI, createdNotebooks: ICreatedTestNotebook[],
+                                         namePrefix: string) => {
+    const name = `${TEMP_TEST_NOTEBOOK_PREFIX} ${namePrefix} ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const notebook = await api.createNotebook(name);
+    const created = {id: notebook.id, name};
+    createdNotebooks.push(created);
+    return created;
 };
 
 export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
@@ -118,28 +134,56 @@ export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
     throw new Error(`test documents were recreated after deletion: ${documents.map(item => item.id).join(", ")}`);
 };
 
-export const preserveFailedTestDocuments = async (api: SiyuanAPI, documents: ICreatedTestDocument[],
-                                                   testInfo: TestInfo) => {
-    let hasExistingDocument = false;
-    try {
-        for (const document of documents) {
-            if (await api.findDocumentPath(document.id)) {
-                hasExistingDocument = true;
-                break;
-            }
-        }
-    } catch {
-        hasExistingDocument = documents.length > 0;
-    }
-    if (!hasExistingDocument) {
-        const notebookID = await ensureTestNotebook(api);
-        const safeTitle = testInfo.title.replace(/[^\w -]/g, " ");
-        const title = `FAILED ${safeTitle} ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        const id = await api.createDocument(notebookID, title);
-        documents.push({id, notebookID, title});
+export const preserveFailedTestDocuments = async (documents: ICreatedTestDocument[], testInfo: TestInfo) => {
+    if (documents.length === 0) {
+        return;
     }
     await testInfo.attach("preserved-test-documents", {
         body: Buffer.from(JSON.stringify(documents, null, 2)),
+        contentType: "application/json",
+    });
+};
+
+export const removeCreatedTestNotebooks = async (page: Page, api: SiyuanAPI,
+                                                 notebooks: ICreatedTestNotebook[]) => {
+    if (notebooks.length === 0) {
+        return;
+    }
+    await page.goto("about:blank");
+    for (const notebook of notebooks) {
+        let absentSince = 0;
+        let lastRemoval = 0;
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+            const existing = (await api.listNotebooks()).find(item => item.id === notebook.id);
+            if (existing) {
+                absentSince = 0;
+                if (existing.encrypted || !existing.name.startsWith(`${TEMP_TEST_NOTEBOOK_PREFIX} `)) {
+                    throw new Error(`refusing to remove unverified test notebook ${notebook.id}`);
+                }
+                if (Date.now() - lastRemoval >= 1000) {
+                    await api.removeNotebook(notebook.id);
+                    lastRemoval = Date.now();
+                }
+            } else if (absentSince === 0) {
+                absentSince = Date.now();
+            } else if (Date.now() - absentSince >= 1000) {
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        if (absentSince === 0 || Date.now() - absentSince < 1000) {
+            throw new Error(`test notebook was recreated after deletion: ${notebook.id}`);
+        }
+    }
+};
+
+export const preserveFailedTestNotebooks = async (notebooks: ICreatedTestNotebook[], testInfo: TestInfo) => {
+    if (notebooks.length === 0) {
+        return;
+    }
+    await testInfo.attach("preserved-test-notebooks", {
+        body: Buffer.from(JSON.stringify(notebooks, null, 2)),
         contentType: "application/json",
     });
 };

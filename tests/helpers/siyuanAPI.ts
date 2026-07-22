@@ -83,6 +83,11 @@ export interface IWorkspaceInfo {
     siyuanVer: string;
 }
 
+export interface INotebookConf {
+    sortMode: number;
+    [key: string]: unknown;
+}
+
 export interface IBlockInfo {
     box: string;
     path: string;
@@ -171,6 +176,24 @@ export class SiyuanAPI {
         await this.post<null>("/api/notebook/openNotebook", {notebook});
     }
 
+    async closeNotebook(notebook: string) {
+        await this.post<null>("/api/notebook/closeNotebook", {notebook});
+    }
+
+    async renameNotebook(notebook: string, name: string) {
+        await this.post<null>("/api/notebook/renameNotebook", {notebook, name});
+    }
+
+    async getNotebookConf(notebook: string) {
+        return this.post<{box: string; name: string; conf: INotebookConf}>("/api/notebook/getNotebookConf", {
+            notebook,
+        });
+    }
+
+    async setNotebookConf(notebook: string, conf: INotebookConf) {
+        await this.post<null>("/api/notebook/setNotebookConf", {notebook, conf});
+    }
+
     async removeNotebook(notebook: string) {
         await this.post<null>("/api/notebook/removeNotebook", {notebook});
     }
@@ -222,6 +245,10 @@ export class SiyuanAPI {
 
     async moveDocuments(fromIDs: string[], toID: string) {
         await this.post<null>("/api/filetree/moveDocsByID", {fromIDs, toID});
+    }
+
+    async changeFileTreeSort(notebook: string, paths: string[]) {
+        await this.post<null>("/api/filetree/changeSort", {notebook, paths});
     }
 
     async duplicateDocument(id: string) {

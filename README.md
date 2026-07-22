@@ -35,7 +35,7 @@ The suite covers workspace startup, settings restoration, and main WebSocket rec
 
 Every test creates an independent document in the `SiYuan Testing` notebook. Documents from successful tests are deleted automatically. Documents from failed, timed-out, or interrupted tests are preserved and attached to the Playwright result as JSON metadata.
 
-The encrypted-notebook test is the only test-data exception: it creates a uniquely named encrypted notebook because encryption is a notebook-level property. A passing test removes that notebook; a failing test locks and preserves it and attaches its ID and name for diagnosis.
+Notebook-level tests are the only test-data exceptions. The encrypted-notebook test creates a uniquely named encrypted notebook because encryption is a notebook-level property. Notebook lifecycle tests create uniquely named ordinary notebooks. Passing tests remove these notebooks; failing tests preserve them and attach their IDs and names for diagnosis. A failed encrypted-notebook test also locks its notebook before preserving it.
 
 Tests that change global settings must use the `globalSettings` fixture so the original values are restored. Document tests may run in parallel; tests that share global application state must remain serial.
 
