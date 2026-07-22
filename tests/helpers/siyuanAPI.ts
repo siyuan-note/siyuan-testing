@@ -10,6 +10,21 @@ export interface INotebook {
     id: string;
     name: string;
     closed: boolean;
+    encrypted: boolean;
+    unlocked: boolean;
+}
+
+export interface IEncryptedNotebookStatus {
+    enabled: boolean;
+    count: number;
+    boxes: Array<{
+        id: string;
+        name: string;
+        unlocked: boolean;
+    }>;
+    migrationPending: boolean;
+    migrationBoxes: string[];
+    hasHistoryDependency: boolean;
 }
 
 export interface IDocumentEntry {
@@ -73,6 +88,14 @@ export interface IBlockInfo {
     path: string;
 }
 
+export interface IDocumentContent {
+    id: string;
+    rootID: string;
+    content: string;
+    box: string;
+    path: string;
+}
+
 export class SiyuanAPI {
     private readonly request: APIRequestContext;
     private readonly baseURL: string;
@@ -122,6 +145,26 @@ export class SiyuanAPI {
     async createNotebook(name: string) {
         const data = await this.post<{notebook: INotebook}>("/api/notebook/createNotebook", {name});
         return data.notebook;
+    }
+
+    async createEncryptedNotebook(name: string, password: string) {
+        const data = await this.post<{notebook: INotebook}>("/api/notebook/createEncryptedNotebook", {
+            name,
+            password,
+        });
+        return data.notebook;
+    }
+
+    async getEncryptedNotebookStatus() {
+        return this.post<IEncryptedNotebookStatus>("/api/notebook/getEncryptedNotebookStatus", {});
+    }
+
+    async lockNotebook(notebook: string) {
+        await this.post<null>("/api/notebook/lockNotebook", {notebook});
+    }
+
+    async unlockAndOpenNotebook(notebook: string, password: string) {
+        await this.post<null>("/api/notebook/unlockAndOpenNotebook", {notebook, password});
     }
 
     async openNotebook(notebook: string) {
@@ -280,8 +323,8 @@ export class SiyuanAPI {
         await this.post<null>("/api/history/rollbackAssetsHistory", {historyPath});
     }
 
-    async searchBlocks(query: string) {
-        return this.post<ISearchResult>("/api/search/fullTextSearchBlock", {
+    async searchBlocksResult(query: string, notebook?: string) {
+        return this.postResult<ISearchResult>("/api/search/fullTextSearchBlock", {
             query,
             method: 0,
             paths: [],
@@ -289,7 +332,35 @@ export class SiyuanAPI {
             orderBy: 0,
             page: 1,
             pageSize: 32,
+            ...(notebook ? {notebook} : {}),
         }, 30000);
+    }
+
+    async searchBlocks(query: string, notebook?: string) {
+        const result = await this.searchBlocksResult(query, notebook);
+        if (result.code !== 0) {
+            throw new Error(`/api/search/fullTextSearchBlock failed with code ${result.code}: ${result.msg}`);
+        }
+        return result.data;
+    }
+
+    async getDocumentContent(id: string, notebook?: string) {
+        const path = "/api/filetree/getDoc";
+        const deadline = Date.now() + 15000;
+        while (true) {
+            const result = await this.postResult<IDocumentContent>(path, {
+                id,
+                highlight: false,
+                ...(notebook ? {notebook} : {}),
+            });
+            if (result.code === 0) {
+                return result.data;
+            }
+            if (result.msg !== "indexing" || Date.now() >= deadline) {
+                throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
     }
 
     async updateBlock(id: string, markdown: string) {
@@ -300,8 +371,11 @@ export class SiyuanAPI {
         });
     }
 
-    async getBlockInfo(id: string) {
-        return this.post<IBlockInfo>("/api/block/getBlockInfo", {id});
+    async getBlockInfo(id: string, notebook?: string) {
+        return this.post<IBlockInfo>("/api/block/getBlockInfo", {
+            id,
+            ...(notebook ? {notebook} : {}),
+        });
     }
 
     async readWorkspaceFile<T>(path: string): Promise<T> {

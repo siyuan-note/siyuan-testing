@@ -12,6 +12,8 @@ The default target is `http://127.0.0.1:6806`. Set `SIYUAN_BASE_URL` to use anot
 
 The setup prints the target URL, workspace path, and SiYuan version before running any feature tests.
 
+The encrypted-notebook lifecycle test is opt-in because creating its isolated notebook requires the workspace master password. Enable encrypted notebooks yourself, set `SIYUAN_TEST_ENCRYPTION_PASSWORD` in the test process, and run `pnpm exec playwright test tests/encrypted-notebook.spec.ts --project=main`. The suite never enables or disables encryption and never changes the master password.
+
 ## Commands
 
 - `pnpm test`: run all tests in headless mode.
@@ -27,11 +29,13 @@ During development, run only the changed spec or failing test. Run the affected 
 
 ## Coverage
 
-The suite covers workspace startup, settings restoration, and main WebSocket reconnection; document and file-tree lifecycle; editor input, undo and redo, concurrent editors, copy and paste, and cross-document transactions; block splitting, merging, batch operations, transformations, list dragging, super blocks, references, and query embeds; global search; attribute views and attribute-view history rollback; attachment and image persistence; Markdown and standalone HTML export; export-bundle rendering for highlighted code, math, and Mermaid; Markdown and SiYuan archive round trips with hierarchy, references, and assets; and document history preview, rollback, deletion recovery, and reload persistence.
+The suite covers workspace startup, settings restoration, and main WebSocket reconnection; document and file-tree lifecycle; encrypted-notebook locking, unlocking, and search isolation; editor input, undo and redo, concurrent editors, copy and paste, and cross-document transactions; block splitting, merging, batch operations, transformations, list dragging, super blocks, references, and query embeds; global search; attribute views and attribute-view history rollback; attachment and image persistence; Markdown and standalone HTML export; export-bundle rendering for highlighted code, math, and Mermaid; Markdown and SiYuan archive round trips with hierarchy, references, and assets; and document history preview, rollback, deletion recovery, and reload persistence.
 
 ## Test data and cleanup
 
 Every test creates an independent document in the `SiYuan Testing` notebook. Documents from successful tests are deleted automatically. Documents from failed, timed-out, or interrupted tests are preserved and attached to the Playwright result as JSON metadata.
+
+The encrypted-notebook test is the only test-data exception: it creates a uniquely named encrypted notebook because encryption is a notebook-level property. A passing test removes that notebook; a failing test locks and preserves it and attaches its ID and name for diagnosis.
 
 Tests that change global settings must use the `globalSettings` fixture so the original values are restored. Document tests may run in parallel; tests that share global application state must remain serial.
 
