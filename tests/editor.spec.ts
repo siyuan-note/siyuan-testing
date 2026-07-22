@@ -120,8 +120,13 @@ test.describe("editor", () => {
         await expect(codeBlock.locator(".protyle-action__language")).toHaveText("js");
 
         const content = "console.log('hello')";
-        await typeInto(page, codeBlock.locator('.hljs [contenteditable="true"]'), content);
+        const codeEditable = codeBlock.locator('.hljs [contenteditable="true"]');
+        await focusEditable(codeEditable);
+        const transaction = page.waitForResponse(response =>
+            new URL(response.url()).pathname === "/api/transactions", {timeout: 15000});
+        await page.keyboard.insertText(content);
         await expect(codeBlock).toContainText(content);
+        expect((await transaction).ok()).toBe(true);
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
     });
 });

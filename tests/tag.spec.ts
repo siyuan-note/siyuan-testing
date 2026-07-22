@@ -1,4 +1,5 @@
 import {expect, test} from "./fixtures";
+import {showDock} from "./helpers/runtime";
 import {ISiyuanResponse, ISearchResult} from "./helpers/siyuanAPI";
 
 interface ISyNode {
@@ -37,6 +38,7 @@ test.describe("tags", () => {
         const renamedTag = `E2ERenamedTag${suffix}`;
         const marker = `Tagged content ${suffix}`;
         const document = await createTestDocument("Tag Lifecycle", `${marker} #${originalTag}#`);
+        const restoreDockVisibility = await showDock(page);
         const dockItem = page.locator('.dock__item[data-type="tag"]').first();
 
         try {
@@ -136,8 +138,12 @@ test.describe("tags", () => {
             await expect(document.editor).toContainText(marker);
         } finally {
             if (!page.isClosed()) {
-                await closeSearchTab(page, `#${renamedTag}#`);
-                await activateFileTree(page);
+                try {
+                    await closeSearchTab(page, `#${renamedTag}#`);
+                    await activateFileTree(page);
+                } finally {
+                    await restoreDockVisibility();
+                }
             }
         }
     });

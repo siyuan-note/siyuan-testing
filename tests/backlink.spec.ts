@@ -1,4 +1,5 @@
 import {expect, test} from "./fixtures";
+import {showDock} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 test("refreshes backlinks, navigates to the referring document, and removes the relationship", async ({
@@ -33,6 +34,7 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
     await expect((await getDocumentEditor(page, target.docID)).locator(
         `:scope > [data-type="NodeParagraph"]`,
     ).first()).toContainText(targetMarker);
+    const restoreDockVisibility = await showDock(page);
     const dockItem = page.locator('.dock__item[data-type="backlink"]').first();
     const initiallyActive = await dockItem.evaluate(element => element.classList.contains("dock__item--active"));
 
@@ -87,7 +89,11 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
         await expect(reloadedSource.locator(`[data-node-id="${sourceBlockID}"]`)).toContainText(removedMarker);
         expect((await siyuanAPI.getBacklinks(target.docID)).linkRefsCount).toBe(0);
     } finally {
-        await restoreDock(page, dockItem, initiallyActive);
+        try {
+            await restoreDock(page, dockItem, initiallyActive);
+        } finally {
+            await restoreDockVisibility();
+        }
     }
 });
 

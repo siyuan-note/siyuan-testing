@@ -117,6 +117,47 @@ export interface IBacklinkResult {
     box: string;
 }
 
+export interface IRiffCardProgress {
+    due: string;
+    reps: number;
+    lapses: number;
+    state: number;
+    lastReview: string;
+}
+
+export interface IRiffCardBlock {
+    id: string;
+    rootID: string;
+    content: string;
+    ial: Record<string, string>;
+    riffCardID: string;
+    riffCard: IRiffCardProgress;
+}
+
+export interface IRiffCardsResult {
+    blocks: IRiffCardBlock[];
+    total: number;
+    pageCount: number;
+}
+
+export interface IRiffDueCard {
+    deckID: string;
+    cardID: string;
+    blockID: string;
+    nextDues: Record<string, string>;
+    lapses: number;
+    lastReview: number;
+    reps: number;
+    state: number;
+}
+
+export interface IRiffDueCardsResult {
+    cards: IRiffDueCard[];
+    unreviewedCount: number;
+    unreviewedNewCardCount: number;
+    unreviewedOldCardCount: number;
+}
+
 export interface IAppearanceSettings {
     mode: number;
     modeOS: boolean;
@@ -316,6 +357,19 @@ export class SiyuanAPI {
 
     async refreshBacklinks(id: string) {
         await this.post<null>("/api/ref/refreshBacklink", {id});
+    }
+
+    async getTreeRiffCards(id: string) {
+        return this.post<IRiffCardsResult>("/api/riff/getTreeRiffCards", {id, page: 1, pageSize: 20});
+    }
+
+    async getTreeRiffDueCards(rootID: string, reviewedCards: Array<{cardID: string}> = []) {
+        return this.post<IRiffDueCardsResult>("/api/riff/getTreeRiffDueCards", {rootID, reviewedCards});
+    }
+
+    async reviewRiffCard(deckID: string, cardID: string, rating: 1 | 2 | 3 | 4,
+                         reviewedCards: Array<{cardID: string}> = []) {
+        await this.post<null>("/api/riff/reviewRiffCard", {deckID, cardID, rating, reviewedCards});
     }
 
     async flushTransactions() {

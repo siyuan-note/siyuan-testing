@@ -1,4 +1,5 @@
 import {expect, test} from "./fixtures";
+import {showDock} from "./helpers/runtime";
 import {IOutlineBlock, IOutlinePath} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
@@ -24,6 +25,7 @@ test.describe("bookmarks and outline", () => {
 
         const origin = await createTestDocument("Bookmark Navigation Origin", "Navigate away before opening bookmark");
         await expect(origin.editor).toBeVisible();
+        const restoreDockVisibility = await showDock(page);
         const dockItem = page.locator('.dock__item[data-type="bookmark"]').first();
         const initiallyActive = await dockItem.evaluate(element => element.classList.contains("dock__item--active"));
 
@@ -77,7 +79,11 @@ test.describe("bookmarks and outline", () => {
             await expect(page.locator(`.protyle-wysiwyg [data-node-id="${targetBlockID}"][bookmark]:visible`))
                 .toHaveCount(0);
         } finally {
-            await restoreDock(page, dockItem, initiallyActive);
+            try {
+                await restoreDock(page, dockItem, initiallyActive);
+            } finally {
+                await restoreDockVisibility();
+            }
         }
     });
 
@@ -106,6 +112,7 @@ test.describe("bookmarks and outline", () => {
             item => item.id,
         )).toEqual(headingIDs);
 
+        const restoreDockVisibility = await showDock(page);
         const dockItem = page.locator('.dock__item[data-type="outline"]').first();
         const initiallyActive = await dockItem.evaluate(element => element.classList.contains("dock__item--active"));
         try {
@@ -128,7 +135,11 @@ test.describe("bookmarks and outline", () => {
             await activateDock(page, dockItem, ".sy__outline");
             await assertOutline(page, headingIDs, headings);
         } finally {
-            await restoreDock(page, dockItem, initiallyActive);
+            try {
+                await restoreDock(page, dockItem, initiallyActive);
+            } finally {
+                await restoreDockVisibility();
+            }
         }
     });
 });

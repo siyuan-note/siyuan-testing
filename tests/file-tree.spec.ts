@@ -1,31 +1,35 @@
 import {expect, test} from "./fixtures";
-import {openWorkspace} from "./helpers/runtime";
+import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 test.describe("file tree", () => {
     test("navigates to the selected document", async ({page, createTestDocument}) => {
         const firstDocument = await createTestDocument("Tree Navigate Target");
         await createTestDocument("Tree Navigate Origin");
-
-        const docItem = page.locator(
-            `li.b3-list-item[data-type="navigation-file"][data-node-id="${firstDocument.docID}"]`,
-        );
-        if (!await docItem.isVisible()) {
-            const notebookRoot = page.locator(
-                `ul.b3-list[data-url="${firstDocument.notebookID}"] > li[data-type="navigation-root"]`,
+        const restoreFileTree = await showFileTree(page);
+        try {
+            const docItem = page.locator(
+                `li.b3-list-item[data-type="navigation-file"][data-node-id="${firstDocument.docID}"]`,
             );
-            await expect(notebookRoot).toBeVisible();
-            if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
-                await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
+            if (!await docItem.isVisible()) {
+                const notebookRoot = page.locator(
+                    `ul.b3-list[data-url="${firstDocument.notebookID}"] > li[data-type="navigation-root"]`,
+                );
+                await expect(notebookRoot).toBeVisible();
+                if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
+                    await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
+                }
             }
-        }
-        await expect(docItem).toBeVisible({timeout: 10000});
-        await docItem.click({force: true});
+            await expect(docItem).toBeVisible({timeout: 10000});
+            await docItem.click({force: true});
 
-        await expect(page.locator(`.protyle-title[data-node-id="${firstDocument.docID}"]`)).toBeVisible();
-        await expect(await getDocumentEditor(page, firstDocument.docID)).toBeVisible();
-        await expect(page.locator(`.protyle-breadcrumb__item[data-node-id="${firstDocument.docID}"]`).last())
-            .toBeVisible();
+            await expect(page.locator(`.protyle-title[data-node-id="${firstDocument.docID}"]`)).toBeVisible();
+            await expect(await getDocumentEditor(page, firstDocument.docID)).toBeVisible();
+            await expect(page.locator(`.protyle-breadcrumb__item[data-node-id="${firstDocument.docID}"]`).last())
+                .toBeVisible();
+        } finally {
+            await restoreFileTree();
+        }
     });
 
     test("moves a nested document subtree and restores its hierarchy after reload", async ({
@@ -61,11 +65,16 @@ test.describe("file tree", () => {
 
         await openWorkspace(page, `/?id=${grandchild.docID}`);
         await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
-        await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
+        const restoreFileTree = await showFileTree(page);
+        try {
+            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
 
-        await page.reload();
-        await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
-        await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
+            await page.reload();
+            await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
+            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
+        } finally {
+            await restoreFileTree();
+        }
     });
 
     test("persists a custom document order in an isolated notebook", async ({
@@ -87,10 +96,15 @@ test.describe("file tree", () => {
         )).toEqual(expectedOrder);
 
         await openWorkspace(page);
-        await expectFileTreeOrder(page, notebook.id, expectedOrder);
-        await page.reload();
-        await expectFileTreeOrder(page, notebook.id, expectedOrder);
-        expect((await siyuanAPI.getNotebookConf(notebook.id)).conf.sortMode).toBe(6);
+        const restoreFileTree = await showFileTree(page);
+        try {
+            await expectFileTreeOrder(page, notebook.id, expectedOrder);
+            await page.reload();
+            await expectFileTreeOrder(page, notebook.id, expectedOrder);
+            expect((await siyuanAPI.getNotebookConf(notebook.id)).conf.sortMode).toBe(6);
+        } finally {
+            await restoreFileTree();
+        }
     });
 });
 

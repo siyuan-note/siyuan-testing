@@ -1,6 +1,6 @@
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
-import {openWorkspace} from "./helpers/runtime";
+import {openWorkspace, showFileTree} from "./helpers/runtime";
 
 interface ISyDocument {
     ID: string;
@@ -68,17 +68,22 @@ test.describe("document lifecycle", () => {
 
         await openWorkspace(page, `/?id=${child.docID}`);
         await expect(await getDocumentEditor(page, child.docID)).toContainText("Moved child content");
-        const parentItem = page.locator(
-            `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
-        );
-        await expect(parentItem).toBeVisible({timeout: 15000});
-        const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
-        if (!await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
-            await parentItem.locator(":scope > .b3-list-item__toggle").click({force: true});
+        const restoreFileTree = await showFileTree(page);
+        try {
+            const parentItem = page.locator(
+                `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
+            );
+            await expect(parentItem).toBeVisible({timeout: 15000});
+            const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
+            if (!await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
+                await parentItem.locator(":scope > .b3-list-item__toggle").click({force: true});
+            }
+            await expect(parentItem.locator(
+                `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,
+            )).toBeVisible({timeout: 15000});
+        } finally {
+            await restoreFileTree();
         }
-        await expect(parentItem.locator(
-            `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,
-        )).toBeVisible({timeout: 15000});
     });
 
     test("duplicates a document with independent persisted IDs", async ({

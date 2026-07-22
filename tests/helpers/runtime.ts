@@ -59,7 +59,28 @@ export const openWorkspace = async (page: Page, path = "/") => {
     }
 };
 
+export const showDock = async (page: Page) => {
+    const initiallyHidden = await page.evaluate(() => window.siyuan.config.uiLayout.hideDock);
+    if (initiallyHidden) {
+        await page.locator("#barDock").click();
+        await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock)).toBe(false);
+    }
+
+    return async () => {
+        if (page.isClosed()) {
+            return;
+        }
+        const hidden = await page.evaluate(() => window.siyuan.config.uiLayout.hideDock);
+        if (hidden !== initiallyHidden) {
+            await page.locator("#barDock").click();
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.uiLayout.hideDock))
+                .toBe(initiallyHidden);
+        }
+    };
+};
+
 export const showFileTree = async (page: Page) => {
+    const restoreDock = await showDock(page);
     const fileTree = page.locator(".sy__file");
     const fileTreeLogo = fileTree.locator(".block__logo:visible");
     const fileDockItem = page.locator('.dock__item[data-type="file"]').first();
@@ -76,15 +97,18 @@ export const showFileTree = async (page: Page) => {
     }
 
     return async () => {
-        if (initiallyVisible) {
-            return;
-        }
-        if (previousDockType && previousDockType !== "file") {
-            await dockItems.locator(`.dock__item[data-type="${previousDockType}"]`).click();
-            await expect(fileTreeLogo).toBeHidden();
-        } else if (await fileTreeLogo.isVisible()) {
-            await fileDockItem.click();
-            await expect(fileTreeLogo).toBeHidden();
+        try {
+            if (!initiallyVisible) {
+                if (previousDockType && previousDockType !== "file") {
+                    await dockItems.locator(`.dock__item[data-type="${previousDockType}"]`).click();
+                    await expect(fileTreeLogo).toBeHidden();
+                } else if (await fileTreeLogo.isVisible()) {
+                    await fileDockItem.click();
+                    await expect(fileTreeLogo).toBeHidden();
+                }
+            }
+        } finally {
+            await restoreDock();
         }
     };
 };
