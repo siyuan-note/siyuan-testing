@@ -49,7 +49,10 @@ test.describe("document lifecycle", () => {
         }).toBe(renamedTitle);
 
         await openWorkspace(page, `/?id=${document.docID}`);
-        await expect(page.locator(`.protyle-title[data-node-id="${document.docID}"]`)).toHaveText(renamedTitle);
+        await getDocumentEditor(page, document.docID);
+        await expect(page.locator(
+            `.protyle-title[data-node-id="${document.docID}"]:visible`,
+        ).last()).toHaveText(renamedTitle);
     });
 
     test("moves a document below another document", async ({page, createTestDocument, siyuanAPI}) => {
@@ -72,11 +75,24 @@ test.describe("document lifecycle", () => {
 
         await openWorkspace(page, `/?id=${child.docID}`);
         await expect(await getDocumentEditor(page, child.docID)).toContainText("Moved child content");
+        await page.reload();
+        await expect(await getDocumentEditor(page, child.docID)).toContainText("Moved child content");
         const restoreFileTree = await showFileTree(page);
         try {
             const parentItem = page.locator(
                 `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
             );
+            if (!await parentItem.isVisible()) {
+                const notebookRoot = page.locator(
+                    `ul.b3-list[data-url="${parent.notebookID}"] > li[data-type="navigation-root"]`,
+                );
+                await expect(notebookRoot).toBeVisible({timeout: 15000});
+                if (!await notebookRoot.locator(
+                    ":scope > .b3-list-item__toggle .b3-list-item__arrow--open",
+                ).isVisible()) {
+                    await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
+                }
+            }
             await expect(parentItem).toBeVisible({timeout: 15000});
             const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
             if (!await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {

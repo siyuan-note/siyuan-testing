@@ -40,7 +40,7 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
 
     try {
         await activateBacklinkDock(page, dockItem);
-        let panel = page.locator(".sy__backlink:visible").last();
+        let panel = page.locator(".sy__backlink:not(.sy__backlink--bottom):visible").last();
         let sourceNode = panel.locator(
             `.backlinkList li[data-treetype="backlink"][data-node-id="${source.docID}"]`,
         );
@@ -64,9 +64,11 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
         await page.goto(`/?id=${target.docID}`);
         await getDocumentEditor(page, target.docID);
         await activateBacklinkDock(page, dockItem);
-        panel = page.locator(".sy__backlink:visible").last();
+        panel = page.locator(".sy__backlink:not(.sy__backlink--bottom):visible").last();
         const refreshButton = panel.locator('.block__icon[data-type="refresh"]');
         await expect(refreshButton.locator("svg")).not.toHaveClass(/fn__rotate/, {timeout: 15000});
+        await panel.locator(".block__icons").first().hover();
+        await expect(refreshButton).toBeVisible();
         const refreshResponse = page.waitForResponse(response =>
             response.url().endsWith("/api/ref/refreshBacklink") && response.request().method() === "POST", {
             timeout: 15000,
@@ -99,13 +101,15 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
 
 const activateBacklinkDock = async (page: import("@playwright/test").Page,
                                     dockItem: import("@playwright/test").Locator) => {
-    if (!await page.locator(".sy__backlink .block__logo:visible").first().isVisible()) {
+    const panel = page.locator(".sy__backlink:not(.sy__backlink--bottom):visible").last();
+    const logo = panel.locator(".block__logo").first();
+    if (!await logo.isVisible()) {
         if (await dockItem.evaluate(element => element.classList.contains("dock__item--active"))) {
             await dockItem.click();
         }
         await dockItem.click();
     }
-    await expect(page.locator(".sy__backlink .block__logo:visible").first()).toBeVisible();
+    await expect(logo).toBeVisible();
 };
 
 const restoreDock = async (page: import("@playwright/test").Page, dockItem: import("@playwright/test").Locator,

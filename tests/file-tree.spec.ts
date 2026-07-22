@@ -99,11 +99,18 @@ test.describe("file tree", () => {
         const restoreFileTree = await showFileTree(page);
         try {
             await expectFileTreeOrder(page, notebook.id, expectedOrder);
-            await page.reload();
+        } finally {
+            await restoreFileTree();
+        }
+
+        await page.reload();
+        await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
+        const restoreReloadedFileTree = await showFileTree(page);
+        try {
             await expectFileTreeOrder(page, notebook.id, expectedOrder);
             expect((await siyuanAPI.getNotebookConf(notebook.id)).conf.sortMode).toBe(6);
         } finally {
-            await restoreFileTree();
+            await restoreReloadedFileTree();
         }
     });
 });
