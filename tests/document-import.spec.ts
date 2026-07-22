@@ -20,7 +20,7 @@ const flattenNodes = (root: ISyNode) => {
 };
 
 test.describe("document import", () => {
-    test("round-trips Markdown through an exported ZIP", async ({
+    test("round-trips Markdown through an exported ZIP", {tag: "@smoke"}, async ({
         createTestDocument,
         page,
         siyuanAPI,

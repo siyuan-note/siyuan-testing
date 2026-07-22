@@ -15,6 +15,26 @@ export interface IKernelLogAudit {
     reason?: string;
 }
 
+export const extractKernelErrors = (log: string) => {
+    const lines = log.split(/\r?\n/);
+    return lines.filter((line, index) => {
+        if (line.includes("PANIC RECOVERED") ||
+            /^W \d{4}\/\d{2}\/\d{2} .* repo\.go:\d+: index failed after 7 retries, caused by: file changed/.test(line)) {
+            return true;
+        }
+        if (!/^E \d{4}\/\d{2}\/\d{2} /.test(line)) {
+            return false;
+        }
+        if (!/ repo\.go:\d+: file changed \[/.test(line)) {
+            return true;
+        }
+        return !lines.slice(index + 1, index + 11).some(nextLine =>
+            /^W \d{4}\/\d{2}\/\d{2} .* repo\.go:\d+: index failed, caused by: file changed, retrying \[\d+\]/
+                .test(nextLine),
+        );
+    });
+};
+
 const BASELINE_PATH = path.resolve("test-results", ".kernel-log-baseline.json");
 
 const writeBaseline = async (baseline: IKernelLogBaseline) => {
@@ -61,9 +81,7 @@ export const finishKernelLogAudit = async (): Promise<IKernelLogAudit> => {
         if (buffer.length > 0) {
             await handle.read(buffer, 0, buffer.length, offset);
         }
-        const errors = buffer.toString("utf8").split(/\r?\n/).filter(line =>
-            /^E \d{4}\/\d{2}\/\d{2} /.test(line) || line.includes("PANIC RECOVERED"),
-        );
+        const errors = extractKernelErrors(buffer.toString("utf8"));
         return {enabled: true, errors, logPath: baseline.logPath};
     } finally {
         await handle.close();

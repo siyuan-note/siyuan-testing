@@ -9,7 +9,7 @@ type E2EWindow = Window & {
     };
 };
 
-test("reconnects the main WebSocket and continues receiving editor broadcasts", async ({
+test("reconnects the main WebSocket and continues receiving editor broadcasts", {tag: "@smoke"}, async ({
     context,
     createTestDocument,
     page,

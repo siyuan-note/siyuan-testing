@@ -17,6 +17,10 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 ## Commands
 
 - `pnpm test`: run all tests in headless mode.
+- `pnpm test:smoke`: run the tagged startup, document, editor, import, flashcard, and WebSocket checks in about one to two minutes.
+- `pnpm test:editor`: run all editor specs serially.
+- `pnpm test:navigation`: run document, notebook, file-tree, tag, bookmark, outline, and backlink specs serially.
+- `pnpm test:data`: run import, export, history, asset, and attribute-view specs serially.
 - `pnpm test:headed`: run all tests with a visible browser.
 - `pnpm test:ui`: open Playwright UI mode.
 - `pnpm test:list`: list discovered tests without executing them.
@@ -25,7 +29,7 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm exec playwright test tests/<feature>.spec.ts --project=main`: run one spec file.
 - `pnpm exec playwright test tests/<feature>.spec.ts --project=main --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
 
-During development, run only the changed spec or failing test. Run the affected feature group once after the change is stable, and reserve `pnpm test` for the final regression pass. Use `--workers=1` when diagnosing a workflow that depends on shared UI state or when preserving the order of diagnostic output matters.
+During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Use `--workers=1` when diagnosing a direct Playwright command whose workflow depends on shared UI state or when preserving the order of diagnostic output matters.
 
 ## Coverage
 

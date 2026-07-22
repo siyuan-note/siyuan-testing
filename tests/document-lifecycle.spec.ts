@@ -8,7 +8,11 @@ interface ISyDocument {
 }
 
 test.describe("document lifecycle", () => {
-    test("creates a document with persisted content", async ({page, createTestDocument, siyuanAPI}) => {
+    test("creates a document with persisted content", {tag: "@smoke"}, async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
         const marker = `Lifecycle created ${Date.now()}`;
         const document = await createTestDocument("Lifecycle Create", marker);
 

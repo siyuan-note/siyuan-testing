@@ -84,11 +84,59 @@ export const createTestNotebook = async (api: SiyuanAPI, createdNotebooks: ICrea
     return created;
 };
 
+const closeTrackedDocumentTabs = async (page: Page, api: SiyuanAPI, documents: ICreatedTestDocument[]) => {
+    if (page.isClosed() || page.url() === "about:blank") {
+        return;
+    }
+    const titleSelector = documents.map(document =>
+        `.protyle-title[data-node-id="${document.id}"]`,
+    ).join(", ");
+    const panelIDs = [...new Set(await page.locator(titleSelector).evaluateAll(elements => elements
+        .map(element => element.closest<HTMLElement>("[data-id]")?.dataset.id)
+        .filter((id): id is string => Boolean(id))))];
+    if (panelIDs.length === 0) {
+        return;
+    }
+
+    for (const panelID of panelIDs) {
+        const tabPanel = page.locator(`.layout-tab-container > [data-id="${panelID}"]`);
+        const closed = await page.evaluate(id => {
+            interface ILayoutNode {
+                children?: ILayoutNode[];
+                id?: string;
+                panelElement?: HTMLElement;
+                removeTab?: (tabID: string, isBatchClose: boolean, animate: boolean) => void;
+            }
+
+            const closeTab = (node: ILayoutNode): boolean => {
+                if (!node.children) {
+                    return false;
+                }
+                const tab = node.children.find(child => child.id === id && child.panelElement);
+                if (tab && node.removeTab) {
+                    node.removeTab(id, false, false);
+                    return true;
+                }
+                return node.children.some(closeTab);
+            };
+            const layout = (window.siyuan as unknown as {
+                layout: {centerLayout?: ILayoutNode};
+            }).layout.centerLayout;
+            return layout ? closeTab(layout) : false;
+        }, panelID);
+        expect(closed).toBe(true);
+        await expect(tabPanel).toHaveCount(0);
+    }
+    const layout = await page.evaluate(() => window.siyuan.config.uiLayout);
+    await api.post<null>("/api/system/setUILayout", {layout});
+};
+
 export const removeCreatedTestDocuments = async (page: Page, api: SiyuanAPI,
                                                   documents: ICreatedTestDocument[]) => {
     if (documents.length === 0) {
         return;
     }
+    await closeTrackedDocumentTabs(page, api, documents);
     await page.goto("about:blank");
     await api.flushTransactions();
     const notebookIDs = [...new Set(documents.map(document => document.notebookID))];

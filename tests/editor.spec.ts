@@ -18,7 +18,11 @@ const typeInto = async (page: Page, editable: Locator, text: string) => {
 test.describe("editor", () => {
     test.describe.configure({mode: "parallel"});
 
-    test("creates formatted content and finds the document", async ({page, createTestDocument, siyuanAPI}) => {
+    test("creates formatted content and finds the document", {tag: "@smoke"}, async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
         const {docID, editor, title} = await createTestDocument("Editor Input E2E");
         const initialEditable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();
 

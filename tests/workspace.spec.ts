@@ -2,7 +2,7 @@ import {expect, test} from "./fixtures";
 import {openWorkspace} from "./helpers/runtime";
 
 test.describe("workspace", () => {
-    test("toggles and restores the dock sidebar", async ({page}) => {
+    test("toggles and restores the dock sidebar", {tag: "@smoke"}, async ({page}) => {
         await openWorkspace(page);
         const dockIcon = page.locator("#barDock use");
         const originalIcon = await dockIcon.getAttribute("xlink:href");

@@ -5,6 +5,10 @@
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "test": "playwright test",
+    "test:smoke": "playwright test --config=playwright.focused.config.ts --grep @smoke",
+    "test:editor": "playwright test --config=playwright.focused.config.ts tests/editor",
+    "test:navigation": "playwright test --config=playwright.focused.config.ts tests/document-lifecycle.spec.ts tests/file-tree.spec.ts tests/notebook-lifecycle.spec.ts tests/tag.spec.ts tests/bookmark-outline.spec.ts tests/backlink.spec.ts",
+    "test:data": "playwright test --config=playwright.focused.config.ts tests/document-import.spec.ts tests/document-export.spec.ts tests/document-history.spec.ts tests/asset-history.spec.ts tests/editor-assets.spec.ts tests/editor-attribute-view.spec.ts",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "test:list": "playwright test --list",
