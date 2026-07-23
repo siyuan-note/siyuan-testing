@@ -1,4 +1,4 @@
-import {Locator, Page} from "@playwright/test";
+import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -52,6 +52,7 @@ interface IAttributeView {
         id: string;
         itemIds?: string[];
         name: string;
+        pageSize?: number;
         sorts?: Array<{
             column: string;
             order: string;
@@ -109,9 +110,30 @@ const requestHistoryAction = async (page: Page, block: Locator, shortcut: "Contr
     await response;
 };
 
+const allowClipboard = async (context: BrowserContext, baseURL: string | undefined) => {
+    if (!baseURL) {
+        throw new Error("playwright.config.ts must define use.baseURL");
+    }
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+        origin: new URL(baseURL).origin,
+    });
+};
+
 const getAttributeView = async (api: SiyuanAPI, avID: string) => {
     const data = await api.post<{av: IAttributeView}>("/api/av/getAttributeView", {id: avID});
     return data.av;
+};
+
+const getOrderedBlockContents = async (api: SiyuanAPI, avID: string) => {
+    const attributeView = await getAttributeView(api, avID);
+    const view = attributeView.views.find(item => item.id === attributeView.viewID);
+    const blockKeyValues = attributeView.keyValues.find(item => item.key.type === "block");
+    const values = new Map(blockKeyValues?.values?.map(value => [value.blockID, value.block?.content || ""]));
+    return {
+        contents: (view?.itemIds || []).map(itemID => values.get(itemID) || ""),
+        itemIds: view?.itemIds || [],
+        pageSize: view?.pageSize,
+    };
 };
 
 const expectPersistedAttributeView = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) => {
@@ -615,6 +637,74 @@ test.describe("attribute views", () => {
         const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
         await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
         await expect(reloadedBlock.locator(".av__body[data-group-id]")).toHaveCount(2);
+    });
+
+    test("pastes beyond existing rows while the database uses virtual scrolling", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Virtual Paste E2E", "Database seed");
+        const {avID, blockID} = await insertAttributeView(page, document.editor);
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        const blockKey = (await getAttributeView(siyuanAPI, avID)).keyValues.find(item => item.key.type === "block");
+        expect(blockKey).toBeTruthy();
+
+        const seedContents = Array.from({length: 120}, (_, index) => `Seed ${index.toString().padStart(3, "0")}`);
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: seedContents.map(content => [{
+                block: {content},
+                keyID: blockKey!.key.id,
+            }]),
+        });
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            contents: seedContents,
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        const pageSizeButton = reloadedBlock.locator('.av__row--util [data-type="set-page-size"]');
+        await expect(pageSizeButton).toBeVisible({timeout: 15000});
+        await pageSizeButton.click();
+        const pageSizeMenu = page.locator('#commonMenu[data-name="av-page-size"]:not(.fn__none)');
+        await expect(pageSizeMenu).toBeVisible();
+        await requestTransaction(page, () => pageSizeMenu.locator(".b3-menu__item").last().click());
+
+        await expect(reloadedBlock).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
+        await expect(reloadedBlock.locator(
+            ".av__body .av__row:not(.av__row--header):not(.av__row--util):not([data-type=ghost])",
+        )).toHaveCount(100);
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            pageSize: 102400,
+        });
+
+        await allowClipboard(context, baseURL);
+        const pasteContents = Array.from({length: 130}, (_, index) =>
+            `Pasted ${index.toString().padStart(3, "0")}`);
+        const firstCell = reloadedBlock.locator(".av__body .av__row[data-id] [data-dtype=block]").first();
+        await firstCell.click();
+        await page.keyboard.press("Escape");
+        await expect(firstCell).toHaveClass(/av__cell--select/);
+        await page.evaluate(text => navigator.clipboard.writeText(text), pasteContents.join("\n"));
+
+        const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
+        const pasteTransaction = waitForResponse(page, "/api/transactions");
+        await page.keyboard.press("Control+V");
+        await Promise.all([pasteRowsResponse, pasteTransaction]);
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            contents: pasteContents,
+        });
+        expect((await getOrderedBlockContents(siyuanAPI, avID)).itemIds).toHaveLength(130);
+
+        await requestHistoryAction(page, reloadedBlock, "Control+Z", "undo");
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            contents: seedContents,
+        });
+        expect((await getOrderedBlockContents(siyuanAPI, avID)).itemIds).toHaveLength(120);
     });
 
     test("preserves boundary values in a wider multi-row table", async ({
