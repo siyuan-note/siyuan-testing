@@ -7,7 +7,7 @@ SiYuan end-to-end testing guide. This repository contains Playwright tests for a
 - Use Node.js with pnpm; preserve `pnpm-lock.yaml` as the dependency source of truth.
 - Install dependencies with `pnpm install`.
 - Run all tests in headless background mode with `pnpm test`.
-- Run one test file with `pnpm exec playwright test tests/<feature>.spec.ts --project=main`.
+- Run one test file with `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts`.
 - Use `pnpm test:headed` or `pnpm test:ui` only when interactive debugging is useful.
 
 ## 2. Test data
@@ -43,7 +43,7 @@ SiYuan end-to-end testing guide. This repository contains Playwright tests for a
 - Read persisted documents through SiYuan's HTTP APIs. Do not locate workspace files by assuming a local absolute path.
 - Validate `.sy` data against the format documented in the SiYuan repository's `docs/SY-FORMAT.md`; validate workspace paths against `docs/WORKSPACE.md`.
 - Verify relevant node IDs, `Properties.id`, parent-child constraints, and type-specific fields. Keep reusable format checks in helper modules.
-- Poll for persisted state when the editor saves asynchronously; do not replace synchronization with arbitrary long sleeps.
+- Poll for persisted state when the editor saves asynchronously; do not replace synchronization with arbitrary long sleeps. Use an explicit timeout appropriate to the operation, allowing up to 30 seconds for kernel indexing when needed.
 
 ## 6. Verification and maintenance
 

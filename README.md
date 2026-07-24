@@ -12,7 +12,7 @@ The default target is `http://127.0.0.1:6806`. Set `SIYUAN_BASE_URL` to use anot
 
 The setup prints the target URL, workspace path, and SiYuan version before running any feature tests.
 
-The encrypted-notebook lifecycle test is opt-in because creating its isolated notebook requires the workspace master password. Enable encrypted notebooks yourself, set `SIYUAN_TEST_ENCRYPTION_PASSWORD` in the test process, and run `pnpm exec playwright test tests/encrypted-notebook.spec.ts --project=main`. The suite never enables or disables encryption and never changes the master password.
+The encrypted-notebook lifecycle test is opt-in because creating its isolated notebook requires the workspace master password. Enable encrypted notebooks yourself, set `SIYUAN_TEST_ENCRYPTION_PASSWORD` in the test process, and run `pnpm exec playwright test --config=playwright.focused.config.ts tests/encrypted-notebook.spec.ts`. The suite never enables or disables encryption and never changes the master password.
 
 ## Commands
 
@@ -26,8 +26,8 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test:list`: list discovered tests without executing them.
 - `pnpm test:repeat`: repeat the suite ten times to find synchronization problems.
 - `pnpm typecheck`: type-check the configuration, fixtures, helpers, and specs.
-- `pnpm exec playwright test tests/<feature>.spec.ts --project=main`: run one spec file.
-- `pnpm exec playwright test tests/<feature>.spec.ts --project=main --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
+- `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts`: run one spec file.
+- `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
 
 During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Use `--workers=1` when diagnosing a direct Playwright command whose workflow depends on shared UI state or when preserving the order of diagnostic output matters.
 
