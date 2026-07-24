@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -41,6 +42,14 @@ const omitRootUpdated = (document: ISyNode) => ({
     ),
 });
 
+const omitUpdated = (node: ISyNode): ISyNode => ({
+    ...node,
+    Properties: node.Properties && Object.fromEntries(
+        Object.entries(node.Properties).filter(([key]) => key !== "updated"),
+    ),
+    Children: node.Children?.map(omitUpdated),
+});
+
 const focusAtEnd = async (block: Locator) => {
     await block.locator('[contenteditable="true"]').first().evaluate(element => {
         element.focus();
@@ -60,6 +69,15 @@ const selectContiguousBlocks = async (blocks: Locator, editor: Locator, start: n
     await blocks.nth(start).locator('[contenteditable="true"]').click();
     await blocks.nth(end).click({modifiers: ["Shift"]});
     await expect(editor.locator(":scope > .protyle-wysiwyg--select")).toHaveCount(end - start + 1);
+};
+
+const selectSeparateBlocks = async (blocks: Locator, editor: Locator, indexes: number[]) => {
+    const expectedIDs = await Promise.all(indexes.map(index => blocks.nth(index).getAttribute("data-node-id")));
+    for (const index of indexes) {
+        await blocks.nth(index).click({modifiers: ["Control"]});
+    }
+    await expect.poll(() => editor.locator(":scope > .protyle-wysiwyg--select").evaluateAll(elements =>
+        elements.map(element => element.getAttribute("data-node-id")))).toEqual(expectedIDs);
 };
 
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
@@ -318,5 +336,52 @@ test.describe("block transformations and indentation", () => {
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, docID);
         await expect(reloadedEditor.locator(':scope > [data-type="NodeBlockquote"]')).toHaveCount(1);
+    });
+
+    test("converts non-contiguous paragraphs into independent lists and restores the transaction", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Non-contiguous Block Conversion E2E",
+            "Selected first\n\nUntouched middle\n\nSelected second\n\nUntouched end",
+        );
+        const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
+        await expect(paragraphs).toHaveCount(4);
+        const initialDocument = omitUpdated(await readValidDocument(siyuanAPI, docID));
+
+        await selectSeparateBlocks(paragraphs, editor, [0, 2]);
+        await chooseTurnInto(page, paragraphs.nth(0), "list");
+
+        await expect.poll(() => getTopDOMState(editor)).toEqual([
+            expect.objectContaining({text: expect.stringContaining("Selected first"), type: "NodeList"}),
+            expect.objectContaining({text: expect.stringContaining("Untouched middle"), type: "NodeParagraph"}),
+            expect.objectContaining({text: expect.stringContaining("Selected second"), type: "NodeList"}),
+            expect.objectContaining({text: expect.stringContaining("Untouched end"), type: "NodeParagraph"}),
+        ]);
+        const lists = editor.locator(':scope > [data-type="NodeList"]');
+        await expect(lists).toHaveCount(2);
+        await expect(lists.nth(0).locator(':scope > [data-type="NodeListItem"]')).toHaveCount(1);
+        await expect(lists.nth(1).locator(':scope > [data-type="NodeListItem"]')).toHaveCount(1);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
+
+        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await expect.poll(async () => omitUpdated(await readValidDocument(siyuanAPI, docID)))
+            .toEqual(initialDocument);
+        await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(4);
+
+        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await expect(editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(2);
+        await assertValidListDOM(editor);
+        await assertValidSyListTree(siyuanAPI, docID, editor);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect(reloadedEditor.locator(':scope > [data-type="NodeList"]')).toHaveCount(2);
+        await expect(reloadedEditor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
+        await assertValidListDOM(reloadedEditor);
+        await assertValidSyListTree(siyuanAPI, docID, reloadedEditor);
     });
 });

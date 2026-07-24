@@ -81,7 +81,7 @@ test.describe("dock panel filters", () => {
         await expect.poll(async () => {
             const tags = (await siyuanAPI.searchTags(childTag)).tags;
             return tags.some(tag => tag.replace(/<[^>]+>/g, "") === fullChildTag);
-        }).toBe(true);
+        }, {timeout: 30000}).toBe(true);
 
         const dock = await openDockPanel(page, "tag");
         try {

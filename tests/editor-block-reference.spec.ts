@@ -1,4 +1,4 @@
-import {Locator, Page} from "@playwright/test";
+import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -13,6 +13,11 @@ interface ISyNode {
     TextMarkType?: string;
     Type?: string;
     Children?: ISyNode[];
+}
+
+interface IDragSession {
+    dataTransfer: JSHandle<DataTransfer>;
+    endTarget: ElementHandle<HTMLElement>;
 }
 
 const flattenNodes = (node: ISyNode): ISyNode[] => [
@@ -112,6 +117,33 @@ const getPersistedReferenceState = async (api: SiyuanAPI, docID: string, sourceI
         }));
 };
 
+const startGutterBlockDrag = async (page: Page, source: Locator) => {
+    const id = await source.getAttribute("data-node-id");
+    expect(id).toBeTruthy();
+    await page.mouse.move(0, 0);
+    await source.hover();
+    const handle = page.locator(`.protyle-gutters button[data-node-id="${id}"] > span[draggable="true"]`);
+    await expect(handle).toBeVisible();
+    const endTarget = await handle.locator("xpath=../..").elementHandle() as ElementHandle<HTMLElement>;
+    expect(endTarget).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await handle.dispatchEvent("dragstart", {dataTransfer});
+    await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
+        .toContain("nodeparagraph");
+    return {dataTransfer, endTarget} as IDragSession;
+};
+
+const finishDrag = async (session: IDragSession) => {
+    await session.endTarget.dispatchEvent("dragend", {dataTransfer: session.dataTransfer});
+    await session.dataTransfer.dispose();
+};
+
+const isReferenceCaretVisible = (page: Page) => page.evaluate(() =>
+    Array.from(document.body.children).some(element => {
+        const style = (element as HTMLElement).style;
+        return style.zIndex === "1000000" && style.width === "2px" && style.pointerEvents === "none";
+    }));
+
 test.describe("block references", () => {
     test.describe.configure({mode: "parallel"});
 
@@ -198,5 +230,75 @@ test.describe("block references", () => {
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, target.docID);
         await expect(reloadedEditor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`)).toHaveText(updatedText);
+    });
+
+    test("shows a caret and inserts a reference when a block is dropped into an empty paragraph", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const sourceText = `Dragged reference ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const {docID, editor} = await createTestDocument("Dragged Reference E2E", sourceText);
+        const source = editor.locator(':scope > [data-type="NodeParagraph"]').first();
+        const sourceID = await source.getAttribute("data-node-id");
+        expect(sourceID).toBeTruthy();
+
+        await focusAtEnd(source);
+        await requestTransaction(page, () => page.keyboard.press("Enter"));
+        const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
+        await expect(paragraphs).toHaveCount(2);
+        const target = paragraphs.last();
+        await expect(target.locator('[contenteditable="true"]')).toBeEmpty();
+
+        const session = await startGutterBlockDrag(page, source);
+        const targetEditable = target.locator('[contenteditable="true"]');
+        const box = await targetEditable.boundingBox();
+        if (!box) {
+            throw new Error("empty drop target is not visible");
+        }
+        const point = {
+            clientX: box.x + Math.min(8, box.width / 2),
+            clientY: box.y + box.height / 2,
+        };
+        await targetEditable.dispatchEvent("dragover", {
+            altKey: true,
+            dataTransfer: session.dataTransfer,
+            ...point,
+        });
+        await expect.poll(() => isReferenceCaretVisible(page)).toBe(true);
+        await expect(page.locator('[class*="dragover__"]')).toHaveCount(0);
+
+        const transaction = page.waitForResponse(response =>
+            new URL(response.url()).pathname === "/api/transactions", {timeout: 30000});
+        await targetEditable.dispatchEvent("drop", {
+            altKey: true,
+            dataTransfer: session.dataTransfer,
+            ...point,
+        });
+        await transaction;
+        await finishDrag(session);
+        await expect.poll(() => isReferenceCaretVisible(page)).toBe(false);
+
+        let reference = target.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
+        await expect(reference).toHaveText(sourceText);
+        await expect(reference).toHaveAttribute("data-subtype", "d");
+        await expect.poll(() => getPersistedReferenceState(siyuanAPI, docID, sourceID!),
+            {timeout: 30000}).toEqual([{
+            id: sourceID,
+            subtype: "d",
+            text: sourceText,
+            type: "NodeTextMark",
+        }]);
+
+        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await expect(target.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`)).toHaveCount(0);
+        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        reference = target.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
+        await expect(reference).toHaveText(sourceText);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect(reloadedEditor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`))
+            .toHaveText(sourceText);
     });
 });

@@ -15,6 +15,11 @@ interface ISyNode {
 interface IAttributeViewKey {
     id: string;
     name: string;
+    relation?: {
+        avID: string;
+        backKeyID: string;
+        isTwoWay: boolean;
+    };
     type: string;
 }
 
@@ -24,10 +29,12 @@ interface IAttributeViewKeyValue {
 }
 
 interface IAttributeViewValue {
-    block?: {content: string};
+    block?: {content: string; id?: string};
     blockID: string;
     checkbox?: {checked: boolean};
+    isDetached?: boolean;
     number?: {content: number; isNotEmpty: boolean};
+    relation?: {blockIDs: string[]};
     text?: {content: string};
     type: string;
 }
@@ -230,6 +237,40 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string)
     return {header, id: id!};
 };
 
+const addRelationColumn = async (page: Page, block: Locator, targetAvID: string, name: string) => {
+    const oldCount = await block.locator(".av__row--header .av__cell--header").count();
+    await block.locator('[data-type="av-header-add"]').click();
+    const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    await requestTransaction(page, () => menu.locator('[data-id="relation"]').click());
+
+    const headers = block.locator(".av__row--header .av__cell--header");
+    await expect(headers).toHaveCount(oldCount + 1);
+    const header = headers.last();
+    await expect(header).toHaveAttribute("data-dtype", "relation");
+    const id = await header.getAttribute("data-col-id");
+    expect(id).toBeTruthy();
+
+    const editPanel = page.locator(".av__panel");
+    await expect(editPanel.locator('[data-type="name"]')).toBeVisible({timeout: 15000});
+    await editPanel.locator('[data-type="name"]').fill(name);
+    const targetPicker = editPanel.locator('[data-type="goSearchAV"]');
+    await targetPicker.click();
+
+    const searchMenu = page.locator("#commonMenu:not(.fn__none)");
+    const target = searchMenu.locator(`[data-av-id="${targetAvID}"]`).first();
+    await expect(target).toBeVisible({timeout: 15000});
+    await target.click();
+    await expect(targetPicker).toHaveAttribute("data-av-id", targetAvID);
+
+    const confirm = editPanel.locator('[data-type="updateRelation"]');
+    await expect(confirm).toBeVisible();
+    await requestTransaction(page, () => confirm.click());
+    await expect(editPanel).toBeHidden();
+    await expect(header.locator(".av__celltext")).toHaveText(name);
+    return {header, id: id!};
+};
+
 const editCell = async (page: Page, cell: Locator, value: string) => {
     await cell.scrollIntoViewIfNeeded();
     await expect(cell).toBeVisible({timeout: 15000});
@@ -367,6 +408,129 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${textColumn.id}"]`)).toContainText("Ready for review");
         await expect(reloadedRow.locator(`[data-col-id="${numberColumn.id}"]`)).toContainText("13.5");
         await expect(reloadedRow.locator(`[data-col-id="${checkboxColumn.id}"]`)).toHaveClass(/av__cell-check/);
+    });
+
+    test("links a row through a relation field and restores it after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const sourceDocument = await createTestDocument("Attribute View Relation Source E2E", "Source seed");
+        const source = await insertAttributeView(page, sourceDocument.editor);
+        const sourceRow = await addRow(page, source.block, "Source item");
+
+        const targetDocument = await createTestDocument("Attribute View Relation Target E2E", "Target seed");
+        const target = await insertAttributeView(page, targetDocument.editor);
+        const targetRow = await addRow(page, target.block, "Target item");
+
+        await page.goto(`/?id=${sourceDocument.docID}`);
+        const sourceEditor = await getDocumentEditor(page, sourceDocument.docID);
+        const sourceBlock = sourceEditor.locator(`:scope > [data-av-id="${source.avID}"]`);
+        const relationColumn = await addRelationColumn(page, sourceBlock, target.avID, "Related item");
+        const relationCell = sourceBlock.locator(
+            `.av__row[data-id="${sourceRow.id}"] [data-col-id="${relationColumn.id}"]`,
+        );
+        await relationCell.click();
+
+        const relationPanel = page.locator(".av__panel");
+        const candidate = relationPanel.locator(
+            `[data-type="setRelationCell"][data-relation-type="candidate"][data-row-id="${targetRow.id}"]`,
+        );
+        await expect(candidate).toBeVisible({timeout: 15000});
+        await requestTransaction(page, () => candidate.click());
+        await expect(relationCell.locator(`.av__cell--relation[data-row-id="${targetRow.id}"]`))
+            .toContainText("Target item");
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, source.avID);
+            const keyValue = av.keyValues.find(item => item.key.id === relationColumn.id);
+            const value = keyValue?.values?.find(item => item.blockID === sourceRow.id);
+            return {
+                relation: keyValue?.key.relation,
+                targetIDs: value?.relation?.blockIDs,
+                type: value?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            relation: {
+                avID: target.avID,
+                backKeyID: expect.any(String),
+                isTwoWay: false,
+            },
+            targetIDs: [targetRow.id],
+            type: "relation",
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, sourceDocument.docID);
+        const reloadedCell = reloadedEditor.locator(
+            `:scope > [data-av-id="${source.avID}"] ` +
+            `.av__row[data-id="${sourceRow.id}"] [data-col-id="${relationColumn.id}"]`,
+        );
+        await expect(reloadedCell.locator(`.av__cell--relation[data-row-id="${targetRow.id}"]`))
+            .toContainText("Target item");
+    });
+
+    test("binds a detached primary value and exposes the rebind action", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const targetText = `Bindable database target ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const document = await createTestDocument(
+            "Attribute View Primary Binding E2E",
+            `Database seed\n\n${targetText}`,
+        );
+        const targetBlock = document.editor.locator(':scope > [data-type="NodeParagraph"]').nth(1);
+        const targetBlockID = await targetBlock.getAttribute("data-node-id");
+        expect(targetBlockID).toBeTruthy();
+        await expect.poll(async () => {
+            const result = await siyuanAPI.searchBlocks(targetText);
+            return result.blocks.some(item => item.id === targetBlockID);
+        }, {timeout: 30000}).toBe(true);
+
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, targetText);
+        const primaryCell = row.row.locator('[data-dtype="block"]');
+        const labels = await page.evaluate(() => ({
+            bind: window.siyuan.languages.bind,
+            rebind: window.siyuan.languages.rebind,
+        }));
+        await expect(primaryCell).toHaveAttribute("data-detached", "true");
+        const bindAction = primaryCell.locator('[data-type="av-row-update"]');
+        await expect(bindAction).toHaveAttribute("aria-label", labels.bind);
+        await bindAction.click();
+
+        const protyle = block.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
+        );
+        const hint = protyle.locator(".protyle-hint:not(.fn__none)");
+        const targetOption = hint.locator(`button:has([data-node-id="${targetBlockID}"])`).first();
+        await expect(targetOption).toBeVisible({timeout: 15000});
+        await requestTransaction(page, () => targetOption.click());
+
+        await expect(primaryCell).not.toHaveAttribute("data-detached", "true");
+        await expect(primaryCell.locator(".av__celltext--ref")).toHaveAttribute("data-id", targetBlockID!);
+        await expect(primaryCell.locator('[data-type="av-row-update"]')).toHaveAttribute("aria-label", labels.rebind);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const value = av.keyValues.find(item => item.key.type === "block")
+                ?.values?.find(item => item.blockID === row.id);
+            return {
+                id: value?.block?.id,
+                isDetached: value?.isDetached || false,
+            };
+        }, {timeout: 30000}).toEqual({
+            id: targetBlockID,
+            isDetached: false,
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedCell = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] [data-dtype="block"]`,
+        );
+        await expect(reloadedCell.locator(".av__celltext--ref")).toHaveAttribute("data-id", targetBlockID!);
+        await expect(reloadedCell.locator('[data-type="av-row-update"]')).toHaveAttribute("aria-label", labels.rebind);
     });
 
     test("deletes a field and row with undo and redo", async ({
