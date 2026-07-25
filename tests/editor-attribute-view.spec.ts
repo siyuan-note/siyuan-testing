@@ -18,6 +18,10 @@ interface ISyNode {
 interface IAttributeViewKey {
     id: string;
     name: string;
+    options?: Array<{
+        color: string;
+        name: string;
+    }>;
     relation?: {
         avID: string;
         backKeyID: string;
@@ -35,7 +39,19 @@ interface IAttributeViewValue {
     block?: {content: string; id?: string};
     blockID: string;
     checkbox?: {checked: boolean};
+    date?: {
+        content?: number;
+        content2?: number;
+        hasEndDate?: boolean;
+        isNotEmpty?: boolean;
+        isNotEmpty2?: boolean;
+        isNotTime?: boolean;
+    };
     isDetached?: boolean;
+    mSelect?: Array<{
+        color: string;
+        content: string;
+    }>;
     number?: {content: number; isNotEmpty: boolean};
     relation?: {blockIDs: string[]};
     text?: {content: string};
@@ -226,12 +242,12 @@ const insertAttributeView = async (page: Page, editor: Locator) => {
     return {avID: avID!, block, blockID: blockID!};
 };
 
-const addColumn = async (page: Page, block: Locator, type: string, name: string) => {
+const addColumn = async (page: Page, block: Locator, type: string, name: string, menuID = type) => {
     const oldCount = await block.locator(".av__row--header .av__cell--header").count();
     await block.locator('[data-type="av-header-add"]').click();
     const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
     await expect(menu).toBeVisible();
-    await requestTransaction(page, () => menu.locator(`[data-id="${type}"]`).click({force: true}));
+    await requestTransaction(page, () => menu.locator(`[data-id="${menuID}"]`).click({force: true}));
     const headers = block.locator(".av__row--header .av__cell--header");
     await expect(headers).toHaveCount(oldCount + 1, {timeout: AV_RENDER_TIMEOUT});
     const header = headers.last();
@@ -288,6 +304,54 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     await expect(input).toBeVisible();
     await input.fill(value);
     await requestTransaction(page, () => input.press("Enter"));
+};
+
+const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
+    const input = page.locator(".av__panel .b3-chips input:visible");
+    const block = cell.locator(
+        "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
+    );
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await cell.click();
+        await expect(input).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    for (const value of values) {
+        await input.fill(value);
+        await requestTransaction(page, () => input.press("Enter"));
+    }
+    await expect(cell.locator(".b3-chip")).toHaveText(values);
+    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: AV_RENDER_TIMEOUT});
+    if (await input.count() > 0) {
+        const panel = input.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
+        );
+        await panel.locator('.b3-dialog__scrim[data-type="close"]').click({force: true});
+        await expect(input).toHaveCount(0);
+    }
+};
+
+const editDateCell = async (page: Page, cell: Locator) => {
+    const input = page.locator(".av__panel input.b3-text-field:visible").first();
+    const block = cell.locator(
+        "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
+    );
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await cell.click();
+        await expect(input).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    const inputType = await input.getAttribute("type");
+    expect(["date", "datetime-local"]).toContain(inputType);
+    const isNotTime = inputType === "date";
+    const value = isNotTime ? "2026-08-17" : "2026-08-17T14:30";
+    const display = isNotTime ? "2026-08-17" : "2026-08-17 14:30";
+    await input.fill(value);
+    await requestTransaction(page, () => input.press("Enter"));
+    await expect(input).toHaveCount(0);
+    return {display, isNotTime};
 };
 
 const addRow = async (page: Page, block: Locator, content: string) => {
@@ -417,6 +481,77 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${textColumn.id}"]`)).toContainText("Ready for review");
         await expect(reloadedRow.locator(`[data-col-id="${numberColumn.id}"]`)).toContainText("13.5");
         await expect(reloadedRow.locator(`[data-col-id="${checkboxColumn.id}"]`)).toHaveClass(/av__cell-check/);
+    });
+
+    test("edits select, multi-select, and date values and restores them after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Special Fields E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Special field item");
+        const selectColumn = await addColumn(page, block, "select", "Status");
+        const multiSelectColumn = await addColumn(page, block, "mSelect", "Labels", "multiSelect");
+        const dateColumn = await addColumn(page, block, "date", "Due date");
+
+        const selectCell = row.row.locator(`[data-col-id="${selectColumn.id}"]`);
+        const multiSelectCell = row.row.locator(`[data-col-id="${multiSelectColumn.id}"]`);
+        const dateCell = row.row.locator(`[data-col-id="${dateColumn.id}"]`);
+        await editSelectCell(page, selectCell, ["Ready"]);
+        await editSelectCell(page, multiSelectCell, ["Frontend", "Urgent"]);
+        const date = await editDateCell(page, dateCell);
+
+        await expect(selectCell.locator(".b3-chip")).toHaveText(["Ready"]);
+        await expect(multiSelectCell.locator(".b3-chip")).toHaveText(["Frontend", "Urgent"]);
+        await expect(dateCell).toContainText(date.display);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const fields = Object.fromEntries(av.keyValues.map(item => [item.key.name, item]));
+            const selectValue = fields.Status?.values?.find(value => value.blockID === row.id);
+            const multiSelectValue = fields.Labels?.values?.find(value => value.blockID === row.id);
+            const dateValue = fields["Due date"]?.values?.find(value => value.blockID === row.id);
+            return {
+                dateContentPresent: typeof dateValue?.date?.content === "number" &&
+                    dateValue.date.content > 0,
+                dateIsNotEmpty: dateValue?.date?.isNotEmpty,
+                dateIsNotTime: dateValue?.date?.isNotTime,
+                dateType: dateValue?.type,
+                multiSelectColorsPresent: multiSelectValue?.mSelect?.every(item => Boolean(item.color)),
+                multiSelectOptions: fields.Labels?.key.options?.map(item => item.name),
+                multiSelectType: multiSelectValue?.type,
+                multiSelectValues: multiSelectValue?.mSelect?.map(item => item.content),
+                selectColorsPresent: selectValue?.mSelect?.every(item => Boolean(item.color)),
+                selectOptions: fields.Status?.key.options?.map(item => item.name),
+                selectType: selectValue?.type,
+                selectValues: selectValue?.mSelect?.map(item => item.content),
+            };
+        }, {timeout: 30000}).toEqual({
+            dateContentPresent: true,
+            dateIsNotEmpty: true,
+            dateIsNotTime: date.isNotTime,
+            dateType: "date",
+            multiSelectColorsPresent: true,
+            multiSelectOptions: ["Frontend", "Urgent"],
+            multiSelectType: "mSelect",
+            multiSelectValues: ["Frontend", "Urgent"],
+            selectColorsPresent: true,
+            selectOptions: ["Ready"],
+            selectType: "select",
+            selectValues: ["Ready"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedRow = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"]`,
+        );
+        await expect(reloadedRow.locator(`[data-col-id="${selectColumn.id}"] .b3-chip`))
+            .toHaveText(["Ready"]);
+        await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
+            .toHaveText(["Frontend", "Urgent"]);
+        await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
     });
 
     test("links a row through a relation field and restores it after reload", async ({
