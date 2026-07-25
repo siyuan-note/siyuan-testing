@@ -16,6 +16,7 @@ interface ISyNode {
 }
 
 interface IAttributeViewKey {
+    created?: {includeTime: boolean};
     id: string;
     name: string;
     options?: Array<{
@@ -27,7 +28,9 @@ interface IAttributeViewKey {
         backKeyID: string;
         isTwoWay: boolean;
     };
+    template?: string;
     type: string;
+    updated?: {includeTime: boolean};
 }
 
 interface IAttributeViewKeyValue {
@@ -61,6 +64,7 @@ interface IAttributeViewValue {
     number?: {content: number; isNotEmpty: boolean};
     phone?: {content: string};
     relation?: {blockIDs: string[]};
+    template?: {content: string};
     text?: {content: string};
     type: string;
     url?: {content: string};
@@ -383,6 +387,25 @@ const editDateCell = async (page: Page, cell: Locator) => {
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);
     return {display, isNotTime};
+};
+
+const editTemplateCell = async (page: Page, cell: Locator, template: string) => {
+    const input = page.locator(".av__mask .b3-text-field:visible");
+    const block = cell.locator(
+        "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
+    );
+    const initialRender = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await cell.click();
+        await expect(input).toBeVisible({timeout: 2000});
+    }).toPass({timeout: 30000});
+    await initialRender;
+    await expect(input).toHaveAttribute("data-template", "");
+    await input.fill(template);
+    await requestTransaction(page, () => input.press("Enter"));
+    await expect(input).toHaveCount(0);
 };
 
 const uploadAssetCell = async (page: Page, cell: Locator, file: {
@@ -741,6 +764,158 @@ test.describe("attribute views", () => {
         expect(await siyuanAPI.readWorkspaceText(workspacePath)).toBe(content);
 
         await siyuanAPI.removeWorkspaceFile(workspacePath);
+    });
+
+    test("recalculates a template field after its source value changes and restores it after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Template Field E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Template field item");
+        const notesColumn = await addColumn(page, block, "text", "Notes");
+        let notesCell = row.row.locator(`[data-col-id="${notesColumn.id}"]`);
+        await editCell(page, notesCell, "Initial value");
+
+        const templateColumn = await addColumn(page, block, "template", "Summary");
+        let templateCell = row.row.locator(`[data-col-id="${templateColumn.id}"]`);
+        const template = "Summary: .action{.Notes}";
+        await editTemplateCell(page, templateCell, template);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const keyValue = av.keyValues.find(item => item.key.id === templateColumn.id);
+            return {
+                definition: keyValue?.key.template,
+                type: keyValue?.key.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            definition: template,
+            type: "template",
+        });
+
+        await page.reload();
+        let reloadedEditor = await getDocumentEditor(page, document.docID);
+        let reloadedRow = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"]`,
+        );
+        notesCell = reloadedRow.locator(`[data-col-id="${notesColumn.id}"]`);
+        templateCell = reloadedRow.locator(`[data-col-id="${templateColumn.id}"]`);
+        await expect(templateCell).toHaveText("Summary: Initial value", {timeout: 30000});
+
+        await editCell(page, notesCell, "Updated value");
+        await expect(templateCell).toHaveText("Summary: Updated value", {timeout: 30000});
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.keyValues.find(item => item.key.id === notesColumn.id)
+                ?.values?.find(item => item.blockID === row.id)?.text?.content;
+        }, {timeout: 30000}).toBe("Updated value");
+
+        await page.reload();
+        reloadedEditor = await getDocumentEditor(page, document.docID);
+        reloadedRow = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"]`,
+        );
+        await expect(reloadedRow.locator(`[data-col-id="${notesColumn.id}"]`)).toHaveText("Updated value");
+        await expect(reloadedRow.locator(`[data-col-id="${templateColumn.id}"]`))
+            .toHaveText("Summary: Updated value");
+        const stored = await getAttributeView(siyuanAPI, avID);
+        expect(stored.keyValues.find(item => item.key.id === templateColumn.id)?.key.template).toBe(template);
+    });
+
+    test("updates automatic timestamps and line numbers while preserving creation time", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Automatic Fields E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const first = await addRow(page, block, "First automatic item");
+        const second = await addRow(page, block, "Second automatic item");
+        const notesColumn = await addColumn(page, block, "text", "Notes");
+        const createdColumn = await addColumn(page, block, "created", "Created at", "createdTime");
+        const updatedColumn = await addColumn(page, block, "updated", "Updated at", "updatedTime");
+        const lineNumberColumn = await addColumn(page, block, "lineNumber", "Position");
+        const firstCreatedCell = first.row.locator(`[data-col-id="${createdColumn.id}"]`);
+        const firstUpdatedCell = first.row.locator(`[data-col-id="${updatedColumn.id}"]`);
+        const firstLineCell = first.row.locator(`[data-col-id="${lineNumberColumn.id}"]`);
+        const secondLineCell = second.row.locator(`[data-col-id="${lineNumberColumn.id}"]`);
+        const readTimeValue = async (cell: Locator) => {
+            const value = await cell.locator(".av__celltext").getAttribute("data-value");
+            return value ? JSON.parse(value) as {
+                content: number;
+                formattedContent: string;
+                isNotEmpty: boolean;
+            } : undefined;
+        };
+
+        await expect.poll(async () => {
+            const created = await readTimeValue(firstCreatedCell);
+            const updated = await readTimeValue(firstUpdatedCell);
+            return {
+                created: Boolean(created?.isNotEmpty && created.content > 0 && created.formattedContent),
+                firstLine: await firstLineCell.textContent(),
+                secondLine: await secondLineCell.textContent(),
+                updated: Boolean(updated?.isNotEmpty && updated.content > 0 && updated.formattedContent),
+            };
+        }, {timeout: 30000}).toEqual({
+            created: true,
+            firstLine: "1",
+            secondLine: "2",
+            updated: true,
+        });
+        const initialCreated = (await readTimeValue(firstCreatedCell))!;
+        const initialUpdated = (await readTimeValue(firstUpdatedCell))!;
+
+        await editCell(page, first.row.locator(`[data-col-id="${notesColumn.id}"]`), "Timestamp changed");
+        await expect.poll(async () => {
+            const created = await readTimeValue(firstCreatedCell);
+            const updated = await readTimeValue(firstUpdatedCell);
+            return {
+                created: created?.content,
+                updatedAdvanced: Boolean(updated && updated.content > initialUpdated.content),
+            };
+        }, {timeout: 30000}).toEqual({
+            created: initialCreated.content,
+            updatedAdvanced: true,
+        });
+        const finalUpdated = (await readTimeValue(firstUpdatedCell))!;
+
+        const third = await addRow(page, block, "Third automatic item");
+        const thirdLineCell = third.row.locator(`[data-col-id="${lineNumberColumn.id}"]`);
+        await expect(thirdLineCell).toHaveText("3", {timeout: 30000});
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                itemIds: av.views.find(view => view.id === av.viewID)?.itemIds,
+                types: [createdColumn.id, updatedColumn.id, lineNumberColumn.id].map(columnID =>
+                    av.keyValues.find(item => item.key.id === columnID)?.key.type),
+            };
+        }, {timeout: 30000}).toEqual({
+            itemIds: [first.id, second.id, third.id],
+            types: ["created", "updated", "lineNumber"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        const reloadedFirst = reloadedBlock.locator(`.av__row[data-id="${first.id}"]`);
+        const reloadedCreated = await readTimeValue(
+            reloadedFirst.locator(`[data-col-id="${createdColumn.id}"]`),
+        );
+        const reloadedUpdated = await readTimeValue(
+            reloadedFirst.locator(`[data-col-id="${updatedColumn.id}"]`),
+        );
+        expect(reloadedCreated?.content).toBe(initialCreated.content);
+        expect(reloadedUpdated?.content).toBe(finalUpdated.content);
+        await expect(reloadedFirst.locator(`[data-col-id="${lineNumberColumn.id}"]`)).toHaveText("1");
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${second.id}"] [data-col-id="${lineNumberColumn.id}"]`,
+        )).toHaveText("2");
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${third.id}"] [data-col-id="${lineNumberColumn.id}"]`,
+        )).toHaveText("3");
     });
 
     test("links a row through a relation field and restores it after reload", async ({
