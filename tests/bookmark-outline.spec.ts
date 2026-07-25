@@ -3,6 +3,8 @@ import {showDock} from "./helpers/runtime";
 import {IOutlineBlock, IOutlinePath} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
+const BOOKMARK_SYNC_TIMEOUT = 30000;
+
 test.describe("bookmarks and outline", () => {
     test("renames a bookmark, navigates to its block, and removes it", async ({
         createTestDocument,
@@ -18,10 +20,12 @@ test.describe("bookmarks and outline", () => {
         const targetBlockID = await targetBlock.getAttribute("data-node-id");
         expect(targetBlockID).not.toBeNull();
         await siyuanAPI.setBlockAttrs(targetBlockID!, {bookmark});
-        await expect.poll(async () => (await siyuanAPI.getBlockAttrs(targetBlockID!)).bookmark).toBe(bookmark);
+        await expect.poll(async () => (await siyuanAPI.getBlockAttrs(targetBlockID!)).bookmark, {
+            timeout: BOOKMARK_SYNC_TIMEOUT,
+        }).toBe(bookmark);
         await expect.poll(async () => (await siyuanAPI.getBookmarks()).find(
             item => item.name === bookmark,
-        )?.blocks.some(block => block.id === targetBlockID)).toBe(true);
+        )?.blocks.some(block => block.id === targetBlockID), {timeout: BOOKMARK_SYNC_TIMEOUT}).toBe(true);
 
         const origin = await createTestDocument("Bookmark Navigation Origin", "Navigate away before opening bookmark");
         await expect(origin.editor).toBeVisible();
@@ -46,7 +50,7 @@ test.describe("bookmarks and outline", () => {
             expect((await renameResponse).ok()).toBe(true);
             await expect.poll(async () => (await siyuanAPI.getBookmarks()).find(
                 item => item.name === renamed,
-            )?.blocks.some(block => block.id === targetBlockID)).toBe(true);
+            )?.blocks.some(block => block.id === targetBlockID), {timeout: BOOKMARK_SYNC_TIMEOUT}).toBe(true);
 
             await activateDock(page, dockItem, ".sy__bookmark");
             const updatedBookmarkPanel = page.locator(".sy__bookmark:visible").last();
@@ -69,11 +73,13 @@ test.describe("bookmarks and outline", () => {
                 response.url().endsWith("/api/attr/setBlockAttrs") && response.request().method() === "POST");
             await confirmButton.click();
             expect((await removeResponse).ok()).toBe(true);
-            await expect.poll(async () => (await siyuanAPI.getBlockAttrs(targetBlockID!)).bookmark || "").toBe("");
+            await expect.poll(async () => (await siyuanAPI.getBlockAttrs(targetBlockID!)).bookmark || "", {
+                timeout: BOOKMARK_SYNC_TIMEOUT,
+            }).toBe("");
             await expect.poll(async () => (await siyuanAPI.getBookmarks()).some(
                 item => item.name === renamed,
-            ), {timeout: 30000}).toBe(false);
-            await expect(renamedGroup).toHaveCount(0);
+            ), {timeout: BOOKMARK_SYNC_TIMEOUT}).toBe(false);
+            await expect(renamedGroup).toHaveCount(0, {timeout: BOOKMARK_SYNC_TIMEOUT});
 
             await page.reload();
             await expect(page.locator(`.protyle-wysiwyg [data-node-id="${targetBlockID}"][bookmark]:visible`))

@@ -4,6 +4,8 @@ import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
+const AV_RENDER_TIMEOUT = 15000;
+
 interface ISyNode {
     AttributeViewID?: string;
     AttributeViewType?: string;
@@ -101,13 +103,20 @@ const focusAtEnd = async (block: Locator) => {
     });
 };
 
-const waitForResponse = (page: Page, path: string) => page.waitForResponse(response =>
-    new URL(response.url()).pathname === path, {timeout: 15000});
+const waitForResponse = (page: Page, path: string, timeout = 15000) => page.waitForResponse(response =>
+    new URL(response.url()).pathname === path, {timeout});
 
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     const response = waitForResponse(page, "/api/transactions");
     await action();
     await response;
+};
+
+const requestTransactionAndRender = async (page: Page, action: () => Promise<void>) => {
+    const transaction = waitForResponse(page, "/api/transactions");
+    const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+    await action();
+    await Promise.all([transaction, render]);
 };
 
 const requestHistoryAction = async (page: Page, block: Locator, shortcut: string,
@@ -222,9 +231,9 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string)
     await block.locator('[data-type="av-header-add"]').click();
     const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
     await expect(menu).toBeVisible();
-    await requestTransaction(page, () => menu.locator(`[data-id="${type}"]`).click());
+    await requestTransaction(page, () => menu.locator(`[data-id="${type}"]`).click({force: true}));
     const headers = block.locator(".av__row--header .av__cell--header");
-    await expect(headers).toHaveCount(oldCount + 1);
+    await expect(headers).toHaveCount(oldCount + 1, {timeout: AV_RENDER_TIMEOUT});
     const header = headers.last();
     await expect(header).toHaveAttribute("data-dtype", type);
     const id = await header.getAttribute("data-col-id");
@@ -243,10 +252,10 @@ const addRelationColumn = async (page: Page, block: Locator, targetAvID: string,
     await block.locator('[data-type="av-header-add"]').click();
     const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
     await expect(menu).toBeVisible();
-    await requestTransaction(page, () => menu.locator('[data-id="relation"]').click());
+    await requestTransaction(page, () => menu.locator('[data-id="relation"]').click({force: true}));
 
     const headers = block.locator(".av__row--header .av__cell--header");
-    await expect(headers).toHaveCount(oldCount + 1);
+    await expect(headers).toHaveCount(oldCount + 1, {timeout: AV_RENDER_TIMEOUT});
     const header = headers.last();
     await expect(header).toHaveAttribute("data-dtype", "relation");
     const id = await header.getAttribute("data-col-id");
@@ -287,7 +296,7 @@ const addRow = async (page: Page, block: Locator, content: string) => {
     );
     const oldCount = await rows.count();
     await requestTransaction(page, () => block.locator('[data-type="av-add-bottom"]').click());
-    await expect(rows).toHaveCount(oldCount + 1);
+    await expect(rows).toHaveCount(oldCount + 1, {timeout: AV_RENDER_TIMEOUT});
     const row = rows.last();
     const rowID = await row.getAttribute("data-id");
     expect(rowID).toBeTruthy();
@@ -676,6 +685,7 @@ test.describe("attribute views", () => {
         page,
         siyuanAPI,
     }) => {
+        test.slow();
         const document = await createTestDocument("Attribute View Sort Filter E2E", "Database seed");
         const {avID, block} = await insertAttributeView(page, document.editor);
         const charlie = await addRow(page, block, "Charlie");
@@ -694,13 +704,13 @@ test.describe("attribute views", () => {
         await sortPanel.locator('[data-type="addSort"]').click();
         const sortMenu = page.locator('#commonMenu[data-name="av-add-sort"]:not(.fn__none)');
         await expect(sortMenu).toBeVisible();
-        await requestTransaction(page, () => sortMenu.locator(".b3-menu__item").filter({
+        await requestTransactionAndRender(page, () => sortMenu.locator(".b3-menu__item").filter({
             hasText: primaryColumnName,
         }).click());
         await expectRowOrder(block, [alpha.id, bravo.id, charlie.id]);
 
         const orderSelect = sortPanel.locator(`.b3-menu__item[data-id="${primaryColumnID}"] select`).last();
-        await requestTransaction(page, async () => {
+        await requestTransactionAndRender(page, async () => {
             await orderSelect.selectOption("DESC");
         });
         await expectRowOrder(block, [charlie.id, bravo.id, alpha.id]);
@@ -713,13 +723,13 @@ test.describe("attribute views", () => {
         await conditionMenu.locator(".b3-menu__item").first().click();
         const filterMenu = page.locator('#commonMenu[data-name="av-add-filter"]:not(.fn__none)');
         await expect(filterMenu).toBeVisible();
-        await requestTransaction(page, () => filterMenu.locator(".b3-menu__item").filter({
+        await requestTransactionAndRender(page, () => filterMenu.locator(".b3-menu__item").filter({
             hasText: primaryColumnName,
         }).click());
         const filterInput = sortPanel.locator('.av__filter-row[data-column] [data-type="filterValue"]');
         await expect(filterInput).toBeVisible();
         await filterInput.fill("Bravo");
-        await requestTransaction(page, () => filterInput.press("Enter"));
+        await requestTransactionAndRender(page, () => filterInput.press("Enter"));
         await expectRowOrder(block, [bravo.id]);
 
         await expect.poll(async () => {

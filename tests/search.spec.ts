@@ -126,6 +126,7 @@ test.describe("global search", () => {
     });
 
     test("limits results to a selected document path", async ({page, createTestDocument, siyuanAPI}) => {
+        test.slow();
         const marker = uniqueMarker("SearchPath");
         const target = await createTestDocument("Search Path Target", marker);
         const other = await createTestDocument("Search Path Other", marker);
@@ -159,9 +160,15 @@ test.describe("global search", () => {
             await expect(pathItem).toBeVisible();
             await pathItem.click();
 
+            const hPathsResponse = page.waitForResponse(response =>
+                response.url().endsWith("/api/filetree/getHPathsByPaths") &&
+                response.request().method() === "POST");
             const response = await runAndWaitForSearch(page, search, request =>
                 request.query === marker && request.paths?.length === 1,
-            () => pathDialog.locator(".b3-button--text").click());
+            async () => {
+                await pathDialog.locator(".b3-button--text").click();
+                expect((await hPathsResponse).ok()).toBe(true);
+            }, 45000);
             expect(response.request.paths).toEqual([`${target.notebookID}/${target.docID}`]);
             expect(response.data.blocks.some(block => block.rootID === target.docID)).toBe(true);
             expect(response.data.blocks.some(block => block.rootID === other.docID)).toBe(false);

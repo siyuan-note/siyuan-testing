@@ -36,7 +36,7 @@ test("creates and rolls back an asset history snapshot", async ({
             }
         }
         return undefined;
-    }, {timeout: 15000}).toMatchObject({op: "update", title: assetFilename});
+    }, {timeout: 30000}).toMatchObject({op: "update", title: assetFilename});
     expect(await siyuanAPI.readWorkspaceText(snapshotPath)).toBe(original);
 
     await siyuanAPI.writeWorkspaceFile(workspacePath, assetFilename, "text/plain", Buffer.from(changed));

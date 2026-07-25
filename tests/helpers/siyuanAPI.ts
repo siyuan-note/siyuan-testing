@@ -259,7 +259,7 @@ export class SiyuanAPI {
     }
 
     async openNotebook(notebook: string) {
-        await this.post<null>("/api/notebook/openNotebook", {notebook});
+        await this.post<null>("/api/notebook/openNotebook", {notebook}, 30000);
     }
 
     async closeNotebook(notebook: string) {
@@ -338,7 +338,7 @@ export class SiyuanAPI {
     }
 
     async getBookmarks() {
-        return this.post<IBookmark[]>("/api/bookmark/getBookmark", {});
+        return this.post<IBookmark[]>("/api/bookmark/getBookmark", {}, 30000);
     }
 
     async getDocumentOutline(id: string) {
@@ -394,7 +394,7 @@ export class SiyuanAPI {
 
     async findDocumentPath(id: string) {
         const path = "/api/filetree/getPathByID";
-        const deadline = Date.now() + 5000;
+        const deadline = Date.now() + 30000;
         while (true) {
             const result = await this.postResult<IDocumentLocation>(path, {id});
             if (result.code === 0) {

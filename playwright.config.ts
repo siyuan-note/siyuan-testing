@@ -13,6 +13,10 @@ const statefulEditorTests = [
     "**/editor-cross-document.spec.ts",
 ];
 
+const encryptedNotebookTests = [
+    "**/encrypted-notebook.spec.ts",
+];
+
 const documentNavigationTests = [
     "**/document-lifecycle.spec.ts",
     "**/file-tree.spec.ts",
@@ -40,11 +44,22 @@ export default defineConfig({
         {
             name: "main",
             dependencies: ["setup"],
-            testIgnore: [...statefulEditorTests, ...documentNavigationTests, ...knowledgeNavigationTests],
+            testIgnore: [
+                ...encryptedNotebookTests,
+                ...statefulEditorTests,
+                ...documentNavigationTests,
+                ...knowledgeNavigationTests,
+            ],
+        },
+        {
+            name: "encrypted-notebook",
+            dependencies: ["main"],
+            testMatch: encryptedNotebookTests,
+            workers: 1,
         },
         {
             name: "stateful-editor",
-            dependencies: ["main"],
+            dependencies: ["encrypted-notebook"],
             testMatch: statefulEditorTests,
             workers: 1,
         },

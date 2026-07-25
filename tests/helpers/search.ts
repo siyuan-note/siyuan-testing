@@ -142,7 +142,8 @@ export const withKeywordSearch = async (page: Page, action: (session: ISearchSes
 
 export const runAndWaitForSearch = async (page: Page, session: ISearchSession,
                                           matches: (request: ISearchRequest) => boolean,
-                                          action: () => Promise<void>): Promise<ISearchResponse> => {
+                                          action: () => Promise<void>,
+                                          timeout = 30000): Promise<ISearchResponse> => {
     const responsePromise = page.waitForResponse((response) => {
         if (!response.url().endsWith("/api/search/fullTextSearchBlock") || response.request().method() !== "POST") {
             return false;
@@ -152,7 +153,7 @@ export const runAndWaitForSearch = async (page: Page, session: ISearchSession,
         } catch {
             return false;
         }
-    }, {timeout: 30000});
+    }, {timeout});
     await action();
     const response = await responsePromise;
     const result = await response.json() as ISiyuanResponse<ISearchResult>;
