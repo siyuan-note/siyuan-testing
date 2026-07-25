@@ -1,5 +1,6 @@
 import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
@@ -135,7 +136,7 @@ test.describe("table editing", () => {
 
         const undoResponse = page.waitForResponse(response =>
             new URL(response.url()).pathname === "/api/transactions/undo", {timeout: 30000});
-        await page.keyboard.press("Control+Z");
+        await page.keyboard.press(UNDO_SHORTCUT);
         await undoResponse;
         const restoredFirstCell = table.locator("tbody tr").first().locator("td").first();
         await expect(restoredFirstCell).toHaveText("Alpha");
@@ -143,7 +144,7 @@ test.describe("table editing", () => {
         await selectCellContents(restoredFirstCell, true);
         const redoResponse = page.waitForResponse(response =>
             new URL(response.url()).pathname === "/api/transactions/redo", {timeout: 30000});
-        await page.keyboard.press("Control+Y");
+        await page.keyboard.press(REDO_SHORTCUT);
         await redoResponse;
         await expect(table.locator("tbody tr").first().locator("td").first()).toHaveText("G");
 
@@ -204,9 +205,9 @@ test.describe("table editing", () => {
         const sourceTable = editor.locator(':scope > [data-type="NodeTable"]');
         const sourceID = await sourceTable.getAttribute("data-node-id");
         expect(sourceID).toBeTruthy();
-        await sourceTable.click({modifiers: ["Control"]});
+        await sourceTable.click({modifiers: [PRIMARY_MODIFIER]});
         await expect(sourceTable).toHaveClass(/protyle-wysiwyg--select/);
-        await page.keyboard.press("Control+C");
+        await page.keyboard.press("ControlOrMeta+C");
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Alpha");
 
         const anchor = editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "Paste anchor"});
@@ -214,7 +215,7 @@ test.describe("table editing", () => {
         await requestTransaction(page, () => page.keyboard.press("Enter"));
         const existenceCheck = page.waitForResponse(response =>
             new URL(response.url()).pathname === "/api/block/checkBlocksExist", {timeout: 30000});
-        await page.keyboard.press("Control+V");
+        await page.keyboard.press("ControlOrMeta+V");
         await existenceCheck;
 
         const tables = editor.locator(':scope > [data-type="NodeTable"]');

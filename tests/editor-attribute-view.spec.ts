@@ -1,5 +1,6 @@
 import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -109,7 +110,7 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, block: Locator, shortcut: "Control+Z" | "Control+Y",
+const requestHistoryAction = async (page: Page, block: Locator, shortcut: string,
                                      action: "undo" | "redo") => {
     const response = waitForResponse(page, `/api/transactions/${action}`);
     await block.locator(".av__title").click();
@@ -194,7 +195,7 @@ const insertAttributeView = async (page: Page, editor: Locator) => {
     }).toBe(true);
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     await focusAtEnd(paragraph);
-    await page.keyboard.press("Control+A");
+    await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.type("/database", {delay: 10});
 
     const hint = protyle.locator(".protyle-hint:not(.fn__none)");
@@ -272,7 +273,6 @@ const addRelationColumn = async (page: Page, block: Locator, targetAvID: string,
 };
 
 const editCell = async (page: Page, cell: Locator, value: string) => {
-    await cell.scrollIntoViewIfNeeded();
     await expect(cell).toBeVisible({timeout: 15000});
     await cell.click();
     const input = page.locator(".av__mask .b3-text-field");
@@ -560,12 +560,12 @@ test.describe("attribute views", () => {
         await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).keyValues
             .some(item => item.key.id === textColumn.id), {timeout: 30000}).toBe(false);
 
-        await requestHistoryAction(page, block, "Control+Z", "undo");
+        await requestHistoryAction(page, block, UNDO_SHORTCUT, "undo");
         await expect(block.locator(`.av__row--header [data-col-id="${textColumn.id}"]`)).toHaveCount(1);
         await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).keyValues
             .some(item => item.key.id === textColumn.id), {timeout: 30000}).toBe(true);
 
-        await requestHistoryAction(page, block, "Control+Y", "redo");
+        await requestHistoryAction(page, block, REDO_SHORTCUT, "redo");
         await expect(block.locator(`[data-col-id="${textColumn.id}"]`)).toHaveCount(0);
         await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).keyValues
             .some(item => item.key.id === textColumn.id), {timeout: 30000}).toBe(false);
@@ -579,7 +579,7 @@ test.describe("attribute views", () => {
             return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID!) ?? false;
         }, {timeout: 30000}).toBe(false);
 
-        await requestHistoryAction(page, block, "Control+Z", "undo");
+        await requestHistoryAction(page, block, UNDO_SHORTCUT, "undo");
         const restoredRows = block.locator(
             ".av__body .av__row:not(.av__row--header):not(.av__row--util):not([data-type=ghost])",
         );
@@ -592,7 +592,7 @@ test.describe("attribute views", () => {
             return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(restoredRowID!) ?? false;
         }, {timeout: 30000}).toBe(true);
 
-        await requestHistoryAction(page, block, "Control+Y", "redo");
+        await requestHistoryAction(page, block, REDO_SHORTCUT, "redo");
         await expect(restoredRows).toHaveCount(0);
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
@@ -857,14 +857,14 @@ test.describe("attribute views", () => {
 
         const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
         const pasteTransaction = waitForResponse(page, "/api/transactions");
-        await page.keyboard.press("Control+V");
+        await page.keyboard.press("ControlOrMeta+V");
         await Promise.all([pasteRowsResponse, pasteTransaction]);
         await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
             contents: pasteContents,
         });
         expect((await getOrderedBlockContents(siyuanAPI, avID)).itemIds).toHaveLength(130);
 
-        await requestHistoryAction(page, reloadedBlock, "Control+Z", "undo");
+        await requestHistoryAction(page, reloadedBlock, UNDO_SHORTCUT, "undo");
         await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
             contents: seedContents,
         });

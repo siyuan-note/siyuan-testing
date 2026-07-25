@@ -1,5 +1,6 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
@@ -340,13 +341,13 @@ test.describe("list item dragging", () => {
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidSyListTree(siyuanAPI, docID, editor);
 
-        await page.keyboard.press("Control+Z");
+        await page.keyboard.press(UNDO_SHORTCUT);
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["D", "E"]);
         await assertValidListDOM(editor);
         await assertValidSyListTree(siyuanAPI, docID, editor);
 
-        await page.keyboard.press("Control+Y");
+        await page.keyboard.press(REDO_SHORTCUT);
         await expect.poll(() => getDirectListItemTexts(targetList)).toEqual(["D", "A", "B"]);
         await expect.poll(() => getDirectListItemTexts(sourceList)).toEqual(["E"]);
         await assertValidListDOM(editor);

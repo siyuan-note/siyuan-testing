@@ -1,5 +1,7 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {openBlockMenu} from "./helpers/blockMenu";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -74,7 +76,7 @@ const selectContiguousBlocks = async (blocks: Locator, editor: Locator, start: n
 const selectSeparateBlocks = async (blocks: Locator, editor: Locator, indexes: number[]) => {
     const expectedIDs = await Promise.all(indexes.map(index => blocks.nth(index).getAttribute("data-node-id")));
     for (const index of indexes) {
-        await blocks.nth(index).click({modifiers: ["Control"]});
+        await blocks.nth(index).click({modifiers: [PRIMARY_MODIFIER]});
     }
     await expect.poll(() => editor.locator(":scope > .protyle-wysiwyg--select").evaluateAll(elements =>
         elements.map(element => element.getAttribute("data-node-id")))).toEqual(expectedIDs);
@@ -87,7 +89,7 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
@@ -97,15 +99,7 @@ const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Cont
 };
 
 const chooseTurnInto = async (page: Page, block: Locator, optionID: string) => {
-    const id = await block.getAttribute("data-node-id");
-    expect(id).toBeTruthy();
-    await page.mouse.move(0, 0);
-    await block.hover();
-    const gutter = page.locator(`.protyle-gutters button[data-node-id="${id}"]`);
-    await expect(gutter).toBeVisible();
-    await gutter.click({force: true});
-    const menu = page.locator("#commonMenu:not(.fn__none)");
-    await expect(menu).toBeVisible();
+    const menu = await openBlockMenu(page, block);
     const turnInto = menu.locator('[data-id="turnInto"]').first();
     await turnInto.hover();
     const option = turnInto.locator(`.b3-menu__submenu [data-id="${optionID}"]`).first();
@@ -117,17 +111,9 @@ const chooseSelectedTurnInto = async (page: Page, editor: Locator, block: Locato
     const editable = block.locator('[contenteditable="true"]').first();
     await editable.click();
     await expect(editor.locator(":scope > .protyle-wysiwyg--select")).toHaveCount(0);
-    await editable.click({modifiers: ["Control"]});
+    await editable.click({modifiers: [PRIMARY_MODIFIER]});
     await expect(block).toHaveClass(/protyle-wysiwyg--select/);
-    const id = await block.getAttribute("data-node-id");
-    expect(id).toBeTruthy();
-    await page.mouse.move(0, 0);
-    await block.hover();
-    const gutter = page.locator(`.protyle-gutters button[data-node-id="${id}"]`);
-    await expect(gutter).toBeVisible();
-    await gutter.click({force: true});
-    const menu = page.locator("#commonMenu:not(.fn__none)");
-    await expect(menu).toBeVisible();
+    const menu = await openBlockMenu(page, block);
     const turnInto = menu.locator('[data-id="turnInto"]').first();
     await turnInto.hover();
     const option = turnInto.locator(`.b3-menu__submenu [data-id="${optionID}"]`).first();
@@ -159,7 +145,7 @@ test.describe("block transformations and indentation", () => {
         const initialState = await getTopDOMState(editor);
         await selectContiguousBlocks(paragraphs, editor, 1, 2);
 
-        await requestTransaction(page, () => page.keyboard.press("Control+Alt+2"));
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Alt+2"));
         const headingState = await getTopDOMState(editor);
         expect(headingState.map(item => ({id: item.id, subtype: item.subtype, type: item.type}))).toEqual([
             {id: initialState[0].id, subtype: "", type: "NodeParagraph"},
@@ -181,15 +167,15 @@ test.describe("block transformations and indentation", () => {
             {id: initialState[3].id, level: 0, type: "NodeParagraph"},
         ]);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expect.poll(() => getTopDOMState(editor)).toEqual(headingState);
 
         const headings = editor.locator(':scope > [data-type="NodeHeading"]');
         await selectContiguousBlocks(headings, editor, 0, 1);
-        await requestTransaction(page, () => page.keyboard.press("Control+Alt+0"));
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Alt+0"));
         await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
 
         await page.reload();
@@ -327,10 +313,10 @@ test.describe("block transformations and indentation", () => {
             topTypes: ["NodeParagraph", "NodeBlockquote", "NodeParagraph"],
         });
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expect(quote).toHaveCount(1);
 
         await page.reload();
@@ -367,12 +353,12 @@ test.describe("block transformations and indentation", () => {
         await assertValidListDOM(editor);
         await assertValidSyListTree(siyuanAPI, docID, editor);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expect.poll(async () => omitUpdated(await readValidDocument(siyuanAPI, docID)))
             .toEqual(initialDocument);
         await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(4);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expect(editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(2);
         await assertValidListDOM(editor);
         await assertValidSyListTree(siyuanAPI, docID, editor);

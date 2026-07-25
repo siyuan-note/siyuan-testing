@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -94,13 +95,13 @@ const selectContiguousBlocks = async (blocks: Locator, editor: Locator, start: n
 
 const selectSeparateBlocks = async (blocks: Locator, editor: Locator, indexes: number[], expectedIDs: string[]) => {
     for (const index of indexes) {
-        await blocks.nth(index).click({modifiers: ["Control"]});
+        await blocks.nth(index).click({modifiers: [PRIMARY_MODIFIER]});
     }
     await expectSelectedIDs(editor, expectedIDs);
 };
 
-const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
-                                    action: "undo" | "redo") => {
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
+                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 30000});
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
@@ -143,10 +144,10 @@ test.describe("multi-block keyboard operations", () => {
         const deletedState = [initialState[0], initialState[4]];
         await expectDocumentState(siyuanAPI, docID, editor, deletedState);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, deletedState);
 
         await page.reload();
@@ -175,10 +176,10 @@ test.describe("multi-block keyboard operations", () => {
         const deletedState = [initialState[0], initialState[2], initialState[4]];
         await expectDocumentState(siyuanAPI, docID, editor, deletedState);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, deletedState);
     });
 
@@ -201,7 +202,7 @@ test.describe("multi-block keyboard operations", () => {
             initialState.slice(1, 3).map(item => item.id),
         );
 
-        await requestTransaction(page, () => page.keyboard.press("Control+D"));
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+D"));
         await expect(blocks).toHaveCount(6);
         const duplicatedState = (await getDOMState(editor)).paragraphs;
         expect(duplicatedState.map(item => item.text)).toEqual([
@@ -218,10 +219,10 @@ test.describe("multi-block keyboard operations", () => {
         expect(new Set(duplicatedState.map(item => item.id)).size).toBe(6);
         await expectDocumentState(siyuanAPI, docID, editor, duplicatedState);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, duplicatedState);
 
         await page.reload();
@@ -242,18 +243,18 @@ test.describe("multi-block keyboard operations", () => {
         const selectedIDs = initialState.slice(1, 3).map(item => item.id);
         await selectContiguousBlocks(blocks, editor, 1, 2, selectedIDs);
 
-        await requestTransaction(page, () => page.keyboard.press("Control+Shift+ArrowDown"));
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Shift+ArrowDown"));
         const movedState = [initialState[0], initialState[3], initialState[1], initialState[2], initialState[4]];
         await expectDocumentState(siyuanAPI, docID, editor, movedState);
         await expectSelectedIDs(editor, selectedIDs);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, movedState);
 
-        await requestTransaction(page, () => page.keyboard.press("Control+Shift+ArrowUp"));
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Shift+ArrowUp"));
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
         await page.reload();
@@ -273,13 +274,13 @@ test.describe("multi-block keyboard operations", () => {
         const blocks = editor.locator(':scope > [data-type="NodeParagraph"]');
 
         await selectContiguousBlocks(blocks, editor, 0, 1, initialState.slice(0, 2).map(item => item.id));
-        await page.keyboard.press("Control+Shift+ArrowUp");
+        await page.keyboard.press("ControlOrMeta+Shift+ArrowUp");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
 
         await blocks.nth(0).click();
         await expectSelectedIDs(editor, []);
         await selectContiguousBlocks(blocks, editor, 2, 3, initialState.slice(2, 4).map(item => item.id));
-        await page.keyboard.press("Control+Shift+ArrowDown");
+        await page.keyboard.press("ControlOrMeta+Shift+ArrowDown");
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
     });
 });

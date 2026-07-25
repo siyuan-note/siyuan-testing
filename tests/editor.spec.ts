@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {expectSearchIndex, submitSearch, withKeywordSearch} from "./helpers/search";
 
 const focusEditable = async (editable: Locator) => {
@@ -70,14 +71,14 @@ test.describe("editor", () => {
         await expect(heading).toBeVisible();
         await heading.click();
 
-        await page.keyboard.press("Control+ArrowUp");
+        await page.keyboard.press("ControlOrMeta+ArrowUp");
         await expect(heading).toHaveAttribute("fold", "1");
         const firstChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "sub content under heading"});
         const secondChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "more sub content"});
         await expect(firstChild).toHaveCount(0);
         await expect(secondChild).toHaveCount(0);
 
-        await page.keyboard.press("Control+ArrowUp");
+        await page.keyboard.press("ControlOrMeta+ArrowUp");
         await expect(heading).not.toHaveAttribute("fold", "1");
         await expect(firstChild).toBeVisible();
         await expect(secondChild).toBeVisible();
@@ -97,7 +98,7 @@ test.describe("editor", () => {
         const paragraph = editor.locator('[data-type="NodeParagraph"]').filter({hasText: content});
         await expect(paragraph).toBeVisible();
         const undoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/undo");
-        await editable.press("Control+Z");
+        await editable.press(UNDO_SHORTCUT);
         await Promise.all([inputTransaction, undoResponse]);
         await expect(paragraph).toHaveCount(0);
         expect(transactionPaths.lastIndexOf("/api/transactions")).toBeGreaterThanOrEqual(0);
@@ -107,7 +108,7 @@ test.describe("editor", () => {
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
 
         const redoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/redo");
-        await editor.locator(":scope > [data-node-id] > [contenteditable=true]").first().press("Control+Y");
+        await editor.locator(":scope > [data-node-id] > [contenteditable=true]").first().press(REDO_SHORTCUT);
         await redoResponse;
         await expect(paragraph).toBeVisible();
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);

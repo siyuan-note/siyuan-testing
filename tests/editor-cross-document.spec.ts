@@ -1,5 +1,6 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace} from "./helpers/runtime";
 
@@ -186,7 +187,7 @@ test("moves a block across documents and broadcasts undo and redo", async ({
             sourceTopLevel: [sourceStayID],
         });
 
-        await destinationAnchor.locator('[contenteditable="true"]').press("Control+Z");
+        await destinationAnchor.locator('[contenteditable="true"]').press(UNDO_SHORTCUT);
         const confirmButton = page.locator("#confirmDialogConfirmBtn");
         await expect(confirmButton).toBeVisible();
         const confirmDialog = confirmButton.locator("xpath=ancestor::*[@data-key='dialog-confirm'][1]");
@@ -207,7 +208,7 @@ test("moves a block across documents and broadcasts undo and redo", async ({
             sourceTopLevel: [movedBlockID, sourceStayID],
         });
 
-        await destinationAnchor.locator('[contenteditable="true"]').press("Control+Y");
+        await destinationAnchor.locator('[contenteditable="true"]').press(REDO_SHORTCUT);
         await expect(sourceEditor.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(0);
         await expect(destinationEditor.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(1);
         await expect(sourceObserver.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(0);

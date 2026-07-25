@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -103,8 +104,8 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, editable: Locator, shortcut: "Control+Z" | "Control+Y",
-                                    action: "undo" | "redo") => {
+const requestHistoryAction = async (page: Page, editable: Locator, shortcut: string,
+                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
     const text = await editable.textContent();
@@ -138,12 +139,12 @@ test.describe("paragraph splitting and merging", () => {
 
         await requestHistoryAction(page,
             editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').first(),
-            "Control+Z", "undo");
+            UNDO_SHORTCUT, "undo");
         await expectDocumentState(siyuanAPI, docID, editor, [{id: initialID, text: "AlphaBeta"}]);
 
         await requestHistoryAction(page,
             editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').first(),
-            "Control+Y", "redo");
+            REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, splitState);
 
         await page.reload();
@@ -175,12 +176,12 @@ test.describe("paragraph splitting and merging", () => {
 
             await requestHistoryAction(page,
                 editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').first(),
-                "Control+Z", "undo");
+                UNDO_SHORTCUT, "undo");
             await expectDocumentState(siyuanAPI, docID, editor, initialParagraphs);
 
             await requestHistoryAction(page,
                 editor.locator(':scope > [data-type="NodeParagraph"] [contenteditable="true"]').first(),
-                "Control+Y", "redo");
+                REDO_SHORTCUT, "redo");
             await expectDocumentState(siyuanAPI, docID, editor, mergedState);
 
             await page.reload();

@@ -33,7 +33,7 @@ const openAssetUpload = async (page: Page, editor: Locator) => {
     }).toBe(true);
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     await focusAtEnd(paragraph);
-    await page.keyboard.press("Control+A");
+    await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.type("/upload", {delay: 10});
     const input = protyle.locator(
         '.protyle-hint:not(.fn__none) [data-id="insertAsset"] input[type="file"]',

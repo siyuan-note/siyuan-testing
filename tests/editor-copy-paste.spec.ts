@@ -1,5 +1,6 @@
 import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {PRIMARY_MODIFIER} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace} from "./helpers/runtime";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -48,7 +49,7 @@ const expectClipboardText = async (page: Page, expectedParts: string[]) => {
 const pasteBlocks = async (page: Page) => {
     const existenceCheck = page.waitForResponse(response =>
         new URL(response.url()).pathname === "/api/block/checkBlocksExist", {timeout: 30000});
-    await page.keyboard.press("Control+V");
+    await page.keyboard.press("ControlOrMeta+V");
     const response = await existenceCheck;
     const result = await response.json() as {code: number; msg: string};
     expect(result.code, result.msg).toBe(0);
@@ -134,7 +135,7 @@ test.describe("block copy, cut, and paste", () => {
         const anchor = editor.locator(':scope > [data-type="NodeParagraph"]').nth(1);
 
         await focusAtEnd(source);
-        await page.keyboard.press("Control+C");
+        await page.keyboard.press("ControlOrMeta+C");
         await expectClipboardText(page, ["Copy source"]);
         await focusAtEnd(anchor);
         await page.keyboard.press("Enter");
@@ -172,7 +173,7 @@ test.describe("block copy, cut, and paste", () => {
         const anchor = editor.locator(`:scope > [data-node-id="${initialState.paragraphs[1].id}"]`);
 
         await focusAtEnd(editor.locator(':scope > [data-type="NodeParagraph"]').nth(0));
-        await page.keyboard.press("Control+X");
+        await page.keyboard.press("ControlOrMeta+X");
         await expectClipboardText(page, ["Cut source"]);
         await expectDocumentState(siyuanAPI, docID, editor, [initialState.paragraphs[1]]);
 
@@ -213,10 +214,10 @@ test.describe("block copy, cut, and paste", () => {
         ]);
         const blocks = editor.locator(':scope > [data-type="NodeParagraph"]');
 
-        await blocks.nth(0).click({modifiers: ["Control"]});
-        await blocks.nth(1).click({modifiers: ["Control"]});
+        await blocks.nth(0).click({modifiers: [PRIMARY_MODIFIER]});
+        await blocks.nth(1).click({modifiers: [PRIMARY_MODIFIER]});
         await expect(editor.locator(":scope > .protyle-wysiwyg--select")).toHaveCount(2);
-        await page.keyboard.press("Control+C");
+        await page.keyboard.press("ControlOrMeta+C");
         await expectClipboardText(page, ["First selected", "Second selected"]);
 
         await blocks.nth(2).click();
@@ -277,7 +278,7 @@ test.describe("block copy, cut, and paste", () => {
             expect(sourceBlockID).toBeTruthy();
 
             await focusAtEnd(sourceBlock);
-            await sourcePage.keyboard.press("Control+C");
+            await sourcePage.keyboard.press("ControlOrMeta+C");
             await expectClipboardText(sourcePage, ["Bold source", "SiYuan", "Destination ref"]);
             const destinationAnchor = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
             await focusAtEnd(destinationAnchor);

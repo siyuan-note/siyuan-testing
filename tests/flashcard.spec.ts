@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {openBlockMenu} from "./helpers/blockMenu";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {IRiffCardBlock, SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -13,15 +14,7 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
 };
 
 const chooseQuickCardAction = async (page: Page, block: Locator, action: "quickMakeCard" | "removeCard") => {
-    const blockID = await block.getAttribute("data-node-id");
-    expect(blockID).toBeTruthy();
-    await page.mouse.move(0, 0);
-    await block.hover();
-    const gutter = page.locator(`.protyle-gutters button[data-node-id="${blockID}"]`);
-    await expect(gutter).toBeVisible();
-    await gutter.click({force: true});
-    const menu = page.locator("#commonMenu:not(.fn__none)");
-    await expect(menu).toBeVisible();
+    const menu = await openBlockMenu(page, block);
     const menuItem = menu.locator(`[data-id="${action}"]`).first();
     await expect(menuItem).toBeVisible();
     await requestTransaction(page, () => menuItem.click());
@@ -34,7 +27,7 @@ const waitForCard = async (api: SiyuanAPI, docID: string, blockID: string) => {
         card = result.blocks.find(item => item.id === blockID);
         return {
             blockID: card?.id || "",
-            deckID: card?.ial["custom-riff-decks"] || "",
+            deckID: card?.ial?.["custom-riff-decks"] || "",
             total: result.total,
         };
     }, {timeout: 30000}).toEqual({blockID, deckID: QUICK_DECK_ID, total: 1});

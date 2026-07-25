@@ -1,5 +1,6 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -59,8 +60,8 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
-                                    action: "undo" | "redo") => {
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
+                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
     await focusAtEnd(editor.locator('[data-type="NodeParagraph"]').first());
@@ -170,9 +171,9 @@ test.describe("block references", () => {
             type: "NodeTextMark",
         }]);
 
-        await requestHistoryAction(page, target.editor, "Control+Z", "undo");
+        await requestHistoryAction(page, target.editor, UNDO_SHORTCUT, "undo");
         await expect(target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`)).toHaveCount(0);
-        await requestHistoryAction(page, target.editor, "Control+Y", "redo");
+        await requestHistoryAction(page, target.editor, REDO_SHORTCUT, "redo");
         reference = target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
         await expect(reference).toHaveText(query);
 
@@ -215,7 +216,7 @@ test.describe("block references", () => {
         await expect(target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`))
             .toHaveText(updatedText, {timeout: 15000});
 
-        await page.keyboard.press("Control+[");
+        await page.keyboard.press("ControlOrMeta+[");
         const targetEditor = await getDocumentEditor(page, target.docID);
         const updatedReference = targetEditor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
         await expect(updatedReference).toHaveText(updatedText);
@@ -290,9 +291,9 @@ test.describe("block references", () => {
             type: "NodeTextMark",
         }]);
 
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         await expect(target.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`)).toHaveCount(0);
-        await requestHistoryAction(page, editor, "Control+Y", "redo");
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         reference = target.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
         await expect(reference).toHaveText(sourceText);
 

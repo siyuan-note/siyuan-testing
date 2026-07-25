@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -50,8 +51,8 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
-                                    action: "undo" | "redo") => {
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
+                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
     const editable = editor.locator('[contenteditable="true"]').first();
@@ -142,9 +143,9 @@ test.describe("block query embeds", () => {
             topTypes: ["NodeBlockQueryEmbed"],
         });
 
-        await requestHistoryAction(page, target.editor, "Control+Z", "undo");
+        await requestHistoryAction(page, target.editor, UNDO_SHORTCUT, "undo");
         await expect.poll(() => getTopDOMState(target.editor)).toEqual(typedQueryState);
-        await requestHistoryAction(page, target.editor, "Control+Y", "redo");
+        await requestHistoryAction(page, target.editor, REDO_SHORTCUT, "redo");
         embed = target.editor.locator(':scope > [data-type="NodeBlockQueryEmbed"]');
         await expect(embed).toHaveAttribute("data-node-id", embedID!);
         await expect(embed.locator(`.protyle-wysiwyg__embed[data-id="${sourceID}"]`)).toContainText(query);

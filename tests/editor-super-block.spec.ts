@@ -1,5 +1,7 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {openBlockMenu} from "./helpers/blockMenu";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -47,7 +49,7 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
-const requestHistoryAction = async (page: Page, editor: Locator, shortcut: "Control+Z" | "Control+Y",
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
                                     action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
@@ -62,25 +64,15 @@ const selectContiguousBlocks = async (blocks: Locator, editor: Locator, start: n
     await expect(editor.locator(":scope > .protyle-wysiwyg--select")).toHaveCount(end - start + 1);
 };
 
-const openBlockMenu = async (page: Page, block: Locator) => {
-    const id = await block.getAttribute("data-node-id");
-    expect(id).toBeTruthy();
-    await page.mouse.move(0, 0);
-    if (await block.getAttribute("data-type") === "NodeSuperBlock") {
-        await block.locator(":scope > [data-node-id]").first().hover();
-    } else {
-        await block.hover();
-    }
-    const gutter = page.locator(`.protyle-gutters button[data-node-id="${id}"]`);
-    await expect(gutter).toBeVisible();
-    await gutter.click({force: true});
-    const menu = page.locator("#commonMenu:not(.fn__none)");
-    await expect(menu).toBeVisible();
-    return menu;
+const openMenuForBlock = async (page: Page, block: Locator) => {
+    const hoverTarget = await block.getAttribute("data-type") === "NodeSuperBlock"
+        ? block.locator(":scope > [data-node-id]").first()
+        : block;
+    return openBlockMenu(page, block, hoverTarget);
 };
 
 const mergeSelectedBlocks = async (page: Page, block: Locator, layout: "hLayout" | "vLayout") => {
-    const menu = await openBlockMenu(page, block);
+    const menu = await openMenuForBlock(page, block);
     const merge = menu.locator('[data-id="mergeSuperBlock"]').first();
     await merge.hover();
     const option = merge.locator(`.b3-menu__submenu [data-id="${layout}"]`).first();
@@ -89,7 +81,7 @@ const mergeSelectedBlocks = async (page: Page, block: Locator, layout: "hLayout"
 };
 
 const useSuperBlockMenu = async (page: Page, superBlock: Locator, optionID: string) => {
-    const menu = await openBlockMenu(page, superBlock);
+    const menu = await openMenuForBlock(page, superBlock);
     const option = menu.locator(`[data-id="${optionID}"]`).first();
     await expect(option).toBeVisible();
     await requestTransaction(page, () => option.click());
@@ -176,18 +168,18 @@ test.describe("super block editing", () => {
         await expect(superBlock).toHaveAttribute("data-sb-layout", "row");
         await expect.poll(() => getPersistedSuperBlockState(siyuanAPI, docID)).toMatchObject({layout: "row"});
 
-        await requestHistoryAction(page, reloadedEditor, "Control+Z", "undo");
+        await requestHistoryAction(page, reloadedEditor, UNDO_SHORTCUT, "undo");
         await expect(superBlock).toHaveAttribute("data-sb-layout", "col");
-        await requestHistoryAction(page, reloadedEditor, "Control+Y", "redo");
+        await requestHistoryAction(page, reloadedEditor, REDO_SHORTCUT, "redo");
         await expect(superBlock).toHaveAttribute("data-sb-layout", "row");
 
         await useSuperBlockMenu(page, superBlock, "cancelSuperBlock");
         await expect.poll(() => getTopDOMState(reloadedEditor)).toEqual(initialState);
-        await requestHistoryAction(page, reloadedEditor, "Control+Z", "undo");
+        await requestHistoryAction(page, reloadedEditor, UNDO_SHORTCUT, "undo");
         superBlock = reloadedEditor.locator(':scope > [data-type="NodeSuperBlock"]');
         await expect(superBlock).toHaveAttribute("data-node-id", superBlockID!);
         await expect(superBlock).toHaveAttribute("data-sb-layout", "row");
-        await requestHistoryAction(page, reloadedEditor, "Control+Y", "redo");
+        await requestHistoryAction(page, reloadedEditor, REDO_SHORTCUT, "redo");
         await expect.poll(() => getTopDOMState(reloadedEditor)).toEqual(initialState);
 
         await page.reload();
@@ -227,7 +219,7 @@ test.describe("super block editing", () => {
 
         await useSuperBlockMenu(page, superBlock, "cancelSuperBlock");
         await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
-        await requestHistoryAction(page, editor, "Control+Z", "undo");
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
         superBlock = editor.locator(':scope > [data-type="NodeSuperBlock"]');
         await expect(superBlock).toHaveAttribute("data-node-id", superBlockID!);
         await expect(superBlock).toHaveAttribute("data-sb-layout", "row");
