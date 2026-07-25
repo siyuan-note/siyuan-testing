@@ -56,6 +56,9 @@ test.describe("notebook lifecycle", () => {
         await expect.poll(async () => (await siyuanAPI.listNotebooks()).find(
             item => item.id === notebook.id,
         )?.closed).toBe(false);
+        await expect.poll(async () => (await siyuanAPI.findDocumentPath(docID))?.notebook, {
+            timeout: 30000,
+        }).toBe(notebook.id);
         await openWorkspace(page, `/?id=${docID}`);
         await expect(await getDocumentEditor(page, docID)).toContainText(marker);
         expect((await siyuanAPI.getDocumentPath(docID)).notebook).toBe(notebook.id);
