@@ -47,15 +47,23 @@ interface IAttributeViewValue {
         isNotEmpty2?: boolean;
         isNotTime?: boolean;
     };
+    email?: {content: string};
     isDetached?: boolean;
+    mAsset?: Array<{
+        content: string;
+        name: string;
+        type: "file" | "image";
+    }>;
     mSelect?: Array<{
         color: string;
         content: string;
     }>;
     number?: {content: number; isNotEmpty: boolean};
+    phone?: {content: string};
     relation?: {blockIDs: string[]};
     text?: {content: string};
     type: string;
+    url?: {content: string};
 }
 
 interface IAttributeView {
@@ -243,13 +251,22 @@ const insertAttributeView = async (page: Page, editor: Locator) => {
 };
 
 const addColumn = async (page: Page, block: Locator, type: string, name: string, menuID = type) => {
-    const oldCount = await block.locator(".av__row--header .av__cell--header").count();
-    await block.locator('[data-type="av-header-add"]').click();
-    const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
-    await expect(menu).toBeVisible();
-    await requestTransaction(page, () => menu.locator(`[data-id="${menuID}"]`).click({force: true}));
     const headers = block.locator(".av__row--header .av__cell--header");
-    await expect(headers).toHaveCount(oldCount + 1, {timeout: AV_RENDER_TIMEOUT});
+    const oldCount = await headers.count();
+    const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
+    const transaction = waitForResponse(page, "/api/transactions", 30000);
+    await expect(async () => {
+        if (await menu.isVisible()) {
+            await page.keyboard.press("Escape");
+            await expect(menu).toBeHidden();
+        }
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await block.locator('[data-type="av-header-add"]').click();
+        await expect(menu).toBeVisible({timeout: 2000});
+        await menu.locator(`[data-id="${menuID}"]`).click({force: true});
+        await expect(headers).toHaveCount(oldCount + 1, {timeout: 2000});
+    }).toPass({timeout: 30000});
+    await transaction;
     const header = headers.last();
     await expect(header).toHaveAttribute("data-dtype", type);
     const id = await header.getAttribute("data-col-id");
@@ -298,12 +315,19 @@ const addRelationColumn = async (page: Page, block: Locator, targetAvID: string,
 };
 
 const editCell = async (page: Page, cell: Locator, value: string) => {
-    await expect(cell).toBeVisible({timeout: 15000});
-    await cell.click();
-    const input = page.locator(".av__mask .b3-text-field");
-    await expect(input).toBeVisible();
+    const input = page.locator(".av__mask .b3-text-field:visible");
+    const block = cell.locator(
+        "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
+    );
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await cell.click();
+        await expect(input).toBeVisible({timeout: 2000});
+    }).toPass({timeout: 30000});
     await input.fill(value);
     await requestTransaction(page, () => input.press("Enter"));
+    await expect(input).toHaveCount(0);
 };
 
 const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
@@ -316,19 +340,26 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
         await expect(block).not.toHaveAttribute("data-rendering", "true");
         await cell.click();
         await expect(input).toBeVisible({timeout: 2000});
-    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    }).toPass({timeout: 30000});
+    const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
         await input.fill(value);
-        await requestTransaction(page, () => input.press("Enter"));
+        if (type === "select") {
+            await requestTransactionAndRender(page, () => input.press("Enter"));
+        } else {
+            await requestTransaction(page, () => input.press("Enter"));
+        }
     }
     await expect(cell.locator(".b3-chip")).toHaveText(values);
-    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: AV_RENDER_TIMEOUT});
+    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
     if (await input.count() > 0) {
-        const panel = input.locator(
-            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
-        );
-        await panel.locator('.b3-dialog__scrim[data-type="close"]').click({force: true});
-        await expect(input).toHaveCount(0);
+        await expect(async () => {
+            const panel = input.locator(
+                "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
+            );
+            await panel.locator('.b3-dialog__scrim[data-type="close"]').click({force: true});
+            await expect(input).toHaveCount(0, {timeout: 1000});
+        }).toPass({timeout: AV_RENDER_TIMEOUT});
     }
 };
 
@@ -342,7 +373,7 @@ const editDateCell = async (page: Page, cell: Locator) => {
         await expect(block).not.toHaveAttribute("data-rendering", "true");
         await cell.click();
         await expect(input).toBeVisible({timeout: 2000});
-    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    }).toPass({timeout: 30000});
     const inputType = await input.getAttribute("type");
     expect(["date", "datetime-local"]).toContain(inputType);
     const isNotTime = inputType === "date";
@@ -352,6 +383,41 @@ const editDateCell = async (page: Page, cell: Locator) => {
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);
     return {display, isNotTime};
+};
+
+const uploadAssetCell = async (page: Page, cell: Locator, file: {
+    buffer: Buffer;
+    mimeType: string;
+    name: string;
+}) => {
+    const panelMenu = page.locator(".av__panel .b3-menu").filter({
+        has: page.locator('[data-type="addAssetExist"]'),
+    }).last();
+    const uploadInput = panelMenu.locator('input[type="file"]');
+    const block = cell.locator(
+        "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
+    );
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await cell.click();
+        await expect(panelMenu.locator('[data-type="addAssetExist"]')).toBeVisible({timeout: 2000});
+        await expect(uploadInput).toBeAttached();
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+
+    const uploadResponse = waitForResponse(page, "/upload", 30000);
+    const transactionResponse = waitForResponse(page, "/api/transactions", 30000);
+    await uploadInput.setInputFiles(file);
+    const response = await uploadResponse;
+    await transactionResponse;
+    const payload = await response.json() as {
+        code: number;
+        data: {succMap: Record<string, string>};
+    };
+    expect(payload.code).toBe(0);
+    const assetPath = payload.data.succMap[file.name];
+    expect(assetPath).toBeTruthy();
+    return assetPath;
 };
 
 const addRow = async (page: Page, block: Locator, content: string) => {
@@ -552,6 +618,129 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
             .toHaveText(["Frontend", "Urgent"]);
         await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
+    });
+
+    test("edits URL, email, and phone values and restores their link semantics after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Link Fields E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Link field item");
+        const urlColumn = await addColumn(page, block, "url", "Project URL", "link");
+        const emailColumn = await addColumn(page, block, "email", "Contact email");
+        const phoneColumn = await addColumn(page, block, "phone", "Contact phone");
+        const suffix = Date.now().toString();
+        const url = `https://example.com/projects/${suffix}?source=e2e`;
+        const email = `qa+${suffix}@example.com`;
+        const phone = `+1 202 555 ${suffix.slice(-4)}`;
+
+        const urlCell = row.row.locator(`[data-col-id="${urlColumn.id}"]`);
+        const emailCell = row.row.locator(`[data-col-id="${emailColumn.id}"]`);
+        const phoneCell = row.row.locator(`[data-col-id="${phoneColumn.id}"]`);
+        await editCell(page, urlCell, url);
+        await editCell(page, emailCell, email);
+        await editCell(page, phoneCell, phone);
+
+        await expect(urlCell.locator('.av__celltext--url[data-type="url"]')).toHaveAttribute("data-href", url);
+        await expect(emailCell.locator('.av__celltext--url[data-type="email"]')).toHaveText(email);
+        await expect(phoneCell.locator('.av__celltext--url[data-type="phone"]')).toHaveText(phone);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const valueFor = (keyID: string) => av.keyValues.find(item => item.key.id === keyID)
+                ?.values?.find(value => value.blockID === row.id);
+            const urlValue = valueFor(urlColumn.id);
+            const emailValue = valueFor(emailColumn.id);
+            const phoneValue = valueFor(phoneColumn.id);
+            return {
+                email: emailValue?.email?.content,
+                emailType: emailValue?.type,
+                phone: phoneValue?.phone?.content,
+                phoneType: phoneValue?.type,
+                url: urlValue?.url?.content,
+                urlType: urlValue?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            email,
+            emailType: "email",
+            phone,
+            phoneType: "phone",
+            url,
+            urlType: "url",
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedRow = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"]`,
+        );
+        await expect(reloadedRow.locator(
+            `[data-col-id="${urlColumn.id}"] .av__celltext--url[data-type="url"]`,
+        )).toHaveAttribute("data-href", url);
+        await expect(reloadedRow.locator(
+            `[data-col-id="${emailColumn.id}"] .av__celltext--url[data-type="email"]`,
+        )).toHaveText(email);
+        await expect(reloadedRow.locator(
+            `[data-col-id="${phoneColumn.id}"] .av__celltext--url[data-type="phone"]`,
+        )).toHaveText(phone);
+    });
+
+    test("uploads an attachment value and restores it after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Asset Field E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Asset field item");
+        const assetColumn = await addColumn(page, block, "mAsset", "Attachments", "assets");
+        const assetCell = row.row.locator(`[data-col-id="${assetColumn.id}"]`);
+        const filename = `av-asset-${Date.now()}.txt`;
+        const content = "Attribute view asset E2E\nsecond line";
+        const assetPath = await uploadAssetCell(page, assetCell, {
+            buffer: Buffer.from(content),
+            mimeType: "text/plain",
+            name: filename,
+        });
+        expect(assetPath).toMatch(/^assets\/.+\.txt$/);
+
+        const asset = assetCell.locator('.av__celltext--url[data-url]');
+        await expect(asset).toHaveText(filename);
+        await expect(asset).toHaveAttribute("data-name", filename);
+        await expect(asset).toHaveAttribute("data-url", assetPath);
+        const workspacePath = `/data/${assetPath}`;
+        expect(await siyuanAPI.readWorkspaceText(workspacePath)).toBe(content);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const value = av.keyValues.find(item => item.key.id === assetColumn.id)
+                ?.values?.find(item => item.blockID === row.id);
+            return {
+                assets: value?.mAsset,
+                type: value?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            assets: [{
+                content: assetPath,
+                name: filename,
+                type: "file",
+            }],
+            type: "mAsset",
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedAsset = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] ` +
+            `[data-col-id="${assetColumn.id}"] .av__celltext--url[data-url="${assetPath}"]`,
+        );
+        await expect(reloadedAsset).toHaveText(filename);
+        await expect(reloadedAsset).toHaveAttribute("data-name", filename);
+        expect(await siyuanAPI.readWorkspaceText(workspacePath)).toBe(content);
+
+        await siyuanAPI.removeWorkspaceFile(workspacePath);
     });
 
     test("links a row through a relation field and restores it after reload", async ({
