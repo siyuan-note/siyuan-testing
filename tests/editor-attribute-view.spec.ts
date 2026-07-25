@@ -1205,6 +1205,76 @@ test.describe("attribute views", () => {
         expect((await getOrderedBlockContents(siyuanAPI, avID)).itemIds).toHaveLength(120);
     });
 
+    test("replaces an existing select value when pasting an external HTML table", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View HTML Table Paste E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "0");
+        const selectColumnID = await block.locator('.av__cell--header[data-dtype="select"]').getAttribute("data-col-id");
+        expect(selectColumnID).toBeTruthy();
+        const selectCell = row.row.locator(`[data-col-id="${selectColumnID}"]`);
+        await editSelectCell(page, selectCell, ["0"]);
+
+        const firstCell = row.row.locator('[data-dtype="block"]');
+        await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+        await firstCell.dispatchEvent("mousedown", {button: 0, buttons: 1});
+        await firstCell.dispatchEvent("mouseup", {button: 0, buttons: 0});
+        await expect(firstCell).toHaveClass(/av__cell--select/);
+
+        const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
+        const pasteTransaction = waitForResponse(page, "/api/transactions");
+        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
+        await pasteTarget.evaluate((element) => {
+            const clipboardData = new DataTransfer();
+            clipboardData.setData("text/plain", "q\tw\ne\tr\nt\ty");
+            clipboardData.setData("text/html",
+                "<table><tbody><tr><td>q</td><td>w</td></tr><tr><td>e</td><td>r</td></tr>" +
+                "<tr><td>t</td><td>y</td></tr></tbody></table>");
+            element.dispatchEvent(new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData,
+            }));
+        });
+        await Promise.all([pasteRowsResponse, pasteTransaction]);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const itemIds = av.views.find(view => view.id === av.viewID)?.itemIds || [];
+            const primaryValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+            const selectValues = av.keyValues.find(item => item.key.id === selectColumnID)?.values || [];
+            return {
+                primary: itemIds.map(itemID =>
+                    primaryValues.find(value => value.blockID === itemID)?.block?.content),
+                selected: itemIds.map(itemID =>
+                    selectValues.find(value => value.blockID === itemID)?.mSelect?.map(option => option.content)),
+            };
+        }, {timeout: 30000}).toEqual({
+            primary: ["q", "e", "t"],
+            selected: [["w"], ["r"], ["y"]],
+        });
+
+        await requestHistoryAction(page, block, UNDO_SHORTCUT, "undo");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const itemIds = av.views.find(view => view.id === av.viewID)?.itemIds || [];
+            const primaryValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+            const selectValues = av.keyValues.find(item => item.key.id === selectColumnID)?.values || [];
+            return {
+                primary: itemIds.map(itemID =>
+                    primaryValues.find(value => value.blockID === itemID)?.block?.content),
+                selected: itemIds.map(itemID =>
+                    selectValues.find(value => value.blockID === itemID)?.mSelect?.map(option => option.content)),
+            };
+        }, {timeout: 30000}).toEqual({
+            primary: ["0"],
+            selected: [["0"]],
+        });
+    });
+
     test("preserves boundary values in a wider multi-row table", async ({
         createTestDocument,
         page,
