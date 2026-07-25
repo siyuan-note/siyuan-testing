@@ -8,6 +8,7 @@ interface ISyNode {
     ID?: string;
     Data?: string;
     Properties?: Record<string, string>;
+    TableAligns?: number[];
     Type?: string;
     Children?: ISyNode[];
 }
@@ -72,6 +73,25 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     await response;
 };
 
+const requestHistoryAction = async (page: Page, table: Locator, action: "undo" | "redo") => {
+    const response = page.waitForResponse(item =>
+        new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 30000});
+    await selectCellContents(table.locator("tbody td").first(), true);
+    await page.keyboard.press(action === "undo" ? UNDO_SHORTCUT : REDO_SHORTCUT);
+    await response;
+};
+
+const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
+    await selectCellContents(cell, true);
+    await cell.click({button: "right"});
+    const menu = page.locator("#commonMenu:not(.fn__none)");
+    await expect(menu).toBeVisible();
+    const item = menu.locator(`[data-id="${action}"]`).first();
+    await expect(item).toBeVisible();
+    await requestTransaction(page, () => item.click({position: {x: 12, y: 12}}));
+    await expect(menu).toBeHidden();
+};
+
 const replaceCellText = async (page: Page, cell: Locator, value: string) => {
     const current = (await cell.textContent())?.replace(/\u200b/g, "").trim() || "";
     await cell.dblclick();
@@ -95,7 +115,13 @@ const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
     const nodes = flattenNodes(document);
     const ids = nodes.flatMap(node => node.ID ? [node.ID] : []);
     const table = nodes.find(node => node.Type === "NodeTable");
+    const tableRows = [
+        ...(table?.Children?.find(node => node.Type === "NodeTableHead")?.Children || []),
+        ...(table?.Children?.filter(node => node.Type === "NodeTableRow") || []),
+    ];
     return {
+        aligns: table?.TableAligns?.length || 0,
+        columns: tableRows.map(row => row.Children?.filter(node => node.Type === "NodeTableCell").length || 0),
         duplicateIDs: ids.length - new Set(ids).size,
         mismatchedPropertyIDs: nodes.filter(node =>
             node.ID && node.Properties?.id && node.ID !== node.Properties.id).length,
@@ -167,6 +193,8 @@ test.describe("table editing", () => {
             head: [["Item", "Quantity"]],
         });
         await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toEqual({
+            aligns: 2,
+            columns: [2, 2, 2, 2],
             duplicateIDs: 0,
             mismatchedPropertyIDs: 0,
             tableCount: 1,
@@ -230,6 +258,8 @@ test.describe("table editing", () => {
             head: [["Name", "Status"]],
         });
         await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            aligns: 2,
+            columns: [2, 2, 2],
             duplicateIDs: 0,
             mismatchedPropertyIDs: 0,
             tableCount: 2,
@@ -244,5 +274,125 @@ test.describe("table editing", () => {
             duplicateIDs: 0,
             head: [["Name", "Status"]],
         });
+    });
+
+    test("inserts rows and columns and restores the table structure with undo and redo", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Insert Structure E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+
+        await chooseTableCellAction(page, table.locator("tbody tr").first().locator("td").nth(1), "insertRowBelow");
+        await expect.poll(() => getDOMTableState(table)).toEqual({
+            body: [["Alpha", "1", "Ready"], ["", "", ""], ["Beta", "2", "Done"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        });
+
+        await chooseTableCellAction(page, table.locator("thead th").nth(1), "insertColumnRight");
+        const expandedState = {
+            body: [["Alpha", "1", "", "Ready"], ["", "", "", ""], ["Beta", "2", "", "Done"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(expandedState);
+        await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            aligns: 4,
+            columns: [4, 4, 4, 4],
+            duplicateIDs: 0,
+            mismatchedPropertyIDs: 0,
+            tableCount: 1,
+        });
+
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getDOMTableState(table)).toEqual({
+            body: [["Alpha", "1", "Ready"], ["", "", ""], ["Beta", "2", "Done"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        });
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getDOMTableState(table)).toEqual({
+            body: [["Alpha", "1", "Ready"], ["Beta", "2", "Done"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        });
+
+        await requestHistoryAction(page, table, "redo");
+        await requestHistoryAction(page, table, "redo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(expandedState);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect.poll(() => getDOMTableState(
+            reloadedEditor.locator(':scope > [data-type="NodeTable"]'),
+        ), {timeout: 30000}).toEqual(expandedState);
+    });
+
+    test("deletes a row and column and persists the restored transaction", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Delete Structure E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+                "| Gamma | 3 | Waiting |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+
+        await chooseTableCellAction(page, table.locator("tbody tr").nth(1).locator("td").nth(1), "deleteRow");
+        await expect.poll(() => getDOMTableState(table)).toEqual({
+            body: [["Alpha", "1", "Ready"], ["Gamma", "3", "Waiting"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        });
+
+        await chooseTableCellAction(page, table.locator("thead th").nth(1), "deleteColumn");
+        const reducedState = {
+            body: [["Alpha", "Ready"], ["Gamma", "Waiting"]],
+            duplicateIDs: 0,
+            head: [["Item", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+        await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            aligns: 2,
+            columns: [2, 2, 2],
+            duplicateIDs: 0,
+            mismatchedPropertyIDs: 0,
+            tableCount: 1,
+        });
+
+        await requestHistoryAction(page, table, "undo");
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getDOMTableState(table)).toEqual({
+            body: [["Alpha", "1", "Ready"], ["Beta", "2", "Done"], ["Gamma", "3", "Waiting"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        });
+
+        await requestHistoryAction(page, table, "redo");
+        await requestHistoryAction(page, table, "redo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect.poll(() => getDOMTableState(
+            reloadedEditor.locator(':scope > [data-type="NodeTable"]'),
+        ), {timeout: 30000}).toEqual(reducedState);
     });
 });
