@@ -28,6 +28,14 @@ interface IAttributeViewKey {
         backKeyID: string;
         isTwoWay: boolean;
     };
+    rollup?: {
+        calc?: {
+            operator: string;
+            result?: unknown;
+        };
+        keyID: string;
+        relationKeyID: string;
+    };
     template?: string;
     type: string;
     updated?: {includeTime: boolean};
@@ -64,6 +72,7 @@ interface IAttributeViewValue {
     number?: {content: number; isNotEmpty: boolean};
     phone?: {content: string};
     relation?: {blockIDs: string[]};
+    rollup?: {contents: IAttributeViewValue[]};
     template?: {content: string};
     text?: {content: string};
     type: string;
@@ -316,6 +325,45 @@ const addRelationColumn = async (page: Page, block: Locator, targetAvID: string,
     await expect(editPanel).toBeHidden();
     await expect(header.locator(".av__celltext")).toHaveText(name);
     return {header, id: id!};
+};
+
+const configureRollupColumn = async (page: Page, cell: Locator, relationColumnID: string,
+                                     targetColumnID: string, operator: "Sum" | "Unique values") => {
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await cell.click();
+        await expect(page.locator(".av__panel [data-type=\"goSearchRollupCol\"]"))
+            .toBeVisible({timeout: 2000});
+    }).toPass({timeout: 30000});
+
+    const panel = page.locator(".av__panel");
+    await panel.locator('[data-type="goSearchRollupCol"]').click();
+    let menu = page.locator("#commonMenu:not(.fn__none)");
+    let option = menu.locator(`.b3-list-item[data-col-id="${relationColumnID}"]`);
+    await expect(option).toBeVisible({timeout: 15000});
+    await requestTransaction(page, () => option.click());
+
+    const targetPicker = panel.locator('[data-type="goSearchRollupTarget"]');
+    await expect(targetPicker).toHaveAttribute("data-av-id", /.+/);
+    await targetPicker.click();
+    menu = page.locator("#commonMenu:not(.fn__none)");
+    option = menu.locator(`.b3-list-item[data-col-id="${targetColumnID}"]`);
+    await expect(option).toBeVisible({timeout: 15000});
+    await requestTransaction(page, () => option.click());
+
+    const label = await page.evaluate(value => value === "Sum"
+        ? window.siyuan.languages.calcOperatorSum
+        : window.siyuan.languages.uniqueValues, operator);
+    await panel.locator('[data-type="goSearchRollupCalc"]').click();
+    menu = page.locator("#commonMenu:not(.fn__none)");
+    const calcOption = menu.locator(".b3-menu__item").filter({
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    });
+    await expect(calcOption).toBeVisible({timeout: 15000});
+    await requestTransaction(page, () => calcOption.click());
+
+    await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+    await expect(panel).toHaveCount(0);
 };
 
 const editCell = async (page: Page, cell: Locator, value: string) => {
@@ -976,6 +1024,154 @@ test.describe("attribute views", () => {
         );
         await expect(reloadedCell.locator(`.av__cell--relation[data-row-id="${targetRow.id}"]`))
             .toContainText("Target item");
+    });
+
+    test("recalculates text and numeric rollups as relation values change", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const targetDocument = await createTestDocument("Attribute View Rollup Target E2E", "Target seed");
+        const target = await insertAttributeView(page, targetDocument.editor);
+        const firstTarget = await addRow(page, target.block, "First target");
+        const secondTarget = await addRow(page, target.block, "Second target");
+        const textColumn = await addColumn(page, target.block, "text", "Label");
+        const numberColumn = await addColumn(page, target.block, "number", "Amount");
+        await editCell(page, firstTarget.row.locator(`[data-col-id="${textColumn.id}"]`), "Alpha");
+        await editCell(page, firstTarget.row.locator(`[data-col-id="${numberColumn.id}"]`), "10");
+        await editCell(page, secondTarget.row.locator(`[data-col-id="${textColumn.id}"]`), "Beta");
+        await editCell(page, secondTarget.row.locator(`[data-col-id="${numberColumn.id}"]`), "20");
+
+        const sourceDocument = await createTestDocument("Attribute View Rollup Source E2E", "Source seed");
+        const source = await insertAttributeView(page, sourceDocument.editor);
+        const sourceRow = await addRow(page, source.block, "Source item");
+        const relationColumn = await addRelationColumn(page, source.block, target.avID, "Related items");
+        const relationCell = source.block.locator(
+            `.av__row[data-id="${sourceRow.id}"] [data-col-id="${relationColumn.id}"]`,
+        );
+        await relationCell.click();
+        const relationPanel = page.locator(".av__panel");
+        for (const targetRow of [firstTarget, secondTarget]) {
+            const candidate = relationPanel.locator(
+                `[data-type="setRelationCell"][data-relation-type="candidate"]` +
+                `[data-row-id="${targetRow.id}"]`,
+            );
+            await expect(candidate).toBeVisible({timeout: 15000});
+            await requestTransaction(page, () => candidate.click());
+        }
+        await relationPanel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(relationPanel).toHaveCount(0);
+
+        const textRollup = await addColumn(page, source.block, "rollup", "Related labels");
+        const numberRollup = await addColumn(page, source.block, "rollup", "Total amount");
+        const sourceDataRow = source.block.locator(`.av__row[data-id="${sourceRow.id}"]`);
+        const textRollupCell = sourceDataRow.locator(`[data-col-id="${textRollup.id}"]`);
+        const numberRollupCell = sourceDataRow.locator(`[data-col-id="${numberRollup.id}"]`);
+        await configureRollupColumn(
+            page, textRollupCell, relationColumn.id, textColumn.id, "Unique values",
+        );
+        await configureRollupColumn(
+            page, numberRollupCell, relationColumn.id, numberColumn.id, "Sum",
+        );
+        await expect(textRollupCell).toContainText("Alpha");
+        await expect(textRollupCell).toContainText("Beta");
+        await expect(numberRollupCell).toHaveText("30");
+
+        await page.goto(`/?id=${targetDocument.docID}`);
+        const targetEditor = await getDocumentEditor(page, targetDocument.docID);
+        const targetBlock = targetEditor.locator(`:scope > [data-av-id="${target.avID}"]`);
+        const reloadedFirstTarget = targetBlock.locator(`.av__row[data-id="${firstTarget.id}"]`);
+        await editCell(
+            page, reloadedFirstTarget.locator(`[data-col-id="${textColumn.id}"]`), "Alpha updated",
+        );
+        await editCell(
+            page, reloadedFirstTarget.locator(`[data-col-id="${numberColumn.id}"]`), "15",
+        );
+
+        await page.goto(`/?id=${sourceDocument.docID}`);
+        const sourceEditor = await getDocumentEditor(page, sourceDocument.docID);
+        const reloadedSourceBlock = sourceEditor.locator(`:scope > [data-av-id="${source.avID}"]`);
+        const reloadedSourceRow = reloadedSourceBlock.locator(`.av__row[data-id="${sourceRow.id}"]`);
+        const reloadedRelationCell = reloadedSourceRow.locator(`[data-col-id="${relationColumn.id}"]`);
+        const reloadedTextRollup = reloadedSourceRow.locator(`[data-col-id="${textRollup.id}"]`);
+        const reloadedNumberRollup = reloadedSourceRow.locator(`[data-col-id="${numberRollup.id}"]`);
+        await expect(reloadedTextRollup).toContainText("Alpha updated");
+        await expect(reloadedTextRollup).toContainText("Beta");
+        await expect(reloadedNumberRollup).toHaveText("35");
+
+        await reloadedRelationCell.click();
+        const selectedSecondTarget = page.locator(".av__panel").locator(
+            `[data-type="setRelationCell"][data-relation-type="selected"]` +
+            `[data-row-id="${secondTarget.id}"]`,
+        );
+        await expect(selectedSecondTarget).toBeVisible({timeout: 15000});
+        await requestTransaction(page, () => selectedSecondTarget.click());
+        await expect(reloadedTextRollup).toContainText("Alpha updated");
+        await expect(reloadedTextRollup).not.toContainText("Beta");
+        await expect(reloadedNumberRollup).toHaveText("15");
+
+        const secondTargetCandidate = page.locator(".av__panel").locator(
+            `[data-type="setRelationCell"][data-relation-type="candidate"]` +
+            `[data-row-id="${secondTarget.id}"]`,
+        );
+        await expect(secondTargetCandidate).toBeVisible();
+        await requestTransaction(page, () => secondTargetCandidate.click());
+        await expect(reloadedTextRollup).toContainText("Beta");
+        await expect(reloadedNumberRollup).toHaveText("35");
+        await page.locator(".av__panel [data-type=\"close\"]").click({position: {x: 5, y: 5}});
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, source.avID);
+            const relation = av.keyValues.find(item => item.key.id === relationColumn.id);
+            const relationValue = relation?.values?.find(item => item.blockID === sourceRow.id);
+            const numberRollupConfig = av.keyValues.find(
+                item => item.key.id === numberRollup.id,
+            )?.key.rollup;
+            const textRollupConfig = av.keyValues.find(
+                item => item.key.id === textRollup.id,
+            )?.key.rollup;
+            return {
+                numberRollup: numberRollupConfig && {
+                    keyID: numberRollupConfig.keyID,
+                    operator: numberRollupConfig.calc?.operator,
+                    relationKeyID: numberRollupConfig.relationKeyID,
+                },
+                relation: relation?.key.relation,
+                relationIDs: relationValue?.relation?.blockIDs,
+                textRollup: textRollupConfig && {
+                    keyID: textRollupConfig.keyID,
+                    operator: textRollupConfig.calc?.operator,
+                    relationKeyID: textRollupConfig.relationKeyID,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            numberRollup: {
+                keyID: numberColumn.id,
+                operator: "Sum",
+                relationKeyID: relationColumn.id,
+            },
+            relation: {
+                avID: target.avID,
+                backKeyID: expect.any(String),
+                isTwoWay: false,
+            },
+            relationIDs: [firstTarget.id, secondTarget.id],
+            textRollup: {
+                keyID: textColumn.id,
+                operator: "Unique values",
+                relationKeyID: relationColumn.id,
+            },
+        });
+
+        await page.reload();
+        const finalEditor = await getDocumentEditor(page, sourceDocument.docID);
+        const finalRow = finalEditor.locator(
+            `:scope > [data-av-id="${source.avID}"] .av__row[data-id="${sourceRow.id}"]`,
+        );
+        await expect(finalRow.locator(`[data-col-id="${textRollup.id}"]`))
+            .toContainText("Alpha updated");
+        await expect(finalRow.locator(`[data-col-id="${textRollup.id}"]`)).toContainText("Beta");
+        await expect(finalRow.locator(`[data-col-id="${numberRollup.id}"]`)).toHaveText("35");
     });
 
     test("binds a detached primary value and exposes the rebind action", async ({
