@@ -106,6 +106,21 @@ interface IAttributeView {
             id: string;
             name: string;
         }>;
+        gallery?: {
+            cardAspectRatio: number;
+            cardSize: number;
+            coverFrom: number;
+            coverFromAssetKeyID?: string;
+            displayFieldName: boolean;
+            fields: Array<{
+                hidden: boolean;
+                id: string;
+                wrap: boolean;
+            }>;
+            fitImage: boolean;
+            showIcon: boolean;
+            wrapField: boolean;
+        };
         id: string;
         itemIds?: string[];
         name: string;
@@ -1211,6 +1226,240 @@ test.describe("attribute views", () => {
         await expect(block.locator(
             `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
         )).toHaveAttribute("data-pin", "true");
+    });
+
+    test("persists gallery cover, card, and field display settings per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Gallery Settings E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const row = await addRow(page, block, "Gallery item");
+        const coverColumn = await addColumn(page, block, "mAsset", "Cover", "assets");
+        const detailsColumn = await addColumn(page, block, "text", "Details");
+        await editCell(page, row.row.locator(`[data-col-id="${detailsColumn.id}"]`),
+            "A detailed gallery description that should wrap across multiple lines.");
+        const png = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        const assetPath = await uploadAssetCell(page, row.row.locator(`[data-col-id="${coverColumn.id}"]`), {
+            buffer: png,
+            mimeType: "image/png",
+            name: `gallery-cover-${Date.now()}.png`,
+        });
+        expect(assetPath).toMatch(/^assets\/.+\.png$/);
+        const assetPanel = page.locator(".av__panel");
+        if (await assetPanel.count() > 0) {
+            await assetPanel.locator('[data-type="close"]').click({force: true});
+            await expect(assetPanel).toHaveCount(0);
+        }
+
+        const sourceViewID = await addAttributeViewView(page, block, "gallery");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID);
+            return {
+                current: av.viewID,
+                gallery: source?.gallery && {
+                    cardAspectRatio: source.gallery.cardAspectRatio,
+                    cardSize: source.gallery.cardSize,
+                    coverFrom: source.gallery.coverFrom,
+                    displayFieldName: source.gallery.displayFieldName,
+                    fitImage: source.gallery.fitImage,
+                    showIcon: source.gallery.showIcon,
+                    wrapField: source.gallery.wrapField,
+                },
+                type: source?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: sourceViewID,
+            gallery: {
+                cardAspectRatio: 0,
+                cardSize: 1,
+                coverFrom: 1,
+                displayFieldName: false,
+                fitImage: false,
+                showIcon: true,
+                wrapField: false,
+            },
+            type: "gallery",
+        });
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const readGallery = async (viewID: string) => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === viewID)?.gallery;
+        };
+        const duplicateBaseline = await readGallery(duplicateViewID);
+        expect(duplicateBaseline).toBeTruthy();
+        const baselineSummary = {
+            cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardSize: duplicateBaseline!.cardSize,
+            coverFrom: duplicateBaseline!.coverFrom,
+            coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
+            displayFieldName: duplicateBaseline!.displayFieldName,
+            fields: duplicateBaseline!.fields.map(field => ({...field})),
+            fitImage: duplicateBaseline!.fitImage,
+            showIcon: duplicateBaseline!.showIcon,
+            wrapField: duplicateBaseline!.wrapField,
+        };
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, document.docID);
+            block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", "gallery");
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-layout"]').click();
+        const chooseLayoutOption = async (trigger: string, action: string, label: string) => {
+            await panel.locator(`[data-type="${trigger}"]`).click();
+            const menu = page.locator("#commonMenu:not(.fn__none)");
+            await expect(menu).toBeVisible();
+            const transaction = waitForTransactionAction(page, action);
+            await menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: label}),
+            }).click();
+            await transaction;
+        };
+        await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
+        const largeLabel = await page.evaluate(() => window.siyuan.languages.large);
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardSize", largeLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatio", "1:1");
+
+        const toggleSetting = async (type: string, action: string, checked: boolean) => {
+            const input = panel.locator(`input[data-type="${type}"]`);
+            await expect(input).toBeChecked({checked: !checked});
+            const transaction = waitForTransactionAction(page, action);
+            await input.click();
+            await transaction;
+            await expect(input).toBeChecked({checked});
+        };
+        await toggleSetting("toggle-gallery-fit", "setAttrViewFitImage", true);
+        await toggleSetting("toggle-gallery-name", "setAttrViewDisplayFieldName", true);
+        await toggleSetting("toggle-entries-icons", "setAttrViewShowIcon", false);
+        await toggleSetting("toggle-entries-wrap", "setAttrViewWrapField", true);
+
+        await panel.locator('[data-type="go-config"]').click();
+        await panel.locator('[data-type="go-properties"]').click();
+        const detailsField = () => panel.locator(
+            `button[data-type="editCol"][data-id="${detailsColumn.id}"]`,
+        );
+        const hideTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await detailsField().locator('[data-type="hideCol"]').click();
+        await hideTransaction;
+        await expect.poll(async () => {
+            const gallery = await readGallery(sourceViewID);
+            return gallery?.fields.find(field => field.id === detailsColumn.id)?.hidden;
+        }, {timeout: 30000}).toBe(true);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        await expect.poll(async () => {
+            const source = await readGallery(sourceViewID);
+            const duplicate = await readGallery(duplicateViewID);
+            return {
+                duplicate: duplicate && {
+                    cardAspectRatio: duplicate.cardAspectRatio,
+                    cardSize: duplicate.cardSize,
+                    coverFrom: duplicate.coverFrom,
+                    coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
+                    displayFieldName: duplicate.displayFieldName,
+                    fields: duplicate.fields,
+                    fitImage: duplicate.fitImage,
+                    showIcon: duplicate.showIcon,
+                    wrapField: duplicate.wrapField,
+                },
+                source: source && {
+                    cardAspectRatio: source.cardAspectRatio,
+                    cardSize: source.cardSize,
+                    coverFrom: source.coverFrom,
+                    coverFromAssetKeyID: source.coverFromAssetKeyID,
+                    detailsHidden: source.fields.find(field => field.id === detailsColumn.id)?.hidden,
+                    displayFieldName: source.displayFieldName,
+                    fieldsWrapped: source.fields.every(field => field.wrap),
+                    fitImage: source.fitImage,
+                    showIcon: source.showIcon,
+                    wrapField: source.wrapField,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineSummary,
+            source: {
+                cardAspectRatio: 6,
+                cardSize: 2,
+                coverFrom: 2,
+                coverFromAssetKeyID: coverColumn.id,
+                detailsHidden: true,
+                displayFieldName: true,
+                fieldsWrapped: true,
+                fitImage: true,
+                showIcon: false,
+                wrapField: true,
+            },
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const sourceCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
+        await expect(block.locator(".av__gallery")).toHaveClass(/av__gallery--big/);
+        await expect(sourceCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--6/);
+        const coverImage = sourceCard.locator(".av__gallery-img");
+        await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
+        await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        await expect(sourceCard.locator(".av__gallery-field--name")).not.toHaveCount(0);
+        await expect(sourceCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect.poll(() => sourceCard.locator(".av__cell").evaluateAll(cells =>
+            cells.map(cell => cell.getAttribute("data-wrap"))), {timeout: 30000})
+            .toEqual(["true", "true", "true"]);
+
+        await switchView(duplicateViewID);
+        const duplicateCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
+        await expect(block.locator(".av__gallery")).not.toHaveClass(/av__gallery--small|av__gallery--big/);
+        await expect(duplicateCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--0/);
+        await expect(duplicateCard.locator(".av__gallery-field--name")).toHaveCount(0);
+        await expect(duplicateCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toBeVisible();
+        await expect.poll(() => duplicateCard.locator(".av__cell").evaluateAll(cells =>
+            cells.map(cell => cell.getAttribute("data-wrap"))), {timeout: 30000})
+            .toEqual(["false", "false", "false", "false"]);
+
+        await switchView(sourceViewID);
+        await expect(block.locator(".av__gallery")).toHaveClass(/av__gallery--big/);
+        await expect(block.locator(`.av__gallery-item[data-id="${row.id}"] .av__gallery-img`))
+            .toHaveClass(/av__gallery-img--fit/);
     });
 
     test("edits the database name, fields, row, and common cell values", async ({
