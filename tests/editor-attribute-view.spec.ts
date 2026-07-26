@@ -114,6 +114,15 @@ interface IAttributeView {
             column: string;
             order: string;
         }>;
+        table?: {
+            columns: Array<{
+                hidden: boolean;
+                id: string;
+                pin: boolean;
+                width: string;
+                wrap: boolean;
+            }>;
+        };
         type: string;
     }>;
 }
@@ -290,7 +299,7 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string,
     const headers = block.locator(".av__row--header .av__cell--header");
     const oldCount = await headers.count();
     const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
-    const transaction = waitForResponse(page, "/api/transactions", 30000);
+    const transaction = waitForTransactionAction(page, "addAttrViewCol");
     await expect(async () => {
         if (await menu.isVisible()) {
             await page.keyboard.press("Escape");
@@ -534,6 +543,29 @@ const sortSelectOptionBefore = async (page: Page, panel: Locator, sourceName: st
     await target.dispatchEvent("dragover", {dataTransfer, ...point});
     await expect(target).toHaveClass(/dragover__top/);
     await requestTransaction(page, () => target.dispatchEvent("drop", {dataTransfer, ...point}));
+    await dataTransfer.dispose();
+};
+
+const sortFieldBefore = async (page: Page, panel: Locator, sourceID: string, targetID: string) => {
+    const source = panel.locator(`button[data-type="editCol"][data-id="${sourceID}"]`);
+    const target = panel.locator(`button[data-type="editCol"][data-id="${targetID}"]`);
+    await expect(source).toBeVisible();
+    await expect(target).toBeVisible();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    const point = {
+        clientX: targetBox!.x + Math.min(8, targetBox!.width / 2),
+        clientY: targetBox!.y + 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(/dragover__top/);
+    const transaction = waitForTransactionAction(page, "sortAttrViewCol");
+    await target.dispatchEvent("drop", {dataTransfer, ...point});
+    await transaction;
     await dataTransfer.dispose();
 };
 
@@ -939,6 +971,246 @@ test.describe("attribute views", () => {
             `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
         )).toHaveClass(/item--focus/);
         await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+    });
+
+    test("persists field visibility, order, width, pin, and wrap per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Field Display E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const notesColumn = await addColumn(page, block, "text", "Notes");
+        const scoreColumn = await addColumn(page, block, "number", "Score");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        const editPanel = page.locator(".av__panel");
+        await expect(editPanel).toHaveCount(0);
+
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const sourceViewID = initial.viewID;
+        const sourceColumns = initial.views.find(view => view.id === sourceViewID)?.table?.columns;
+        expect(sourceColumns).toBeTruthy();
+        const baselineColumns = sourceColumns!.map(column => ({...column}));
+        const baselineOrder = baselineColumns.map(column => column.id);
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        const duplicateEditor = await getDocumentEditor(page, document.docID);
+        block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-properties"]').click();
+        await sortFieldBefore(page, panel, statusColumn.id, notesColumn.id);
+        const expectedOrder = baselineOrder.filter(id => id !== statusColumn.id);
+        expectedOrder.splice(expectedOrder.indexOf(notesColumn.id), 0, statusColumn.id);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === sourceViewID)?.table?.columns.map(column => column.id);
+        }, {timeout: 30000}).toEqual(expectedOrder);
+
+        const scoreField = () => panel.locator(
+            `button[data-type="editCol"][data-id="${scoreColumn.id}"]`,
+        );
+        const readScoreHidden = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === sourceViewID)?.table?.columns
+                .find(column => column.id === scoreColumn.id)?.hidden;
+        };
+        let visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="hideCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(true);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="showCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(false);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toBeVisible({timeout: 30000});
+        visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="hideCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(true);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        let notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        const oldWidth = await notesHeader.evaluate(element => (element as HTMLElement).clientWidth);
+        const widthHandle = notesHeader.locator(".av__widthdrag");
+        const handleBox = await widthHandle.boundingBox();
+        expect(handleBox).not.toBeNull();
+        const widthTransaction = waitForTransactionAction(page, "setAttrViewColWidth");
+        const resizePoint = {
+            x: handleBox!.x + handleBox!.width / 2,
+            y: handleBox!.y + handleBox!.height / 2,
+        };
+        await widthHandle.dispatchEvent("mousedown", {
+            button: 0,
+            clientX: resizePoint.x,
+            clientY: resizePoint.y,
+        });
+        await page.evaluate(point => {
+            globalThis.document.dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                clientX: point.x + 80,
+                clientY: point.y,
+            }));
+            globalThis.document.dispatchEvent(new MouseEvent("mouseup", {
+                bubbles: true,
+                clientX: point.x + 80,
+                clientY: point.y,
+            }));
+        }, resizePoint);
+        const widthResponse = await widthTransaction;
+        const widthPayload = widthResponse.request().postDataJSON() as {
+            transactions: Array<{
+                doOperations: Array<{
+                    action: string;
+                    data?: string;
+                    id?: string;
+                }>;
+            }>;
+        };
+        const widthOperation = widthPayload.transactions.flatMap(item => item.doOperations)
+            .find(operation => operation.action === "setAttrViewColWidth");
+        expect(widthOperation?.id).toBe(notesColumn.id);
+        expect(widthOperation?.data).toMatch(/^\d+px$/);
+        expect(Number.parseInt(widthOperation!.data!, 10)).toBeGreaterThanOrEqual(oldWidth + 75);
+        const notesWidth = widthOperation!.data!;
+        await expect(notesHeader).toHaveAttribute("style", new RegExp(`width:\\s*${notesWidth}`));
+
+        const openNotesHeaderMenu = async () => {
+            const menu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+            await expect(async () => {
+                if (await menu.isVisible()) {
+                    return;
+                }
+                await notesHeader.dispatchEvent("click");
+                await expect(menu).toBeVisible({timeout: 2000});
+            }).toPass({timeout: 15000});
+            return menu;
+        };
+        let headerMenu = await openNotesHeaderMenu();
+        const pinTransaction = waitForTransactionAction(page, "setAttrViewColPin");
+        await headerMenu.locator('[data-id="freezeCol"]').click();
+        await pinTransaction;
+        notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(notesHeader).toHaveAttribute("data-pin", "true");
+
+        headerMenu = await openNotesHeaderMenu();
+        const wrap = headerMenu.locator("input.b3-switch");
+        await expect(wrap).not.toBeChecked();
+        const wrapTransaction = waitForTransactionAction(page, "setAttrViewColWrap");
+        await wrap.click();
+        await wrapTransaction;
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID)?.table?.columns;
+            const duplicate = av.views.find(view => view.id === duplicateViewID)?.table?.columns;
+            const notes = source?.find(column => column.id === notesColumn.id);
+            const score = source?.find(column => column.id === scoreColumn.id);
+            return {
+                duplicate,
+                source: source && {
+                    notes: notes && {
+                        hidden: notes.hidden,
+                        pin: notes.pin,
+                        width: notes.width,
+                        wrap: notes.wrap,
+                    },
+                    order: source.map(column => column.id),
+                    scoreHidden: score?.hidden,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineColumns,
+            source: {
+                notes: {
+                    hidden: false,
+                    pin: true,
+                    width: notesWidth,
+                    wrap: true,
+                },
+                order: expectedOrder,
+                scoreHidden: true,
+            },
+        });
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(notesHeader).toHaveAttribute("data-pin", "true");
+        await expect(notesHeader).toHaveAttribute("data-wrap", "true");
+        await expect(notesHeader).toHaveAttribute("style", new RegExp(`width:\\s*${notesWidth}`));
+        await expect(notesHeader.locator(".av__cellheadericon--pin")).toHaveCount(1);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect.poll(() => block.locator(
+            ".av__row--header .av__cell--header",
+        ).evaluateAll(headers => headers.map(header => header.getAttribute("data-col-id"))), {
+            timeout: 30000,
+        }).toEqual(expectedOrder.filter(id => id !== scoreColumn.id));
+
+        await switchView(duplicateViewID);
+        const duplicateHeaders = block.locator(".av__row--header .av__cell--header");
+        await expect.poll(() => duplicateHeaders.evaluateAll(headers =>
+            headers.map(header => header.getAttribute("data-col-id"))), {timeout: 30000}).toEqual(baselineOrder);
+        const duplicateNotes = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toBeVisible();
+        await expect(duplicateNotes).toHaveAttribute("data-pin", "false");
+        await expect(duplicateNotes).toHaveAttribute("data-wrap", "false");
+        await expect(duplicateNotes).toHaveAttribute("style", /width:\s*200px/);
+        await expect(duplicateNotes.locator(".av__cellheadericon--pin")).toHaveCount(0);
+
+        await switchView(sourceViewID);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        )).toHaveAttribute("data-pin", "true");
     });
 
     test("edits the database name, fields, row, and common cell values", async ({
