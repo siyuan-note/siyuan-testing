@@ -2148,6 +2148,168 @@ test.describe("attribute views", () => {
         await expectRowOrder(reloadedBlock, [bravo.id]);
     });
 
+    test("combines multi-field sorting and nested OR filters across views", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        test.slow();
+        const document = await createTestDocument("Attribute View Advanced Rules E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const alphaLow = await addRow(page, block, "Alpha");
+        const alphaHigh = await addRow(page, block, "Alpha");
+        const bravo = await addRow(page, block, "Bravo");
+        const charlie = await addRow(page, block, "Charlie");
+        const scoreColumn = await addColumn(page, block, "number", "Score");
+        await editCell(page, alphaLow.row.locator(`[data-col-id="${scoreColumn.id}"]`), "10");
+        await editCell(page, alphaHigh.row.locator(`[data-col-id="${scoreColumn.id}"]`), "20");
+        await editCell(page, bravo.row.locator(`[data-col-id="${scoreColumn.id}"]`), "15");
+        await editCell(page, charlie.row.locator(`[data-col-id="${scoreColumn.id}"]`), "99");
+        const primaryColumn = block.locator('.av__row--header [data-dtype="block"]');
+        const primaryColumnID = await primaryColumn.getAttribute("data-col-id");
+        const primaryColumnName = await primaryColumn.locator(".av__celltext").innerText();
+        expect(primaryColumnID).toBeTruthy();
+
+        await block.locator('[data-type="av-sort"]').click();
+        const panel = page.locator(".av__panel .b3-menu");
+        await expect(panel).toBeVisible({timeout: 15000});
+        await panel.locator('[data-type="addSort"]').click();
+        let menu = page.locator('#commonMenu[data-name="av-add-sort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        await requestTransaction(page, () => menu.locator(".b3-menu__item").filter({
+            hasText: primaryColumnName,
+        }).click());
+
+        await panel.locator('[data-type="addSort"]').click();
+        menu = page.locator('#commonMenu[data-name="av-add-sort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        await requestTransaction(page, () => menu.locator(".b3-menu__item").filter({
+            hasText: "Score",
+        }).click());
+        const scoreSort = panel.locator(`.b3-menu__item[data-id="${scoreColumn.id}"]`);
+        await requestTransaction(page, async () => {
+            await scoreSort.locator("select").last().selectOption("DESC");
+        });
+
+        await panel.locator('[data-type="go-config"]').click();
+        await panel.locator('[data-type="goFilters"]').click();
+        await panel.locator('[data-type="addFilterCondition"][data-path=""]').click();
+        let conditionMenu = page.locator('#commonMenu[data-name="addFilterCondition"]:not(.fn__none)');
+        await expect(conditionMenu).toBeVisible();
+        await requestTransaction(page, () => conditionMenu.locator(".b3-menu__item").nth(1).click());
+
+        const nestedGroup = panel.locator('.av__filter-group-item[data-path="0"]');
+        await expect(nestedGroup).toBeVisible();
+        await nestedGroup.locator('[data-type="addFilterCondition"][data-path="0"]').click();
+        conditionMenu = page.locator('#commonMenu[data-name="addFilterCondition"]:not(.fn__none)');
+        await expect(conditionMenu).toBeVisible();
+        await conditionMenu.locator(".b3-menu__item").first().click();
+        const filterMenu = page.locator('#commonMenu[data-name="av-add-filter"]:not(.fn__none)');
+        await expect(filterMenu).toBeVisible();
+        await requestTransaction(page, () => filterMenu.locator(".b3-menu__item").filter({
+            hasText: primaryColumnName,
+        }).click());
+
+        const combination = panel.locator('[data-type="toggleCombination"][data-path="0"]');
+        await expect(combination).toBeVisible();
+        await requestTransaction(page, async () => {
+            await combination.selectOption("or");
+        });
+        const alphaFilter = panel.locator('.av__filter-row[data-path="0,0"] [data-type="filterValue"]');
+        const bravoFilter = panel.locator('.av__filter-row[data-path="0,1"] [data-type="filterValue"]');
+        await alphaFilter.fill("Alpha");
+        await requestTransaction(page, () => alphaFilter.press("Enter"));
+        await bravoFilter.fill("Bravo");
+        await requestTransaction(page, () => bravoFilter.press("Enter"));
+
+        const readCurrentRules = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const root = view?.filters?.[0] as {
+                combination?: string;
+                filters?: Array<{
+                    combination?: string;
+                    filters?: Array<{
+                        column?: string;
+                        operator?: string;
+                        value?: {block?: {content?: string}};
+                    }>;
+                }>;
+            };
+            const nested = root?.filters?.[0];
+            return {
+                combination: nested?.combination,
+                filters: nested?.filters?.map(filter => ({
+                    column: filter.column,
+                    operator: filter.operator,
+                    value: filter.value?.block?.content,
+                })),
+                sorts: view?.sorts,
+                viewID: av.viewID,
+            };
+        };
+        const originalViewID = (await getAttributeView(siyuanAPI, avID)).viewID;
+        await expect.poll(readCurrentRules, {timeout: 30000}).toEqual({
+            combination: "or",
+            filters: [
+                {column: primaryColumnID, operator: "Contains", value: "Alpha"},
+                {column: primaryColumnID, operator: "Contains", value: "Bravo"},
+            ],
+            sorts: [
+                {column: primaryColumnID, order: "ASC"},
+                {column: scoreColumn.id, order: "DESC"},
+            ],
+            viewID: originalViewID,
+        });
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expectRowOrder(block, [alphaHigh.id, alphaLow.id, bravo.id]);
+        const isolatedViewID = await addAttributeViewView(page, block, "table");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === isolatedViewID);
+            const countFilterLeaves = (filters: Array<{column?: string; filters?: unknown[]}> = []): number =>
+                filters.reduce((count, filter) => count + (filter.filters
+                    ? countFilterLeaves(filter.filters as Array<{column?: string; filters?: unknown[]}>)
+                    : (filter.column ? 1 : 0)), 0);
+            return {
+                current: av.viewID,
+                filterLeaves: countFilterLeaves(view?.filters),
+                sortCount: view?.sorts?.length || 0,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: isolatedViewID,
+            filterLeaves: 0,
+            sortCount: 0,
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expectRowOrder(block, [alphaLow.id, alphaHigh.id, bravo.id, charlie.id]);
+        await requestTransaction(page, () => block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${originalViewID}"]`,
+        ).click());
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(originalViewID);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator('[data-type="av-sort"]')).toHaveClass(/block__icon--active/);
+        await expect(block.locator('[data-type="av-filter"]')).toHaveClass(/block__icon--active/);
+        await expectRowOrder(block, [alphaHigh.id, alphaLow.id, bravo.id]);
+        await expect.poll(readCurrentRules, {timeout: 30000}).toMatchObject({
+            combination: "or",
+            viewID: originalViewID,
+        });
+    });
+
     test("groups rows and switches table, gallery, and kanban layouts", async ({
         createTestDocument,
         page,
