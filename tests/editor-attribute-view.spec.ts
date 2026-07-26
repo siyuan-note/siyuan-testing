@@ -123,6 +123,22 @@ interface IAttributeView {
         };
         id: string;
         itemIds?: string[];
+        kanban?: {
+            cardAspectRatio: number;
+            cardSize: number;
+            coverFrom: number;
+            coverFromAssetKeyID?: string;
+            displayFieldName: boolean;
+            fields: Array<{
+                hidden: boolean;
+                id: string;
+                wrap: boolean;
+            }>;
+            fillColBackgroundColor: boolean;
+            fitImage: boolean;
+            showIcon: boolean;
+            wrapField: boolean;
+        };
         name: string;
         pageSize?: number;
         sorts?: Array<{
@@ -474,7 +490,7 @@ const setNumberFormat = async (page: Page, header: Locator,
     await expect(panel).toHaveCount(0);
 };
 
-const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
+const editSelectCell = async (page: Page, cell: Locator, values: string[], waitForRender = true) => {
     const input = page.locator(".av__panel .b3-chips input:visible");
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
@@ -488,14 +504,16 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
     const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
         await input.fill(value);
-        if (type === "select") {
+        if (type === "select" && waitForRender) {
             await requestTransactionAndRender(page, () => input.press("Enter"));
         } else {
             await requestTransaction(page, () => input.press("Enter"));
         }
     }
     await expect(cell.locator(".b3-chip")).toHaveText(values);
-    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    if (waitForRender) {
+        await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    }
     if (await input.count() > 0) {
         await expect(async () => {
             const panel = input.locator(
@@ -1459,6 +1477,283 @@ test.describe("attribute views", () => {
         await switchView(sourceViewID);
         await expect(block.locator(".av__gallery")).toHaveClass(/av__gallery--big/);
         await expect(block.locator(`.av__gallery-item[data-id="${row.id}"] .av__gallery-img`))
+            .toHaveClass(/av__gallery-img--fit/);
+    });
+
+    test("persists kanban cover, card, field, and background settings per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Settings E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const planned = await addRow(page, block, "Planned card");
+        const done = await addRow(page, block, "Done card");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        const coverColumn = await addColumn(page, block, "mAsset", "Cover", "assets");
+        const detailsColumn = await addColumn(page, block, "text", "Details");
+        await editCell(page, planned.row.locator(`[data-col-id="${detailsColumn.id}"]`),
+            "A detailed Kanban description that should wrap across multiple lines.");
+        const png = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        const assetPath = await uploadAssetCell(page, planned.row.locator(`[data-col-id="${coverColumn.id}"]`), {
+            buffer: png,
+            mimeType: "image/png",
+            name: `kanban-cover-${Date.now()}.png`,
+        });
+        expect(assetPath).toMatch(/^assets\/.+\.png$/);
+        const assetPanel = page.locator(".av__panel");
+        if (await assetPanel.count() > 0) {
+            await assetPanel.locator('[data-type="close"]').click({force: true});
+            await expect(assetPanel).toHaveCount(0);
+        }
+        await editSelectCell(page, planned.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Planned"], false);
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await editSelectCell(page, block.locator(
+            `.av__row[data-id="${done.id}"] [data-col-id="${statusColumn.id}"]`,
+        ), ["Done"], false);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+
+        const sourceViewID = (await getAttributeView(siyuanAPI, avID)).viewID;
+        expect(sourceViewID).toBeTruthy();
+        const setupPanel = await openAttributeViewConfig(page, block);
+        await setupPanel.locator('[data-type="goGroups"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            setupPanel.locator(`[data-type="setGroupMethod"][data-id="${statusColumn.id}"]`).click(),
+        ]);
+        await setupPanel.locator('[data-type="go-config"]').click();
+        await setupPanel.locator('[data-type="go-layout"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/changeAttrViewLayout"),
+            setupPanel.locator('[data-type="set-layout"][data-view-type="kanban"]').click(),
+        ]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID);
+            return {
+                current: av.viewID,
+                group: source?.group && {
+                    field: source.group.field,
+                    hideEmpty: source.group.hideEmpty,
+                    method: source.group.method,
+                    order: source.group.order,
+                },
+                kanban: source?.kanban && {
+                    cardAspectRatio: source.kanban.cardAspectRatio,
+                    cardSize: source.kanban.cardSize,
+                    coverFrom: source.kanban.coverFrom,
+                    displayFieldName: source.kanban.displayFieldName,
+                    fillColBackgroundColor: source.kanban.fillColBackgroundColor,
+                    fitImage: source.kanban.fitImage,
+                    showIcon: source.kanban.showIcon,
+                    wrapField: source.kanban.wrapField,
+                },
+                type: source?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: sourceViewID,
+            group: {
+                field: statusColumn.id,
+                hideEmpty: true,
+                method: 0,
+                order: 3,
+            },
+            kanban: {
+                cardAspectRatio: 0,
+                cardSize: 1,
+                coverFrom: 1,
+                displayFieldName: false,
+                fillColBackgroundColor: false,
+                fitImage: false,
+                showIcon: true,
+                wrapField: false,
+            },
+            type: "kanban",
+        });
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block).toHaveAttribute("data-av-type", "kanban");
+        await expect(block.locator(".av__kanban-group")).toHaveCount(2);
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const readKanban = async (viewID: string) => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === viewID)?.kanban;
+        };
+        const duplicateBaseline = await readKanban(duplicateViewID);
+        expect(duplicateBaseline).toBeTruthy();
+        const baselineSummary = {
+            cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardSize: duplicateBaseline!.cardSize,
+            coverFrom: duplicateBaseline!.coverFrom,
+            coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
+            displayFieldName: duplicateBaseline!.displayFieldName,
+            fields: duplicateBaseline!.fields.map(field => ({...field})),
+            fillColBackgroundColor: duplicateBaseline!.fillColBackgroundColor,
+            fitImage: duplicateBaseline!.fitImage,
+            showIcon: duplicateBaseline!.showIcon,
+            wrapField: duplicateBaseline!.wrapField,
+        };
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, document.docID);
+            block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", "kanban");
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-layout"]').click();
+        const chooseLayoutOption = async (trigger: string, action: string, label: string) => {
+            await panel.locator(`[data-type="${trigger}"]`).click();
+            const menu = page.locator("#commonMenu:not(.fn__none)");
+            await expect(menu).toBeVisible();
+            const transaction = waitForTransactionAction(page, action);
+            await menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: label}),
+            }).click();
+            await transaction;
+        };
+        await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
+        const smallLabel = await page.evaluate(() => window.siyuan.languages.small);
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardSize", smallLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatio", "3:4");
+
+        const toggleSetting = async (type: string, action: string, checked: boolean) => {
+            const input = panel.locator(`input[data-type="${type}"]`);
+            await expect(input).toBeChecked({checked: !checked});
+            const transaction = waitForTransactionAction(page, action);
+            await input.click();
+            await transaction;
+            await expect(input).toBeChecked({checked});
+        };
+        await toggleSetting("toggle-gallery-fit", "setAttrViewFitImage", true);
+        await toggleSetting("toggle-gallery-name", "setAttrViewDisplayFieldName", true);
+        await toggleSetting("toggle-entries-icons", "setAttrViewShowIcon", false);
+        await toggleSetting("toggle-entries-wrap", "setAttrViewWrapField", true);
+        await toggleSetting("toggle-kanban-bg", "setAttrViewFillColBackgroundColor", true);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        await expect.poll(async () => {
+            const source = await readKanban(sourceViewID);
+            const duplicate = await readKanban(duplicateViewID);
+            return {
+                duplicate: duplicate && {
+                    cardAspectRatio: duplicate.cardAspectRatio,
+                    cardSize: duplicate.cardSize,
+                    coverFrom: duplicate.coverFrom,
+                    coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
+                    displayFieldName: duplicate.displayFieldName,
+                    fields: duplicate.fields,
+                    fillColBackgroundColor: duplicate.fillColBackgroundColor,
+                    fitImage: duplicate.fitImage,
+                    showIcon: duplicate.showIcon,
+                    wrapField: duplicate.wrapField,
+                },
+                source: source && {
+                    cardAspectRatio: source.cardAspectRatio,
+                    cardSize: source.cardSize,
+                    coverFrom: source.coverFrom,
+                    coverFromAssetKeyID: source.coverFromAssetKeyID,
+                    displayFieldName: source.displayFieldName,
+                    fieldsWrapped: source.fields.every(field => field.wrap),
+                    fillColBackgroundColor: source.fillColBackgroundColor,
+                    fitImage: source.fitImage,
+                    showIcon: source.showIcon,
+                    wrapField: source.wrapField,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineSummary,
+            source: {
+                cardAspectRatio: 3,
+                cardSize: 0,
+                coverFrom: 2,
+                coverFromAssetKeyID: coverColumn.id,
+                displayFieldName: true,
+                fieldsWrapped: true,
+                fillColBackgroundColor: true,
+                fitImage: true,
+                showIcon: false,
+                wrapField: true,
+            },
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const sourceGroups = block.locator(".av__kanban-group");
+        const sourceCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
+        await expect(sourceGroups).toHaveCount(2);
+        await expect.poll(() => sourceGroups.evaluateAll(groups =>
+            groups.map(group => group.classList.contains("av__kanban-group--small"))),
+        {timeout: 30000}).toEqual([true, true]);
+        await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
+        await expect.poll(() => sourceGroups.evaluateAll(groups =>
+            groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
+        {timeout: 30000}).toEqual([true, true]);
+        await expect(sourceCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--3/);
+        const coverImage = sourceCard.locator(".av__gallery-img");
+        await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
+        await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        await expect(sourceCard.locator(".av__gallery-field--name")).not.toHaveCount(0);
+        await expect(sourceCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveAttribute("data-wrap", "true");
+
+        await switchView(duplicateViewID);
+        const duplicateGroups = block.locator(".av__kanban-group");
+        const duplicateCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
+        await expect(duplicateGroups).toHaveCount(2);
+        await expect.poll(() => duplicateGroups.evaluateAll(groups => groups.map(group =>
+            group.classList.contains("av__kanban-group--small") ||
+            group.classList.contains("av__kanban-group--big"))),
+        {timeout: 30000}).toEqual([false, false]);
+        await expect(block.locator(".av__kanban")).not.toHaveClass(/av__kanban--bg/);
+        await expect.poll(() => duplicateGroups.evaluateAll(groups =>
+            groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
+        {timeout: 30000}).toEqual([false, false]);
+        await expect(duplicateCard.locator(".av__gallery-cover")).toHaveCount(0);
+        await expect(duplicateCard.locator(".av__gallery-field--name")).toHaveCount(0);
+        await expect(duplicateCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveAttribute("data-wrap", "false");
+
+        await switchView(sourceViewID);
+        await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
+        await expect(block.locator(`.av__gallery-item[data-id="${planned.id}"] .av__gallery-img`))
             .toHaveClass(/av__gallery-img--fit/);
     });
 
