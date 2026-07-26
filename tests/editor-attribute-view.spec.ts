@@ -100,6 +100,7 @@ interface IAttributeView {
         groups?: Array<{
             groupFolded: boolean;
             groupHidden: number;
+            groupItemIds?: string[];
             groupVal?: {
                 mSelect?: Array<{content: string}>;
             };
@@ -806,6 +807,179 @@ const openAttributeViewConfig = async (page: Page, block: Locator) => {
     const panel = page.locator(".av__panel .b3-menu");
     await expect(panel).toBeVisible({timeout: 15000});
     return panel;
+};
+
+const convertToGroupedLayout = async (page: Page, block: Locator, fieldID: string,
+                                      layout: "gallery" | "kanban") => {
+    const panel = await openAttributeViewConfig(page, block);
+    await panel.locator('[data-type="goGroups"]').click();
+    await Promise.all([
+        waitForResponse(page, "/api/av/setAttrViewGroup"),
+        panel.locator(`[data-type="setGroupMethod"][data-id="${fieldID}"]`).click(),
+    ]);
+    await panel.locator('[data-type="go-config"]').click();
+    await panel.locator('[data-type="go-layout"]').click();
+    await Promise.all([
+        waitForResponse(page, "/api/av/changeAttrViewLayout"),
+        panel.locator(`[data-type="set-layout"][data-view-type="${layout}"]`).click(),
+    ]);
+    await expect(block).toHaveAttribute("data-av-type", layout);
+    await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+    await expect(page.locator(".av__panel")).toHaveCount(0);
+};
+
+const setAttributeViewPageSize = async (page: Page, block: Locator, size: "5" | "all") => {
+    const panel = await openAttributeViewConfig(page, block);
+    await panel.locator('[data-type="go-layout"]').click();
+    await panel.locator('[data-type="set-page-size"]').click();
+    const menu = page.locator('#commonMenu[data-name="av-page-size"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    const label = size === "all"
+        ? await page.evaluate(() => window.siyuan.languages.all)
+        : size;
+    const transaction = waitForTransactionAction(page, "setAttrViewPageSize");
+    await menu.locator(".b3-menu__item").filter({
+        hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`),
+    }).click();
+    await transaction;
+    await expect(page.locator(".av__panel")).toHaveCount(0);
+};
+
+const prepareKanban = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
+                             rows: Array<{content: string; status: string}>) => {
+    const inserted = await insertAttributeView(page, editor);
+    const {avID, blockID} = inserted;
+    let block = inserted.block;
+    const statusColumn = await addColumn(page, block, "select", "Status");
+    const initial = await getAttributeView(siyuanAPI, avID);
+    const blockKey = initial.keyValues.find(item => item.key.type === "block");
+    expect(blockKey).toBeTruthy();
+    await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+        avID,
+        blocksValues: rows.map((row, index) => [{
+            block: {content: row.content},
+            keyID: blockKey!.key.id,
+        }, {
+            keyID: statusColumn.id,
+            mSelect: [{
+                color: ((index % 8) + 1).toString(),
+                content: row.status,
+            }],
+        }]),
+    });
+    await expect.poll(async () => {
+        const av = await getAttributeView(siyuanAPI, avID);
+        const values = av.keyValues.find(item => item.key.type === "block")?.values || [];
+        return rows.map(row => values.some(value => value.block?.content === row.content));
+    }, {timeout: 30000}).toEqual(rows.map(() => true));
+
+    await page.reload();
+    let reloadedEditor = await getDocumentEditor(page, docID);
+    block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await convertToGroupedLayout(page, block, statusColumn.id, "kanban");
+    await page.reload();
+    reloadedEditor = await getDocumentEditor(page, docID);
+    block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await expect(block).toHaveAttribute("data-av-type", "kanban");
+
+    const av = await getAttributeView(siyuanAPI, avID);
+    const blockValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+    const rowIDs = Object.fromEntries(rows.map(row => [
+        row.content,
+        blockValues.find(value => value.block?.content === row.content)?.blockID,
+    ]));
+    expect(Object.values(rowIDs).every(Boolean)).toBe(true);
+    return {avID, block, blockID, rowIDs: rowIDs as Record<string, string>, statusColumn};
+};
+
+const prepareSearchTable = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
+                                  rows: Array<{content: string; notes?: string}>) => {
+    const inserted = await insertAttributeView(page, editor);
+    const {avID, blockID} = inserted;
+    const notesColumn = await addColumn(page, inserted.block, "text", "Notes");
+    await expectPersistedAttributeView(siyuanAPI, docID, blockID, avID);
+    const initial = await getAttributeView(siyuanAPI, avID);
+    const blockKey = initial.keyValues.find(item => item.key.type === "block");
+    expect(blockKey).toBeTruthy();
+    await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+        avID,
+        blocksValues: rows.map(row => [{
+            block: {content: row.content},
+            keyID: blockKey!.key.id,
+        }, ...(row.notes === undefined ? [] : [{
+            keyID: notesColumn.id,
+            text: {content: row.notes},
+        }])]),
+    });
+    await expect.poll(async () => {
+        const av = await getAttributeView(siyuanAPI, avID);
+        return av.views.find(view => view.id === av.viewID)?.itemIds?.length;
+    }, {timeout: 30000}).toBe(rows.length);
+    await page.reload();
+    const reloadedEditor = await getDocumentEditor(page, docID);
+    const block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await expect(block).toBeVisible({timeout: 30000});
+    const av = await getAttributeView(siyuanAPI, avID);
+    const blockValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+    const rowIDs = Object.fromEntries(rows.map(row => [
+        row.content,
+        blockValues.find(value => value.block?.content === row.content)?.blockID,
+    ]));
+    expect(Object.values(rowIDs).every(Boolean)).toBe(true);
+    return {avID, block, blockID, notesColumn, rowIDs: rowIDs as Record<string, string>};
+};
+
+const getKanbanGroup = (block: Locator, label: string) => block.locator(".av__kanban-group").filter({
+    has: block.page().locator(".av__group-title .b3-chip", {hasText: label}),
+});
+
+const dragKanbanCard = async (page: Page, source: Locator, target: Locator,
+                              position: "top" | "bottom") => {
+    const sourceID = await source.getAttribute("data-id");
+    expect(sourceID).toBeTruthy();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    await expect.poll(() => dataTransfer.evaluate(transfer =>
+        Array.from(transfer.types).some(type => type.toLowerCase().includes("nodeattributeview"))),
+    {timeout: 10000}).toBe(true);
+    const point = {
+        clientX: targetBox!.x + targetBox!.width / 2,
+        clientY: position === "top" ? targetBox!.y + 2 : targetBox!.y + targetBox!.height - 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(new RegExp(`dragover__${position}`));
+    const transaction = waitForTransactionAction(page, "sortAttrViewRow");
+    await target.dispatchEvent("drop", {dataTransfer, ...point});
+    const response = await transaction;
+    const moved = page.locator(`.av__gallery-item[data-id="${sourceID}"]`).first();
+    if (await moved.count() > 0) {
+        await moved.dispatchEvent("dragend", {dataTransfer});
+    }
+    await dataTransfer.dispose();
+    return response.request().postDataJSON();
+};
+
+const searchAttributeView = async (page: Page, block: Locator, query: string) => {
+    const input = block.locator('[data-type="av-search"]');
+    if (await input.evaluate(element => (element as HTMLElement).style.width === "0px")) {
+        await block.locator('[data-type="av-search-icon"]').click();
+    }
+    await expect(input).toBeVisible();
+    const render = page.waitForResponse(response => {
+        if (new URL(response.url()).pathname !== "/api/av/renderAttributeView") {
+            return false;
+        }
+        const payload = response.request().postDataJSON() as {query?: string};
+        return payload.query === query;
+    }, {timeout: 30000});
+    await input.fill(query);
+    await render;
+    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    await expect(block.locator('[data-type="av-search"]')).toHaveText(query);
 };
 
 const expectRowOrder = async (block: Locator, ids: string[]) => {
@@ -1755,6 +1929,450 @@ test.describe("attribute views", () => {
         await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
         await expect(block.locator(`.av__gallery-item[data-id="${planned.id}"] .av__gallery-img`))
             .toHaveClass(/av__gallery-img--fit/);
+    });
+
+    test("moves a Kanban card across select groups with reverse, reapply, and reload persistence", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Cross Group E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Planned card", status: "Planned"},
+            {content: "Done card", status: "Done"},
+        ]);
+        const {avID, blockID, rowIDs, statusColumn} = prepared;
+        let block = prepared.block;
+        const plannedGroup = getKanbanGroup(block, "Planned");
+        const doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup).toHaveCount(1);
+        await expect(doneGroup).toHaveCount(1);
+        const plannedCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`);
+        const doneCard = doneGroup.locator(`.av__gallery-item[data-id="${rowIDs["Done card"]}"]`);
+
+        const dragPayload = await dragKanbanCard(page, plannedCard, doneCard, "bottom") as {
+            app: string;
+            session: string;
+            transactions: Array<{
+                doOperations: Array<Record<string, unknown>>;
+                undoOperations: Array<Record<string, unknown>>;
+            }>;
+        };
+        await expect(plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`)).toHaveCount(0);
+        await expect.poll(() => doneGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Done card"], rowIDs["Planned card"]]);
+
+        const readMoveState = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const status = av.keyValues.find(item => item.key.id === statusColumn.id)?.values
+                ?.find(value => value.blockID === rowIDs["Planned card"])?.mSelect?.map(option => option.content);
+            return {
+                done: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Done")?.groupItemIds,
+                planned: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds,
+                status,
+            };
+        };
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"], rowIDs["Planned card"]],
+            planned: [],
+            status: ["Done"],
+        });
+
+        const dragTransaction = dragPayload.transactions[0];
+        expect(dragTransaction.doOperations).toHaveLength(1);
+        expect(dragTransaction.undoOperations).toHaveLength(1);
+        expect(dragTransaction.undoOperations[0]).toMatchObject({
+            action: "sortAttrViewRow",
+            id: rowIDs["Planned card"],
+            previousID: "",
+        });
+        await siyuanAPI.post("/api/transactions", {
+            app: dragPayload.app,
+            reqId: Date.now(),
+            session: dragPayload.session,
+            transactions: [{
+                doOperations: dragTransaction.undoOperations,
+                undoOperations: dragTransaction.doOperations,
+            }],
+        });
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"]],
+            planned: [rowIDs["Planned card"]],
+            status: ["Planned"],
+        });
+        await siyuanAPI.post("/api/transactions", {
+            app: dragPayload.app,
+            reqId: Date.now(),
+            session: dragPayload.session,
+            transactions: [{
+                doOperations: dragTransaction.doOperations,
+                undoOperations: dragTransaction.undoOperations,
+            }],
+        });
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"], rowIDs["Planned card"]],
+            planned: [],
+            status: ["Done"],
+        });
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const reloadedDone = getKanbanGroup(block, "Done");
+        await expect.poll(() => reloadedDone.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Done card"], rowIDs["Planned card"]]);
+        await expect(block.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`)).toHaveCount(1);
+    });
+
+    test("reorders Kanban cards within a group and restores the order after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Reorder E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "First card", status: "Planned"},
+            {content: "Second card", status: "Planned"},
+            {content: "Third card", status: "Planned"},
+        ]);
+        const {avID, blockID, rowIDs} = prepared;
+        let block = prepared.block;
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        const firstCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["First card"]}"]`);
+        const thirdCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Third card"]}"]`);
+
+        await dragKanbanCard(page, thirdCard, firstCard, "top");
+        const expectedOrder = [rowIDs["Third card"], rowIDs["First card"], rowIDs["Second card"]];
+        await expect.poll(() => plannedGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000}).toEqual(expectedOrder);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return view?.groups?.find(group =>
+                group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds;
+        }, {timeout: 30000}).toEqual(expectedOrder);
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        await expect.poll(() => plannedGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000}).toEqual(expectedOrder);
+    });
+
+    test("adds a Kanban card from a group and assigns that group's select value", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Group Add E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Existing planned", status: "Planned"},
+            {content: "Existing done", status: "Done"},
+        ]);
+        const {avID, blockID, statusColumn} = prepared;
+        let block = prepared.block;
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        const oldCount = await plannedGroup.locator(".av__gallery-item").count();
+        await requestTransaction(page, () => plannedGroup.locator('[data-type="av-add-top"]').click());
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(oldCount + 1, {timeout: 30000});
+        const input = page.locator(".av__mask .b3-text-field");
+        await expect(input).toBeVisible();
+        await input.fill("New planned card");
+        await requestTransaction(page, () => input.press("Enter"));
+
+        let newRowID = "";
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const blockValue = av.keyValues.find(item => item.key.type === "block")?.values
+                ?.find(value => value.block?.content === "New planned card");
+            newRowID = blockValue?.blockID || "";
+            const status = av.keyValues.find(item => item.key.id === statusColumn.id)?.values
+                ?.find(value => value.blockID === newRowID)?.mSelect?.map(option => option.content);
+            const view = av.views.find(item => item.id === av.viewID);
+            return {
+                firstInGroup: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds?.[0],
+                status,
+            };
+        }, {timeout: 30000}).toEqual({
+            firstInGroup: expect.any(String),
+            status: ["Planned"],
+        });
+        expect(newRowID).toBeTruthy();
+        const state = await getAttributeView(siyuanAPI, avID);
+        expect(state.views.find(item => item.id === state.viewID)?.groups?.find(group =>
+            group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds?.[0]).toBe(newRowID);
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        await expect(plannedGroup.locator(".av__gallery-item").first()).toHaveAttribute("data-id", newRowID);
+        await expect(plannedGroup.locator(`.av__gallery-item[data-id="${newRowID}"]`))
+            .toContainText("New planned card");
+    });
+
+    test("loads Gallery pages incrementally and uses a bounded virtual window for large data", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Gallery Pagination E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const blockKey = initial.keyValues.find(item => item.key.type === "block");
+        expect(blockKey).toBeTruthy();
+        const contents = Array.from({length: 120}, (_, index) =>
+            `Gallery item ${index.toString().padStart(3, "0")}`);
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: contents.map(content => [{
+                block: {content},
+                keyID: blockKey!.key.id,
+            }]),
+        });
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === av.viewID)?.itemIds?.length;
+        }, {timeout: 30000}).toBe(contents.length);
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        let block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(block).toBeVisible({timeout: 30000});
+        const galleryViewID = await addAttributeViewView(page, block, "gallery");
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await setAttributeViewPageSize(page, block, "5");
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        const cards = block.locator(".av__body .av__gallery-item");
+        const loadMore = block.locator(".av__body [data-type=\"av-load-more\"]");
+        await expect(cards).toHaveCount(5);
+        await expect(loadMore).toBeVisible();
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === galleryViewID);
+            return {current: av.viewID, pageSize: view?.pageSize, type: view?.type};
+        }, {timeout: 30000}).toEqual({
+            current: galleryViewID,
+            pageSize: 5,
+            type: "gallery",
+        });
+
+        let render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await loadMore.click();
+        await render;
+        await expect(cards).toHaveCount(10);
+        await expect(loadMore).toBeVisible();
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "10");
+
+        render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await loadMore.click();
+        await render;
+        await expect(cards).toHaveCount(15);
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "15");
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(block.locator(".av__body .av__gallery-item")).toHaveCount(5);
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+
+        await setAttributeViewPageSize(page, block, "all");
+        await expect(block).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
+        await expect(block.locator(".av__body .av__gallery-item")).toHaveCount(100);
+        await expect.poll(() => block.locator(
+            ".av__body .av__gallery-item .av__cell[data-dtype=\"block\"]",
+        ).evaluateAll(items => items.map(item => item.textContent?.trim() || "")), {timeout: 30000}).toEqual(
+            contents.slice(0, 100),
+        );
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                itemCount: av.views.find(view => view.id === galleryViewID)?.itemIds?.length,
+                pageSize: av.views.find(view => view.id === galleryViewID)?.pageSize,
+            };
+        }, {timeout: 30000}).toEqual({
+            itemCount: 120,
+            pageSize: 102400,
+        });
+    });
+
+    test("loads Kanban groups independently and restores the persisted page size after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Pagination E2E", "Database seed");
+        const rows = [
+            ...Array.from({length: 8}, (_, index) => ({
+                content: `Planned ${index.toString().padStart(2, "0")}`,
+                status: "Planned",
+            })),
+            ...Array.from({length: 7}, (_, index) => ({
+                content: `Done ${index.toString().padStart(2, "0")}`,
+                status: "Done",
+            })),
+        ];
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, rows);
+        const {avID, blockID} = prepared;
+        let block = prepared.block;
+        await setAttributeViewPageSize(page, block, "5");
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        let doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        const plannedLoadMore = plannedGroup.locator('[data-type="av-load-more"]');
+        const doneLoadMore = doneGroup.locator('[data-type="av-load-more"]');
+        await expect(plannedLoadMore).toBeVisible();
+        await expect(doneLoadMore).toBeVisible();
+
+        const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await plannedLoadMore.click();
+        await render;
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(8);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(plannedLoadMore).toBeHidden();
+        await expect(doneLoadMore).toBeVisible();
+        await expect(plannedGroup.locator(".av__body")).toHaveAttribute("data-page-size", "10");
+        await expect(doneGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === av.viewID)?.pageSize;
+        }, {timeout: 30000}).toBe(5);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(plannedGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+        await expect(doneGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+    });
+
+    test("searches literal special text across fields and restores rows with empty values", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Search Boundary E2E", "Database seed");
+        const literal = "Literal %_[] ' OR 1=1 --";
+        const prepared = await prepareSearchTable(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Alpha row", notes: "Contains the unique needle"},
+            {content: "Empty notes row"},
+            {content: literal, notes: ""},
+        ]);
+        const {avID, block, notesColumn, rowIDs} = prepared;
+        const rows = block.locator(".av__body .av__row[data-id]");
+
+        await searchAttributeView(page, block, "unique needle");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Alpha row"]]);
+
+        await searchAttributeView(page, block, "%_[]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs[literal]]);
+        await expect(rows.first().locator('[data-dtype="block"]')).toContainText(literal);
+
+        await searchAttributeView(page, block, "missing-value");
+        await expect(rows).toHaveCount(0);
+        await expect(block.locator(".av__row--util [data-type=\"av-add-bottom\"]")).toBeVisible();
+
+        await searchAttributeView(page, block, "");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Alpha row"],
+            rowIDs["Empty notes row"],
+            rowIDs[literal],
+        ]);
+        const emptyNotes = block.locator(
+            `.av__row[data-id="${rowIDs["Empty notes row"]}"] [data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(emptyNotes).toHaveText("");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.keyValues.find(item => item.key.id === notesColumn.id)?.values
+                ?.some(value => value.blockID === rowIDs["Empty notes row"]) || false;
+        }, {timeout: 30000}).toBe(false);
+    });
+
+    test("removes a filtered row without losing the active Attribute View search", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Search Delete E2E", "Database seed");
+        const prepared = await prepareSearchTable(page, document.editor, document.docID, siyuanAPI, [
+            {content: "First match", notes: "shared needle"},
+            {content: "Second match", notes: "shared needle"},
+            {content: "Empty survivor"},
+        ]);
+        const {avID, blockID, rowIDs} = prepared;
+        let block = prepared.block;
+        await searchAttributeView(page, block, "shared needle");
+        let rows = block.locator(".av__body .av__row[data-id]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["First match"],
+            rowIDs["Second match"],
+        ]);
+
+        const firstMatch = block.locator(`.av__row[data-id="${rowIDs["First match"]}"]`);
+        await firstMatch.locator(".av__firstcol").click();
+        await expect(firstMatch).toHaveClass(/av__row--select/);
+        const removeTransaction = waitForTransactionAction(page, "removeAttrViewBlock");
+        await page.keyboard.press("Backspace");
+        await removeTransaction;
+        await expect(block.locator('[data-type="av-search"]')).toHaveText("shared needle");
+        rows = block.locator(".av__body .av__row[data-id]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Second match"]]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return {
+                itemCount: view?.itemIds?.length,
+                removed: view?.itemIds?.includes(rowIDs["First match"]) || false,
+            };
+        }, {timeout: 30000}).toEqual({
+            itemCount: 2,
+            removed: false,
+        });
+
+        await searchAttributeView(page, block, "");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Second match"],
+            rowIDs["Empty survivor"],
+        ]);
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator('[data-type="av-search"]')).toHaveText("");
+        await expect.poll(() => block.locator(".av__body .av__row[data-id]").evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Second match"],
+            rowIDs["Empty survivor"],
+        ]);
     });
 
     test("edits the database name, fields, row, and common cell values", async ({
