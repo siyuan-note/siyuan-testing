@@ -1,4 +1,4 @@
-import {BrowserContext, Locator, Page} from "@playwright/test";
+import {BrowserContext, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -279,11 +279,24 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string,
         await menu.locator(`[data-id="${menuID}"]`).click({force: true});
         await expect(headers).toHaveCount(oldCount + 1, {timeout: 2000});
     }).toPass({timeout: 30000});
-    await transaction;
-    const header = headers.last();
-    await expect(header).toHaveAttribute("data-dtype", type);
-    const id = await header.getAttribute("data-col-id");
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+                type?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "addAttrViewCol" && item.type === type);
+    const id = operation?.id;
     expect(id).toBeTruthy();
+    const header = block.locator(
+        `.av__row--header .av__cell--header[data-col-id="${id}"]`,
+    );
+    await expect(header).toHaveAttribute("data-dtype", type);
     const editPanel = page.locator(".av__panel");
     const nameInput = editPanel.locator('[data-type="name"]');
     await expect(nameInput).toBeVisible({timeout: 15000});
@@ -413,6 +426,76 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
             await expect(input).toHaveCount(0, {timeout: 1000});
         }).toPass({timeout: AV_RENDER_TIMEOUT});
     }
+};
+
+const openSelectCellPanel = async (page: Page, cell: Locator) => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await cell.click();
+        await expect(panel.locator(".b3-chips input")).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    return panel;
+};
+
+const renameSelectOption = async (page: Page, panel: Locator, oldName: string, newName: string) => {
+    const renamedOption = panel.locator(
+        `[data-type="addColOptionOrCell"][data-name="${newName}"]`,
+    );
+    await expect(async () => {
+        if (await renamedOption.isVisible()) {
+            return;
+        }
+        const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${oldName}"]`);
+        await expect(option).toBeVisible();
+        await option.locator('[data-type="setColOption"]').click();
+        const menu = page.locator('#commonMenu[data-name="av-col-option"]:not(.fn__none)');
+        const input = menu.locator("input.b3-text-field").first();
+        await expect(input).toBeVisible();
+        await input.fill(newName);
+        const transaction = waitForResponse(page, "/api/transactions", 5000);
+        await input.press("Enter");
+        await transaction;
+        await expect(menu).toBeHidden();
+        await expect(renamedOption).toBeVisible();
+    }).toPass({timeout: 30000});
+};
+
+const sortSelectOptionBefore = async (page: Page, panel: Locator, sourceName: string, targetName: string) => {
+    const source = panel.locator(`[data-type="addColOptionOrCell"][data-name="${sourceName}"]`);
+    const target = panel.locator(`[data-type="addColOptionOrCell"][data-name="${targetName}"]`);
+    await expect(source).toBeVisible();
+    await expect(target).toBeVisible();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    const point = {
+        clientX: targetBox!.x + Math.min(8, targetBox!.width / 2),
+        clientY: targetBox!.y + 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(/dragover__top/);
+    await requestTransaction(page, () => target.dispatchEvent("drop", {dataTransfer, ...point}));
+    await dataTransfer.dispose();
+};
+
+const deleteSelectOption = async (page: Page, panel: Locator, name: string) => {
+    const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${name}"]`);
+    await expect(option).toBeVisible();
+    await option.locator('[data-type="setColOption"]').click();
+    const menu = page.locator('#commonMenu[data-name="av-col-option"]:not(.fn__none)');
+    const deleteAction = menu.locator('[data-id="delete"]');
+    await expect(deleteAction).toBeVisible();
+    await deleteAction.click();
+    const confirm = page.locator("#confirmDialogConfirmBtn:visible");
+    await expect(confirm).toBeVisible();
+    await requestTransaction(page, () => confirm.click());
+    await expect(panel.locator(
+        `[data-type="addColOptionOrCell"][data-name="${name}"]`,
+    )).toHaveCount(0);
 };
 
 const editDateCell = async (page: Page, cell: Locator) => {
@@ -689,6 +772,119 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
             .toHaveText(["Frontend", "Urgent"]);
         await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
+    });
+
+    test("renames, reorders, and deletes single-select options across existing rows", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Select Options E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const first = await addRow(page, block, "First status item");
+        const second = await addRow(page, block, "Second status item");
+        const column = await addColumn(page, block, "select", "Status");
+        const firstCell = first.row.locator(`[data-col-id="${column.id}"]`);
+        const secondCell = second.row.locator(`[data-col-id="${column.id}"]`);
+        await editSelectCell(page, firstCell, ["Draft"]);
+        await editSelectCell(page, secondCell, ["Review"]);
+
+        let panel = await openSelectCellPanel(page, secondCell);
+        await renameSelectOption(page, panel, "Review", "Approved");
+        await expect(secondCell.locator(".b3-chip")).toHaveText("Approved");
+        await sortSelectOptionBefore(page, panel, "Approved", "Draft");
+        expect(await panel.locator('[data-type="addColOptionOrCell"]').evaluateAll(options =>
+            options.map(option => option.getAttribute("data-name")))).toEqual(["Approved", "Draft"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(panel).toHaveCount(0);
+
+        panel = await openSelectCellPanel(page, firstCell);
+        await deleteSelectOption(page, panel, "Draft");
+        await expect(firstCell.locator(".b3-chip")).toHaveCount(0);
+        await expect(secondCell.locator(".b3-chip")).toHaveText("Approved");
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const field = av.keyValues.find(item => item.key.id === column.id);
+            return {
+                first: field?.values?.find(value => value.blockID === first.id)?.mSelect
+                    ?.map(option => option.content) || [],
+                options: field?.key.options?.map(option => option.name),
+                second: field?.values?.find(value => value.blockID === second.id)?.mSelect
+                    ?.map(option => option.content) || [],
+            };
+        }, {timeout: 30000}).toEqual({
+            first: [],
+            options: ["Approved"],
+            second: ["Approved"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${first.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveCount(0);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${second.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText("Approved");
+    });
+
+    test("renames and deletes multi-select options across existing rows", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument(
+            "Attribute View Multi Select Options E2E", "Database seed",
+        );
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const first = await addRow(page, block, "First label item");
+        const second = await addRow(page, block, "Second label item");
+        const column = await addColumn(page, block, "mSelect", "Labels", "multiSelect");
+        const firstCell = first.row.locator(`[data-col-id="${column.id}"]`);
+        const secondCell = second.row.locator(`[data-col-id="${column.id}"]`);
+        await editSelectCell(page, firstCell, ["Frontend", "Urgent"]);
+        await editSelectCell(page, secondCell, ["Backend", "Urgent"]);
+
+        let panel = await openSelectCellPanel(page, firstCell);
+        await renameSelectOption(page, panel, "Urgent", "Critical");
+        await expect(firstCell.locator(".b3-chip")).toHaveText(["Frontend", "Critical"]);
+        await expect(secondCell.locator(".b3-chip")).toHaveText(["Backend", "Critical"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        panel = await openSelectCellPanel(page, secondCell);
+        await deleteSelectOption(page, panel, "Critical");
+        await expect(firstCell.locator(".b3-chip")).toHaveText(["Frontend"]);
+        await expect(secondCell.locator(".b3-chip")).toHaveText(["Backend"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const field = av.keyValues.find(item => item.key.id === column.id);
+            return {
+                first: field?.values?.find(value => value.blockID === first.id)?.mSelect
+                    ?.map(option => option.content) || [],
+                options: field?.key.options?.map(option => option.name),
+                second: field?.values?.find(value => value.blockID === second.id)?.mSelect
+                    ?.map(option => option.content) || [],
+            };
+        }, {timeout: 30000}).toEqual({
+            first: ["Frontend"],
+            options: ["Frontend", "Backend"],
+            second: ["Backend"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${first.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText(["Frontend"]);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${second.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText(["Backend"]);
     });
 
     test("edits URL, email, and phone values and restores their link semantics after reload", async ({
