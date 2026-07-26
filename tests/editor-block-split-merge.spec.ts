@@ -3,6 +3,7 @@ import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 
 interface ISyNode {
     ID?: string;
@@ -15,6 +16,12 @@ interface ISyNode {
 interface IParagraphState {
     id: string;
     text: string;
+}
+
+interface IListState {
+    items: number;
+    lists: number;
+    paragraphs: string[];
 }
 
 const flattenNodes = (node: ISyNode): ISyNode[] => [
@@ -66,6 +73,30 @@ const expectDocumentState = async (api: SiyuanAPI, docID: string, editor: Locato
     });
 };
 
+const getDOMListState = async (editor: Locator): Promise<IListState> => editor.evaluate(element => ({
+    items: element.querySelectorAll('[data-type="NodeListItem"]').length,
+    lists: element.querySelectorAll('[data-type="NodeList"]').length,
+    paragraphs: Array.from(element.querySelectorAll<HTMLElement>('[data-type="NodeParagraph"]'))
+        .map(item => item.querySelector('[contenteditable="true"]')?.textContent || ""),
+}));
+
+const getPersistedListState = async (api: SiyuanAPI, docID: string): Promise<IListState> => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const nodes = flattenNodes(document);
+    return {
+        items: nodes.filter(node => node.Type === "NodeListItem").length,
+        lists: nodes.filter(node => node.Type === "NodeList").length,
+        paragraphs: nodes.filter(node => node.Type === "NodeParagraph").map(getNodeText),
+    };
+};
+
+const expectListState = async (api: SiyuanAPI, docID: string, editor: Locator, state: IListState) => {
+    await expect.poll(() => getDOMListState(editor)).toEqual(state);
+    await assertValidListDOM(editor);
+    await assertValidSyListTree(api, docID, editor);
+    await expect.poll(() => getPersistedListState(api, docID)).toEqual(state);
+};
+
 const setCaretOffset = async (editable: Locator, offset: number) => {
     const result = await editable.evaluate((element, requestedOffset) => {
         element.focus();
@@ -95,6 +126,46 @@ const setCaretOffset = async (editable: Locator, offset: number) => {
     }, offset);
     expect(result.selected).toBe(true);
     return result.text;
+};
+
+const setCrossBlockRange = async (startEditable: Locator, startOffset: number,
+                                  endEditable: Locator, endOffset: number) => {
+    const endElement = await endEditable.elementHandle();
+    if (!endElement) {
+        throw new Error("cross-block range end is unavailable");
+    }
+    try {
+        return await startEditable.evaluate((startElement, options) => {
+            const getTextPoint = (element: Element, requestedOffset: number) => {
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                let remaining = requestedOffset;
+                let textNode = walker.nextNode();
+                while (textNode && remaining > (textNode.textContent || "").length) {
+                    remaining -= (textNode.textContent || "").length;
+                    textNode = walker.nextNode();
+                }
+                if (!textNode) {
+                    throw new Error(`cannot place selection at offset ${requestedOffset}`);
+                }
+                return {node: textNode, offset: remaining};
+            };
+            startElement.focus();
+            const start = getTextPoint(startElement, options.startOffset);
+            const end = getTextPoint(options.endElement, options.endOffset);
+            const range = document.createRange();
+            range.setStart(start.node, start.offset);
+            range.setEnd(end.node, end.offset);
+            const selection = getSelection();
+            if (!selection) {
+                throw new Error("selection is unavailable");
+            }
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return selection.toString();
+        }, {endElement, endOffset, startOffset});
+    } finally {
+        await endElement.dispose();
+    }
 };
 
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
@@ -187,5 +258,48 @@ test.describe("paragraph splitting and merging", () => {
             await page.reload();
             await expectDocumentState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
         });
+    });
+
+    test("deletes a cross-block range across nested list levels without leaving empty containers", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Nested List Cross Block Delete E2E",
+            "* a1\n    * 2\n        * 3\n            * 4b",
+        );
+        const initialState = {
+            items: 4,
+            lists: 4,
+            paragraphs: ["a1", "2", "3", "4b"],
+        };
+        const mergedState = {
+            items: 1,
+            lists: 1,
+            paragraphs: ["ab"],
+        };
+        await expectListState(siyuanAPI, docID, editor, initialState);
+
+        const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+        await expect(editables).toHaveCount(4);
+        const selectedText = await setCrossBlockRange(editables.first(), 1, editables.last(), 1);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("1234");
+
+        await requestTransaction(page, () => page.keyboard.press("Backspace"));
+        await expectListState(siyuanAPI, docID, editor, mergedState);
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+            UNDO_SHORTCUT, "undo");
+        await expectListState(siyuanAPI, docID, editor, initialState);
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+            REDO_SHORTCUT, "redo");
+        await expectListState(siyuanAPI, docID, editor, mergedState);
+
+        await page.reload();
+        await expectListState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
     });
 });
