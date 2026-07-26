@@ -3,11 +3,9 @@ import {expect, test} from "./fixtures";
 import {openBlockMenu} from "./helpers/blockMenu";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
-import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace} from "./helpers/runtime";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
-import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 
 interface ISyNode {
     ID?: string;
@@ -146,7 +144,7 @@ const getBlockTree = (block: Locator) => block.evaluate((element): IDOMBlockTree
 const getBlockIDs = (block: Locator) => block.evaluate(element => [
     element,
     ...Array.from(element.querySelectorAll("[data-node-id]")),
-].map(node => node.getAttribute("data-node-id") || "").filter(Boolean));
+].map((node: Element) => node.getAttribute("data-node-id") || "").filter(Boolean));
 
 const useBlockClipboardAction = async (page: Page, block: Locator, action: "copy" | "cut") => {
     const menu = await openBlockMenu(page, block, block.locator('[contenteditable="true"]').first());
@@ -256,9 +254,11 @@ const getSelectionBlockIDs = async (editor: Locator) => editor.evaluate(element 
     }
     const range = selection.getRangeAt(0);
     const getBlockID = (node: Node) => {
-        const target = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
-        const block = target?.closest<HTMLElement>("[data-node-id]");
-        return block && element.contains(block) ? block.dataset.nodeId || "" : "";
+        let block = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+        while (block && !block.hasAttribute("data-node-id")) {
+            block = block.parentElement;
+        }
+        return block && element.contains(block) ? block.getAttribute("data-node-id") || "" : "";
     };
     return {
         collapsed: range.collapsed,
@@ -393,18 +393,21 @@ const getCollapsedSelectionPosition = async (editor: Locator) => editor.evaluate
         return {blockID: "", collapsed: false, offset: -1};
     }
     const range = selection.getRangeAt(0);
-    const target = range.startContainer.nodeType === Node.ELEMENT_NODE ?
+    let block = range.startContainer.nodeType === Node.ELEMENT_NODE ?
         range.startContainer as Element : range.startContainer.parentElement;
-    const block = target?.closest<HTMLElement>("[data-node-id]");
-    const editable = block?.querySelector<HTMLElement>("[contenteditable=\"true\"]");
-    if (!block || !editable || !element.contains(block) || !editable.contains(range.startContainer)) {
+    while (block && !block.hasAttribute("data-node-id")) {
+        block = block.parentElement;
+    }
+    const editable = block?.firstElementChild;
+    if (!block || !editable || editable.getAttribute("contenteditable") !== "true" ||
+        !element.contains(block) || !editable.contains(range.startContainer)) {
         return {blockID: "", collapsed: range.collapsed, offset: -1};
     }
     const offsetRange = range.cloneRange();
     offsetRange.selectNodeContents(editable);
     offsetRange.setEnd(range.startContainer, range.startOffset);
     return {
-        blockID: block.dataset.nodeId || "",
+        blockID: block.getAttribute("data-node-id") || "",
         collapsed: range.collapsed,
         offset: offsetRange.toString().replace(/\u200B/g, "").length,
     };
