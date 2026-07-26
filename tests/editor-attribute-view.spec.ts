@@ -520,6 +520,35 @@ const editDateCell = async (page: Page, cell: Locator) => {
     return {display, isNotTime};
 };
 
+const setTimedDateRange = async (page: Page, cell: Locator, start: string, end: string) => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await cell.click();
+        await expect(panel.locator("input.b3-text-field").first()).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+
+    const dateInputs = panel.locator("input.b3-text-field");
+    const toggles = panel.locator('input[type="checkbox"]');
+    const endDateToggle = toggles.nth(0);
+    const includeTimeToggle = toggles.nth(1);
+    if (!await includeTimeToggle.isChecked()) {
+        await includeTimeToggle.click();
+    }
+    await expect(dateInputs.first()).toHaveAttribute("type", "datetime-local");
+    if (!await endDateToggle.isChecked()) {
+        await endDateToggle.click();
+    }
+    const endInput = dateInputs.nth(1);
+    await expect(endInput).toBeVisible();
+    await dateInputs.first().fill(start);
+    await endInput.fill(end);
+    const transaction = waitForResponse(page, "/api/transactions", 30000);
+    await endInput.press("Enter");
+    await transaction;
+    await expect(panel).toHaveCount(0);
+};
+
 const editTemplateCell = async (page: Page, cell: Locator, template: string) => {
     const input = page.locator(".av__mask .b3-text-field:visible");
     const block = cell.locator(
@@ -772,6 +801,98 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
             .toHaveText(["Frontend", "Urgent"]);
         await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
+    });
+
+    test("sets, clears, and restores a timed date range", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Date Range E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Scheduled item");
+        const column = await addColumn(page, block, "date", "Schedule");
+        const cell = row.row.locator(`[data-col-id="${column.id}"]`);
+        const firstRange = {
+            end: "2026-09-18T17:45",
+            start: "2026-09-14T09:15",
+        };
+        const firstTimestamps = await page.evaluate(range => ({
+            end: new Date(range.end).getTime(),
+            start: new Date(range.start).getTime(),
+        }), firstRange);
+        await setTimedDateRange(page, cell, firstRange.start, firstRange.end);
+        await expect(cell.locator(".av__celltext")).toContainText("2026-09-14 09:15");
+        await expect(cell.locator(".av__celltext")).toContainText("2026-09-18 17:45");
+
+        const readDateValue = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const value = av.keyValues.find(item => item.key.id === column.id)
+                ?.values?.find(item => item.blockID === row.id);
+            return {
+                content: value?.date?.content ?? null,
+                content2: value?.date?.content2 ?? null,
+                hasEndDate: value?.date?.hasEndDate ?? false,
+                isNotEmpty: value?.date?.isNotEmpty ?? false,
+                isNotEmpty2: value?.date?.isNotEmpty2 ?? false,
+                isNotTime: value?.date?.isNotTime ?? true,
+                type: value?.type,
+            };
+        };
+        await expect.poll(readDateValue, {timeout: 30000}).toEqual({
+            content: firstTimestamps.start,
+            content2: firstTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+            type: "date",
+        });
+
+        await cell.click();
+        let panel = page.locator(".av__panel");
+        await expect(panel.locator('[data-type="clearDate"]')).toBeVisible();
+        await requestTransaction(page, () => panel.locator('[data-type="clearDate"]').click());
+        await expect(panel).toHaveCount(0);
+        await expect(cell.locator(".av__celltext")).toHaveText("");
+        await expect.poll(readDateValue, {timeout: 30000}).toMatchObject({
+            hasEndDate: false,
+            isNotEmpty: false,
+            isNotEmpty2: false,
+            isNotTime: true,
+            type: "date",
+        });
+
+        const finalRange = {
+            end: "2026-10-23T16:40",
+            start: "2026-10-21T08:05",
+        };
+        const finalTimestamps = await page.evaluate(range => ({
+            end: new Date(range.end).getTime(),
+            start: new Date(range.start).getTime(),
+        }), finalRange);
+        await setTimedDateRange(page, cell, finalRange.start, finalRange.end);
+        await expect.poll(readDateValue, {timeout: 30000}).toEqual({
+            content: finalTimestamps.start,
+            content2: finalTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+            type: "date",
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedCell = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] ` +
+            `[data-col-id="${column.id}"]`,
+        );
+        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-21 08:05");
+        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-23 16:40");
+        await expect(reloadedCell.locator(".av__celltext")).toHaveAttribute(
+            "data-value", expect.stringContaining('"hasEndDate":true'),
+        );
     });
 
     test("renames, reorders, and deletes single-select options across existing rows", async ({
