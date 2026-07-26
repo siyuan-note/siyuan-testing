@@ -97,6 +97,15 @@ interface IAttributeView {
             method: number;
             order: number;
         };
+        groups?: Array<{
+            groupFolded: boolean;
+            groupHidden: number;
+            groupVal?: {
+                mSelect?: Array<{content: string}>;
+            };
+            id: string;
+            name: string;
+        }>;
         id: string;
         itemIds?: string[];
         name: string;
@@ -2368,6 +2377,176 @@ test.describe("attribute views", () => {
         const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
         await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
         await expect(reloadedBlock.locator(".av__body[data-group-id]")).toHaveCount(2);
+    });
+
+    test("sorts, hides, folds, and removes attribute view groups", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Group State E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const planned = await addRow(page, block, "Planned item");
+        const done = await addRow(page, block, "Done item");
+        const empty = await addRow(page, block, "Unassigned item");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        await statusColumn.header.click();
+        const headerMenu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+        await expect(headerMenu).toBeVisible();
+        await headerMenu.locator('[data-id="edit"]').click();
+        const columnPanel = page.locator(".av__panel");
+        const addOptionInput = columnPanel.locator('[data-type="addOption"]');
+        await expect(addOptionInput).toBeVisible();
+        await addOptionInput.fill("Deferred");
+        await requestTransaction(page, () => addOptionInput.press("Enter"));
+        await columnPanel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(columnPanel).toHaveCount(0);
+        await editSelectCell(page, planned.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Planned"]);
+        await editSelectCell(page, done.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Done"]);
+
+        let panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            panel.locator(`[data-type="setGroupMethod"][data-id="${statusColumn.id}"]`).click(),
+        ]);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(3, {timeout: 30000});
+
+        const hideEmpty = panel.locator('input[type="checkbox"]');
+        await expect(hideEmpty).toBeChecked();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            hideEmpty.click(),
+        ]);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(4, {timeout: 30000});
+
+        await panel.locator('[data-type="goGroupsSort"]').click();
+        let menu = page.locator('#commonMenu[data-name="avGroupSort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        const descendingLabel = await page.evaluate(() => window.siyuan.languages.desc);
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: descendingLabel}),
+            }).click(),
+        ]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(item => item.id === av.viewID)?.group?.order;
+        }, {timeout: 30000}).toBe(1);
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect.poll(() => block.locator(".av__group-title .b3-chip").evaluateAll(chips =>
+            chips.map(chip => chip.textContent?.trim() || "")), {timeout: 30000})
+            .toEqual(["Planned", "Done", "Deferred"]);
+
+        panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        const doneMenuItem = panel.locator("button.b3-menu__item[data-id]").filter({hasText: "Done"});
+        const doneGroupID = await doneMenuItem.getAttribute("data-id");
+        expect(doneGroupID).toBeTruthy();
+        const doneVisibility = doneMenuItem.locator('[data-type="hideGroup"]');
+        const toggleDoneVisibility = async () => {
+            const transaction = waitForTransactionAction(page, "hideAttrViewGroup");
+            await doneVisibility.click();
+            const response = await transaction;
+            const payload = response.request().postDataJSON() as {
+                transactions: Array<{
+                    doOperations: Array<{
+                        action: string;
+                        data?: number;
+                        id?: string;
+                    }>;
+                }>;
+            };
+            return payload.transactions.flatMap(item => item.doOperations)
+                .find(operation => operation.action === "hideAttrViewGroup");
+        };
+        if (await doneVisibility.locator("use").getAttribute("xlink:href") !== "#iconEye") {
+            expect(await toggleDoneVisibility()).toMatchObject({data: 0, id: doneGroupID});
+            await expect.poll(async () => {
+                const av = await getAttributeView(siyuanAPI, avID);
+                const view = av.views.find(item => item.id === av.viewID);
+                return view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Done")?.groupHidden;
+            }, {timeout: 30000}).toBe(0);
+        }
+        expect(await toggleDoneVisibility()).toMatchObject({data: 2, id: doneGroupID});
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return view?.groups?.find(group =>
+                group.groupVal?.mSelect?.[0]?.content === "Done")?.groupHidden;
+        }, {timeout: 30000}).toBe(2);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__group-title").filter({hasText: "Done"})).toHaveCount(0);
+        const plannedTitle = block.locator(".av__group-title").filter({hasText: "Planned"});
+        const plannedFold = plannedTitle.locator('[data-type="av-group-fold"]');
+        const foldTransaction = waitForTransactionAction(page, "foldAttrViewGroup");
+        await plannedFold.click();
+        await foldTransaction;
+        await expect(plannedTitle.locator("xpath=following-sibling::*[1]")).toHaveClass(/fn__none/);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const groups = new Map(view?.groups?.map(group => [
+                group.groupVal?.mSelect?.[0]?.content || "",
+                {
+                    folded: group.groupFolded,
+                    hidden: group.groupHidden,
+                },
+            ]));
+            return {
+                doneHidden: groups.get("Done")?.hidden,
+                group: view?.group && {
+                    field: view.group.field,
+                    hideEmpty: view.group.hideEmpty,
+                    method: view.group.method,
+                    order: view.group.order,
+                },
+                plannedFolded: groups.get("Planned")?.folded,
+            };
+        }, {timeout: 30000}).toEqual({
+            doneHidden: 2,
+            group: {
+                field: statusColumn.id,
+                hideEmpty: false,
+                method: 0,
+                order: 1,
+            },
+            plannedFolded: true,
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const reloadedPlannedTitle = block.locator(".av__group-title").filter({hasText: "Planned"});
+        await expect(reloadedPlannedTitle.locator("xpath=following-sibling::*[1]")).toHaveClass(/fn__none/);
+        await expect(block.locator(".av__group-title").filter({hasText: "Done"})).toHaveCount(0);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(3);
+
+        panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        const removeTransaction = waitForTransactionAction(page, "removeAttrViewGroup");
+        await panel.locator('[data-type="removeGroups"]').click();
+        await removeTransaction;
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(item => item.id === av.viewID)?.group || null;
+        }, {timeout: 30000}).toBeNull();
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__group-title")).toHaveCount(0);
+        await expectRowOrder(block, [planned.id, done.id, empty.id]);
     });
 
     test("pastes beyond existing rows while the database uses virtual scrolling", async ({
