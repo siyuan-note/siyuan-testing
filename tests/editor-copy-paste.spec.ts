@@ -1,5 +1,8 @@
 import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {openBlockMenu} from "./helpers/blockMenu";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
+import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace} from "./helpers/runtime";
@@ -50,8 +53,8 @@ const allowClipboard = async (context: BrowserContext, baseURL: string | undefin
 const expectClipboardText = async (page: Page, expectedParts: string[]) => {
     await expect.poll(async () => {
         const text = await page.evaluate(() => navigator.clipboard.readText());
-        return expectedParts.every(part => text.includes(part));
-    }).toBe(true);
+        return expectedParts.filter(part => !text.includes(part));
+    }).toEqual([]);
 };
 
 const pasteBlocks = async (page: Page) => {
@@ -119,6 +122,53 @@ const focusAtEnd = async (block: Locator) => {
         selection.addRange(range);
     });
     return editable;
+};
+
+interface IDOMBlockTree {
+    type: string;
+    subtype: string;
+    text: string;
+    children: IDOMBlockTree[];
+}
+
+const getBlockTree = (block: Locator) => block.evaluate((element): IDOMBlockTree => {
+    const visit = (node: Element): IDOMBlockTree => ({
+        type: node.getAttribute("data-type") || "",
+        subtype: node.getAttribute("data-subtype") || "",
+        text: node.querySelector(":scope > [contenteditable=\"true\"]")?.textContent?.trim() || "",
+        children: Array.from(node.children)
+            .filter(child => child.hasAttribute("data-node-id"))
+            .map(visit),
+    });
+    return visit(element);
+});
+
+const getBlockIDs = (block: Locator) => block.evaluate(element => [
+    element,
+    ...Array.from(element.querySelectorAll("[data-node-id]")),
+].map(node => node.getAttribute("data-node-id") || "").filter(Boolean));
+
+const useBlockClipboardAction = async (page: Page, block: Locator, action: "copy" | "cut") => {
+    const menu = await openBlockMenu(page, block, block.locator('[contenteditable="true"]').first());
+    if (action === "cut") {
+        await menu.locator('[data-id="cut"]').first().click();
+        return;
+    }
+    const copy = menu.locator('[data-id="copy"]').first();
+    await copy.hover();
+    const copyContent = copy.locator('.b3-menu__submenu [data-id="copy"]').first();
+    await expect(copyContent).toBeVisible();
+    await copyContent.click();
+};
+
+const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
+                                    action: "undo" | "redo") => {
+    const response = page.waitForResponse(item =>
+        new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 30000});
+    const editable = editor.locator('[contenteditable="true"]').last();
+    await editable.focus();
+    await page.keyboard.press(shortcut);
+    expect((await response).ok()).toBe(true);
 };
 
 const selectParagraphRange = async (editor: Locator, startIndex: number, endIndex: number) => {
@@ -928,6 +978,141 @@ test.describe("block copy, cut, and paste", () => {
         await expect.poll(() => getTopBlockIdentity(editor).then(items => items.map(item => item.type)))
             .toEqual(["NodeList"]);
         await assertValidSyListTree(siyuanAPI, docID, editor);
+    });
+
+    test("copies a nested list across documents with an independent valid subtree", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+        trackTestDocument,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const destination = await createTestDocument(
+            "Nested List Copy Destination E2E",
+            "Destination anchor",
+        );
+        const sourceTitle = `Nested List Copy Source E2E ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const sourceID = await siyuanAPI.createDocument(destination.notebookID, sourceTitle, [
+            "* Parent item",
+            "  * Nested child",
+            "    * Deep child",
+            "* Sibling item",
+        ].join("\n"));
+        trackTestDocument({id: sourceID, notebookID: destination.notebookID, title: sourceTitle});
+
+        const sourcePage = await context.newPage();
+        try {
+            await openWorkspace(sourcePage, `/?id=${sourceID}`);
+            const sourceEditor = await getDocumentEditor(sourcePage, sourceID);
+            const sourceList = sourceEditor.locator(':scope > [data-type="NodeList"]');
+            await expect(sourceList).toHaveCount(1);
+            const sourceTree = await getBlockTree(sourceList);
+            const sourceIDs = await getBlockIDs(sourceList);
+            expect(sourceIDs.length).toBeGreaterThan(6);
+            await assertValidListDOM(sourceEditor);
+            await assertValidSyListTree(siyuanAPI, sourceID, sourceEditor);
+
+            await useBlockClipboardAction(sourcePage, sourceList, "copy");
+            await expectClipboardText(sourcePage, ["Parent item", "Nested child", "Deep child", "Sibling item"]);
+
+            const anchor = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
+            await focusAtEnd(anchor);
+            await page.keyboard.press("Enter");
+            await expect(destination.editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
+            await focusAtEnd(destination.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+            await pasteBlocks(page);
+
+            const copiedList = destination.editor.locator(':scope > [data-type="NodeList"]');
+            await expect(copiedList).toHaveCount(1);
+            await expect.poll(() => getBlockTree(copiedList)).toEqual(sourceTree);
+            const copiedIDs = await getBlockIDs(copiedList);
+            expect(copiedIDs).toHaveLength(sourceIDs.length);
+            expect(copiedIDs.some(id => sourceIDs.includes(id))).toBe(false);
+            expect(new Set([...sourceIDs, ...copiedIDs]).size).toBe(sourceIDs.length + copiedIDs.length);
+            await assertValidListDOM(destination.editor);
+            await assertValidSyListTree(siyuanAPI, destination.docID, destination.editor);
+
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, destination.docID);
+            const reloadedList = reloadedEditor.locator(':scope > [data-type="NodeList"]');
+            await expect.poll(() => getBlockTree(reloadedList)).toEqual(sourceTree);
+            await expect.poll(() => getBlockIDs(reloadedList)).toEqual(copiedIDs);
+            await assertValidListDOM(reloadedEditor);
+            await assertValidSyListTree(siyuanAPI, destination.docID, reloadedEditor);
+        } finally {
+            await sourcePage.close();
+        }
+    });
+
+    test("cuts and pastes a nested list while preserving subtree IDs through undo and redo", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const document = await createTestDocument("Nested List Cut Undo E2E", [
+            "* Parent item",
+            "  * Nested child",
+            "* Sibling item",
+            "",
+            "Paste anchor",
+        ].join("\n"));
+        const list = document.editor.locator(':scope > [data-type="NodeList"]');
+        const anchor = document.editor.locator(':scope > [data-type="NodeParagraph"]').filter({hasText: "Paste anchor"});
+        const originalTree = await getBlockTree(list);
+        const originalIDs = await getBlockIDs(list);
+        const anchorID = await anchor.getAttribute("data-node-id");
+        expect(anchorID).toBeTruthy();
+
+        await useBlockClipboardAction(page, list, "cut");
+        await expectClipboardText(page, ["Parent item", "Nested child", "Sibling item"]);
+        await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await expect.poll(async () => Object.values(await siyuanAPI.checkBlocksExist(originalIDs)), {
+            timeout: 30000,
+        }).toEqual(originalIDs.map(() => false));
+        await focusAtEnd(anchor);
+        await page.keyboard.press("Enter");
+        await focusAtEnd(document.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+        await pasteBlocks(page);
+
+        let movedList = document.editor.locator(':scope > [data-type="NodeList"]');
+        await expect.poll(() => getBlockTree(movedList)).toEqual(originalTree);
+        await expect.poll(() => getBlockIDs(movedList)).toEqual(originalIDs);
+        await assertValidListDOM(document.editor);
+        await assertValidSyListTree(siyuanAPI, document.docID, document.editor);
+
+        await requestHistoryAction(page, document.editor, UNDO_SHORTCUT, "undo");
+        await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await requestHistoryAction(page, document.editor, UNDO_SHORTCUT, "undo");
+        await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await requestHistoryAction(page, document.editor, UNDO_SHORTCUT, "undo");
+        movedList = document.editor.locator(':scope > [data-type="NodeList"]');
+        await expect.poll(() => getBlockTree(movedList)).toEqual(originalTree);
+        await expect.poll(() => getBlockIDs(movedList)).toEqual(originalIDs);
+        await expect.poll(() => document.editor.locator(":scope > [data-node-id]").evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id")))).toEqual([originalIDs[0], anchorID]);
+
+        await requestHistoryAction(page, document.editor, REDO_SHORTCUT, "redo");
+        await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await requestHistoryAction(page, document.editor, REDO_SHORTCUT, "redo");
+        await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await requestHistoryAction(page, document.editor, REDO_SHORTCUT, "redo");
+        movedList = document.editor.locator(':scope > [data-type="NodeList"]');
+        await expect.poll(() => getBlockTree(movedList)).toEqual(originalTree);
+        await expect.poll(() => getBlockIDs(movedList)).toEqual(originalIDs);
+        await assertValidListDOM(document.editor);
+        await assertValidSyListTree(siyuanAPI, document.docID, document.editor);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        await expect.poll(() => getBlockIDs(reloadedEditor.locator(':scope > [data-type="NodeList"]')))
+            .toEqual(originalIDs);
+        await assertValidListDOM(reloadedEditor);
+        await assertValidSyListTree(siyuanAPI, document.docID, reloadedEditor);
     });
 
     test("copies rich text across documents while preserving inline semantics", async ({

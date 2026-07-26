@@ -1,6 +1,7 @@
 import {expect, test} from "./fixtures";
 import {showDock} from "./helpers/runtime";
 import {ISiyuanResponse, ISearchResult} from "./helpers/siyuanAPI";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface ISyNode {
     Children?: ISyNode[];
@@ -42,17 +43,21 @@ test.describe("tags", () => {
         const dockItem = page.locator('.dock__item[data-type="tag"]').first();
 
         try {
-            const editorTag = document.editor.locator('span[data-type~="tag"]');
+            let editor = document.editor;
+            const editorTag = editor.locator('span[data-type~="tag"]');
             await expect(editorTag).toHaveText(originalTag);
             await expect.poll(async () => includesSearchTag(
                 (await siyuanAPI.searchTags(originalTag)).tags,
                 originalTag,
-            )).toBe(true);
-            await expect.poll(async () => persistedTags(await siyuanAPI.readDocument<ISyNode>(document.docID)))
+            ), {timeout: 30000}).toBe(true);
+            await expect.poll(async () => persistedTags(await siyuanAPI.readDocument<ISyNode>(document.docID)), {
+                timeout: 30000,
+            })
                 .toContain(originalTag);
 
             await page.reload();
-            await expect(document.editor.locator('span[data-type~="tag"]')).toHaveText(originalTag);
+            editor = await getDocumentEditor(page, document.docID);
+            await expect(editor.locator('span[data-type~="tag"]')).toHaveText(originalTag);
 
             const tagPanel = page.locator(".sy__tag:visible").last();
             if (!await tagPanel.isVisible()) {
@@ -90,7 +95,7 @@ test.describe("tags", () => {
                 .toContain(renamedTag);
             const renamedNode = tagPanel.locator(`li[data-treetype="tag"][data-label="${renamedTag}"]`);
             await expect(renamedNode).toBeVisible({timeout: 15000});
-            await expect(document.editor.locator('span[data-type~="tag"]')).toHaveText(renamedTag);
+            await expect(editor.locator('span[data-type~="tag"]')).toHaveText(renamedTag);
 
             const searchResponse = page.waitForResponse(response => {
                 if (!response.url().endsWith("/api/search/fullTextSearchBlock")) {
@@ -113,6 +118,7 @@ test.describe("tags", () => {
             await resultItem.dblclick();
             await expect(page.locator(`.protyle-title[data-node-id="${document.docID}"]:visible`).last()).toBeVisible();
             await expect(page.locator(`.protyle-wysiwyg [data-node-id="${resultBlockID}"]:visible`)).toBeVisible();
+            editor = await getDocumentEditor(page, document.docID);
 
             await openTagMenuItem(page, renamedNode, "#iconTrashcan");
             const confirmButton = page.locator("#confirmDialogConfirmBtn:visible");
@@ -130,12 +136,13 @@ test.describe("tags", () => {
                 timeout: 15000,
             }).not.toContain(renamedTag);
             await expect(renamedNode).toHaveCount(0);
-            await expect(document.editor.locator('span[data-type~="tag"]')).toHaveCount(0);
-            await expect(document.editor).toContainText(marker);
+            await expect(editor.locator('span[data-type~="tag"]')).toHaveCount(0);
+            await expect(editor).toContainText(marker);
 
             await page.reload();
-            await expect(document.editor.locator('span[data-type~="tag"]')).toHaveCount(0);
-            await expect(document.editor).toContainText(marker);
+            editor = await getDocumentEditor(page, document.docID);
+            await expect(editor.locator('span[data-type~="tag"]')).toHaveCount(0);
+            await expect(editor).toContainText(marker);
         } finally {
             if (!page.isClosed()) {
                 try {

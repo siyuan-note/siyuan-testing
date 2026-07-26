@@ -1,8 +1,9 @@
-import {BrowserContext, Locator, Page} from "@playwright/test";
+import {BrowserContext, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {waitForTransactionAction} from "./helpers/transactions";
 
 const AV_RENDER_TIMEOUT = 15000;
 
@@ -19,6 +20,7 @@ interface IAttributeViewKey {
     created?: {includeTime: boolean};
     id: string;
     name: string;
+    numberFormat?: string;
     options?: Array<{
         color: string;
         name: string;
@@ -96,14 +98,68 @@ interface IAttributeView {
             method: number;
             order: number;
         };
+        groups?: Array<{
+            groupFolded: boolean;
+            groupHidden: number;
+            groupItemIds?: string[];
+            groupVal?: {
+                mSelect?: Array<{content: string}>;
+            };
+            id: string;
+            name: string;
+        }>;
+        gallery?: {
+            cardAspectRatio: number;
+            cardAspectRatioValue?: number;
+            cardSize: number;
+            cardWidth?: number;
+            coverFrom: number;
+            coverFromAssetKeyID?: string;
+            displayFieldName: boolean;
+            fields: Array<{
+                hidden: boolean;
+                id: string;
+                wrap: boolean;
+            }>;
+            fitImage: boolean;
+            showIcon: boolean;
+            wrapField: boolean;
+        };
         id: string;
         itemIds?: string[];
+        kanban?: {
+            cardAspectRatio: number;
+            cardAspectRatioValue?: number;
+            cardSize: number;
+            cardWidth?: number;
+            coverFrom: number;
+            coverFromAssetKeyID?: string;
+            displayFieldName: boolean;
+            fields: Array<{
+                hidden: boolean;
+                id: string;
+                wrap: boolean;
+            }>;
+            fillColBackgroundColor: boolean;
+            fitImage: boolean;
+            showIcon: boolean;
+            wrapField: boolean;
+        };
         name: string;
         pageSize?: number;
         sorts?: Array<{
             column: string;
             order: string;
         }>;
+        table?: {
+            columns: Array<{
+                hidden: boolean;
+                id: string;
+                pin: boolean;
+                width: string;
+                wrap: boolean;
+            }>;
+        };
         type: string;
     }>;
 }
@@ -267,7 +323,7 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string,
     const headers = block.locator(".av__row--header .av__cell--header");
     const oldCount = await headers.count();
     const menu = page.locator('#commonMenu[data-name="av-header-add"]:not(.fn__none)');
-    const transaction = waitForResponse(page, "/api/transactions", 30000);
+    const transaction = waitForTransactionAction(page, "addAttrViewCol");
     await expect(async () => {
         if (await menu.isVisible()) {
             await page.keyboard.press("Escape");
@@ -279,11 +335,24 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string,
         await menu.locator(`[data-id="${menuID}"]`).click({force: true});
         await expect(headers).toHaveCount(oldCount + 1, {timeout: 2000});
     }).toPass({timeout: 30000});
-    await transaction;
-    const header = headers.last();
-    await expect(header).toHaveAttribute("data-dtype", type);
-    const id = await header.getAttribute("data-col-id");
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+                type?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "addAttrViewCol" && item.type === type);
+    const id = operation?.id;
     expect(id).toBeTruthy();
+    const header = block.locator(
+        `.av__row--header .av__cell--header[data-col-id="${id}"]`,
+    );
+    await expect(header).toHaveAttribute("data-dtype", type);
     const editPanel = page.locator(".av__panel");
     const nameInput = editPanel.locator('[data-type="name"]');
     await expect(nameInput).toBeVisible({timeout: 15000});
@@ -382,7 +451,39 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     await expect(input).toHaveCount(0);
 };
 
-const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
+const setNumberFormat = async (page: Page, header: Locator,
+                               format: "commas" | "percent" | "USD") => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(header).toBeVisible();
+        await header.click();
+        const headerMenu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+        await expect(headerMenu).toBeVisible({timeout: 2000});
+        await headerMenu.locator('[data-id="edit"]').click();
+        await expect(panel.locator('[data-type="numberFormat"]')).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    await panel.locator('[data-type="numberFormat"]').click();
+
+    const menu = page.locator('#commonMenu[data-name="av-col-format-number"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    const label = await page.evaluate(value => {
+        if (value === "commas") {
+            return window.siyuan.languages.numberFormatCommas;
+        }
+        if (value === "percent") {
+            return window.siyuan.languages.numberFormatPercent;
+        }
+        return window.siyuan.languages.numberFormatUSD;
+    }, format);
+    const option = menu.locator(".b3-menu__item").filter({
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    });
+    await expect(option).toBeVisible();
+    await requestTransaction(page, () => option.click());
+    await expect(panel).toHaveCount(0);
+};
+
+const editSelectCell = async (page: Page, cell: Locator, values: string[], waitForRender = true) => {
     const input = page.locator(".av__panel .b3-chips input:visible");
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
@@ -396,14 +497,16 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
     const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
         await input.fill(value);
-        if (type === "select") {
+        if (type === "select" && waitForRender) {
             await requestTransactionAndRender(page, () => input.press("Enter"));
         } else {
             await requestTransaction(page, () => input.press("Enter"));
         }
     }
     await expect(cell.locator(".b3-chip")).toHaveText(values);
-    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    if (waitForRender) {
+        await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    }
     if (await input.count() > 0) {
         await expect(async () => {
             const panel = input.locator(
@@ -413,6 +516,99 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
             await expect(input).toHaveCount(0, {timeout: 1000});
         }).toPass({timeout: AV_RENDER_TIMEOUT});
     }
+};
+
+const openSelectCellPanel = async (page: Page, cell: Locator) => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await cell.click();
+        await expect(panel.locator(".b3-chips input")).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    return panel;
+};
+
+const renameSelectOption = async (page: Page, panel: Locator, oldName: string, newName: string) => {
+    const renamedOption = panel.locator(
+        `[data-type="addColOptionOrCell"][data-name="${newName}"]`,
+    );
+    await expect(async () => {
+        if (await renamedOption.isVisible()) {
+            return;
+        }
+        const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${oldName}"]`);
+        await expect(option).toBeVisible();
+        await option.locator('[data-type="setColOption"]').click();
+        const menu = page.locator('#commonMenu[data-name="av-col-option"]:not(.fn__none)');
+        const input = menu.locator("input.b3-text-field").first();
+        await expect(input).toBeVisible();
+        await input.fill(newName);
+        const transaction = waitForResponse(page, "/api/transactions", 5000);
+        await input.press("Enter");
+        await transaction;
+        await expect(menu).toBeHidden();
+        await expect(renamedOption).toBeVisible();
+    }).toPass({timeout: 30000});
+};
+
+const sortSelectOptionBefore = async (page: Page, panel: Locator, sourceName: string, targetName: string) => {
+    const source = panel.locator(`[data-type="addColOptionOrCell"][data-name="${sourceName}"]`);
+    const target = panel.locator(`[data-type="addColOptionOrCell"][data-name="${targetName}"]`);
+    await expect(source).toBeVisible();
+    await expect(target).toBeVisible();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    const point = {
+        clientX: targetBox!.x + Math.min(8, targetBox!.width / 2),
+        clientY: targetBox!.y + 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(/dragover__top/);
+    await requestTransaction(page, () => target.dispatchEvent("drop", {dataTransfer, ...point}));
+    await dataTransfer.dispose();
+};
+
+const sortFieldBefore = async (page: Page, panel: Locator, sourceID: string, targetID: string) => {
+    const source = panel.locator(`button[data-type="editCol"][data-id="${sourceID}"]`);
+    const target = panel.locator(`button[data-type="editCol"][data-id="${targetID}"]`);
+    await expect(source).toBeVisible();
+    await expect(target).toBeVisible();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    const point = {
+        clientX: targetBox!.x + Math.min(8, targetBox!.width / 2),
+        clientY: targetBox!.y + 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(/dragover__top/);
+    const transaction = waitForTransactionAction(page, "sortAttrViewCol");
+    await target.dispatchEvent("drop", {dataTransfer, ...point});
+    await transaction;
+    await dataTransfer.dispose();
+};
+
+const deleteSelectOption = async (page: Page, panel: Locator, name: string) => {
+    const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${name}"]`);
+    await expect(option).toBeVisible();
+    await option.locator('[data-type="setColOption"]').click();
+    const menu = page.locator('#commonMenu[data-name="av-col-option"]:not(.fn__none)');
+    const deleteAction = menu.locator('[data-id="delete"]');
+    await expect(deleteAction).toBeVisible();
+    await deleteAction.click();
+    const confirm = page.locator("#confirmDialogConfirmBtn:visible");
+    await expect(confirm).toBeVisible();
+    await requestTransaction(page, () => confirm.click());
+    await expect(panel.locator(
+        `[data-type="addColOptionOrCell"][data-name="${name}"]`,
+    )).toHaveCount(0);
 };
 
 const editDateCell = async (page: Page, cell: Locator) => {
@@ -435,6 +631,35 @@ const editDateCell = async (page: Page, cell: Locator) => {
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);
     return {display, isNotTime};
+};
+
+const setTimedDateRange = async (page: Page, cell: Locator, start: string, end: string) => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(cell).toBeVisible();
+        await cell.click();
+        await expect(panel.locator("input.b3-text-field").first()).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+
+    const dateInputs = panel.locator("input.b3-text-field");
+    const toggles = panel.locator('input[type="checkbox"]');
+    const endDateToggle = toggles.nth(0);
+    const includeTimeToggle = toggles.nth(1);
+    if (!await includeTimeToggle.isChecked()) {
+        await includeTimeToggle.click();
+    }
+    await expect(dateInputs.first()).toHaveAttribute("type", "datetime-local");
+    if (!await endDateToggle.isChecked()) {
+        await endDateToggle.click();
+    }
+    const endInput = dateInputs.nth(1);
+    await expect(endInput).toBeVisible();
+    await dateInputs.first().fill(start);
+    await endInput.fill(end);
+    const transaction = waitForResponse(page, "/api/transactions", 30000);
+    await endInput.press("Enter");
+    await transaction;
+    await expect(panel).toHaveCount(0);
 };
 
 const editTemplateCell = async (page: Page, cell: Locator, template: string) => {
@@ -513,11 +738,248 @@ const addRow = async (page: Page, block: Locator, content: string) => {
     return {id: rowID!, row: block.locator(`.av__row[data-id="${rowID}"]`)};
 };
 
+const addAttributeViewView = async (page: Page, block: Locator, layout: "gallery" | "kanban" | "table") => {
+    await block.locator('[data-type="av-add"]').click();
+    const menu = page.locator("#commonMenu:not(.fn__none)");
+    await expect(menu).toBeVisible();
+    const label = await page.evaluate(value => window.siyuan.languages[value], layout);
+    const transaction = waitForTransactionAction(page, "addAttrViewView");
+    await menu.locator(".b3-menu__item").filter({
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    }).click();
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+                layout?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "addAttrViewView");
+    expect(operation?.id).toBeTruthy();
+    const panel = page.locator(".av__panel");
+    if (await panel.count() > 0) {
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(panel).toHaveCount(0);
+    }
+    return operation!.id!;
+};
+
+const openFocusedViewMenu = async (page: Page, block: Locator) => {
+    await block.locator(".av__views .layout-tab-bar .item--focus").click();
+    const menu = page.locator('#commonMenu[data-name="av-view"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    return menu;
+};
+
+const duplicateFocusedView = async (page: Page, block: Locator) => {
+    const menu = await openFocusedViewMenu(page, block);
+    const transaction = waitForTransactionAction(page, "duplicateAttrViewView");
+    await menu.locator('[data-id="duplicate"]').click();
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "duplicateAttrViewView");
+    expect(operation?.id).toBeTruthy();
+    return operation!.id!;
+};
+
 const openAttributeViewConfig = async (page: Page, block: Locator) => {
     await block.locator('[data-type="av-more"]').click();
     const panel = page.locator(".av__panel .b3-menu");
     await expect(panel).toBeVisible({timeout: 15000});
     return panel;
+};
+
+const convertToGroupedLayout = async (page: Page, block: Locator, fieldID: string,
+                                      layout: "gallery" | "kanban") => {
+    const panel = await openAttributeViewConfig(page, block);
+    await panel.locator('[data-type="goGroups"]').click();
+    await Promise.all([
+        waitForResponse(page, "/api/av/setAttrViewGroup"),
+        panel.locator(`[data-type="setGroupMethod"][data-id="${fieldID}"]`).click(),
+    ]);
+    await panel.locator('[data-type="go-config"]').click();
+    await panel.locator('[data-type="go-layout"]').click();
+    await Promise.all([
+        waitForResponse(page, "/api/av/changeAttrViewLayout"),
+        panel.locator(`[data-type="set-layout"][data-view-type="${layout}"]`).click(),
+    ]);
+    await expect(block).toHaveAttribute("data-av-type", layout);
+    await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+    await expect(page.locator(".av__panel")).toHaveCount(0);
+};
+
+const setAttributeViewPageSize = async (page: Page, block: Locator, size: "5" | "all") => {
+    const panel = await openAttributeViewConfig(page, block);
+    await panel.locator('[data-type="go-layout"]').click();
+    await panel.locator('[data-type="set-page-size"]').click();
+    const menu = page.locator('#commonMenu[data-name="av-page-size"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    const label = size === "all"
+        ? await page.evaluate(() => window.siyuan.languages.all)
+        : size;
+    const transaction = waitForTransactionAction(page, "setAttrViewPageSize");
+    await menu.locator(".b3-menu__item").filter({
+        hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`),
+    }).click();
+    await transaction;
+    await expect(page.locator(".av__panel")).toHaveCount(0);
+};
+
+const prepareKanban = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
+                             rows: Array<{content: string; status: string}>) => {
+    const inserted = await insertAttributeView(page, editor);
+    const {avID, blockID} = inserted;
+    let block = inserted.block;
+    const statusColumn = await addColumn(page, block, "select", "Status");
+    const initial = await getAttributeView(siyuanAPI, avID);
+    const blockKey = initial.keyValues.find(item => item.key.type === "block");
+    expect(blockKey).toBeTruthy();
+    await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+        avID,
+        blocksValues: rows.map((row, index) => [{
+            block: {content: row.content},
+            keyID: blockKey!.key.id,
+        }, {
+            keyID: statusColumn.id,
+            mSelect: [{
+                color: ((index % 8) + 1).toString(),
+                content: row.status,
+            }],
+        }]),
+    });
+    await expect.poll(async () => {
+        const av = await getAttributeView(siyuanAPI, avID);
+        const values = av.keyValues.find(item => item.key.type === "block")?.values || [];
+        return rows.map(row => values.some(value => value.block?.content === row.content));
+    }, {timeout: 30000}).toEqual(rows.map(() => true));
+
+    await page.reload();
+    let reloadedEditor = await getDocumentEditor(page, docID);
+    block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await convertToGroupedLayout(page, block, statusColumn.id, "kanban");
+    await page.reload();
+    reloadedEditor = await getDocumentEditor(page, docID);
+    block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await expect(block).toHaveAttribute("data-av-type", "kanban");
+
+    const av = await getAttributeView(siyuanAPI, avID);
+    const blockValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+    const rowIDs = Object.fromEntries(rows.map(row => [
+        row.content,
+        blockValues.find(value => value.block?.content === row.content)?.blockID,
+    ]));
+    expect(Object.values(rowIDs).every(Boolean)).toBe(true);
+    return {avID, block, blockID, rowIDs: rowIDs as Record<string, string>, statusColumn};
+};
+
+const prepareSearchTable = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
+                                  rows: Array<{content: string; notes?: string}>) => {
+    const inserted = await insertAttributeView(page, editor);
+    const {avID, blockID} = inserted;
+    const notesColumn = await addColumn(page, inserted.block, "text", "Notes");
+    await expectPersistedAttributeView(siyuanAPI, docID, blockID, avID);
+    const initial = await getAttributeView(siyuanAPI, avID);
+    const blockKey = initial.keyValues.find(item => item.key.type === "block");
+    expect(blockKey).toBeTruthy();
+    await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+        avID,
+        blocksValues: rows.map(row => [{
+            block: {content: row.content},
+            keyID: blockKey!.key.id,
+        }, ...(row.notes === undefined ? [] : [{
+            keyID: notesColumn.id,
+            text: {content: row.notes},
+        }])]),
+    });
+    await expect.poll(async () => {
+        const av = await getAttributeView(siyuanAPI, avID);
+        return av.views.find(view => view.id === av.viewID)?.itemIds?.length;
+    }, {timeout: 30000}).toBe(rows.length);
+    await page.reload();
+    const reloadedEditor = await getDocumentEditor(page, docID);
+    const block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+    await expect(block).toBeVisible({timeout: 30000});
+    const av = await getAttributeView(siyuanAPI, avID);
+    const blockValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+    const rowIDs = Object.fromEntries(rows.map(row => [
+        row.content,
+        blockValues.find(value => value.block?.content === row.content)?.blockID,
+    ]));
+    expect(Object.values(rowIDs).every(Boolean)).toBe(true);
+    return {avID, block, blockID, notesColumn, rowIDs: rowIDs as Record<string, string>};
+};
+
+const getKanbanGroup = (block: Locator, label: string) => block.locator(".av__kanban-group").filter({
+    has: block.page().locator(".av__group-title .b3-chip", {hasText: label}),
+});
+
+const dragKanbanCard = async (page: Page, source: Locator, target: Locator,
+                              position: "top" | "bottom") => {
+    const sourceID = await source.getAttribute("data-id");
+    expect(sourceID).toBeTruthy();
+    const targetBox = await target.boundingBox();
+    expect(targetBox).not.toBeNull();
+    const sourceGroupID = await source.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__body ')][1]",
+    ).getAttribute("data-group-id");
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    const dragType = `application/siyuan-gutterNodeAttributeView\u200bGalleryItem\u200b${sourceID}` +
+        (sourceGroupID ? `@${sourceGroupID}` : "");
+    await dataTransfer.evaluate((transfer, data) => transfer.setData(data.type, data.value), {
+        type: dragType,
+        value: await source.evaluate(element => element.outerHTML),
+    });
+    await source.evaluate(element => {
+        element.classList.add("av__gallery-item--select");
+        (window.siyuan as typeof window.siyuan & {dragElement?: HTMLElement}).dragElement = element as HTMLElement;
+    });
+    await source.dispatchEvent("dragstart", {dataTransfer});
+    const point = {
+        clientX: targetBox!.x + targetBox!.width / 2,
+        clientY: position === "top" ? targetBox!.y + 2 : targetBox!.y + targetBox!.height - 2,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await expect(target).toHaveClass(new RegExp(`dragover__${position}`));
+    const transaction = waitForTransactionAction(page, "sortAttrViewRow");
+    await target.dispatchEvent("drop", {dataTransfer, ...point});
+    const response = await transaction;
+    await page.locator(`.av__gallery-item[data-id="${sourceID}"]`).first()
+        .dispatchEvent("dragend", {dataTransfer});
+    await dataTransfer.dispose();
+    return response.request().postDataJSON();
+};
+
+const searchAttributeView = async (page: Page, block: Locator, query: string) => {
+    const input = block.locator('[data-type="av-search"]');
+    if (await input.evaluate(element => (element as HTMLElement).style.width === "0px")) {
+        await block.locator('[data-type="av-search-icon"]').click();
+    }
+    await expect(input).toBeVisible();
+    const render = page.waitForResponse(response => {
+        if (new URL(response.url()).pathname !== "/api/av/renderAttributeView") {
+            return false;
+        }
+        const payload = response.request().postDataJSON() as {query?: string};
+        return payload.query === query;
+    }, {timeout: 30000});
+    await input.fill(query);
+    await render;
+    await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+    await expect(block.locator('[data-type="av-search"]')).toHaveText(query);
 };
 
 const expectRowOrder = async (block: Locator, ids: string[]) => {
@@ -552,6 +1014,1391 @@ test.describe("attribute views", () => {
         expect(await getAttributeView(siyuanAPI, inserted.avID)).toEqual(stored);
     });
 
+    test("creates, renames, duplicates, switches, and deletes views", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Views E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const initialViewID = initial.viewID;
+        expect(initial.views).toHaveLength(1);
+        expect(initial.views[0].type).toBe("table");
+        const switchView = async (viewID: string, layout: "gallery" | "table") => {
+            await requestTransaction(page, () => block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            ).click());
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", layout);
+        };
+
+        const galleryViewID = await addAttributeViewView(page, block, "gallery");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                type: av.views.find(view => view.id === galleryViewID)?.type,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: galleryViewID,
+            type: "gallery",
+            viewIDs: [initialViewID, galleryViewID],
+        });
+        await page.reload();
+        const galleryEditor = await getDocumentEditor(page, document.docID);
+        block = galleryEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+        const galleryName = `Gallery workflow ${Date.now()}`;
+        let menu = await openFocusedViewMenu(page, block);
+        await menu.locator('[data-id="rename"]').click();
+        const panel = page.locator(".av__panel");
+        const nameInput = panel.locator('.b3-text-field[data-type="name"]');
+        await expect(nameInput).toBeVisible();
+        await nameInput.fill(galleryName);
+        await requestTransaction(page, () => nameInput.press("Enter"));
+        await expect(panel).toHaveCount(0);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === galleryViewID)?.name;
+        }, {timeout: 30000}).toBe(galleryName);
+        await page.reload();
+        const renamedEditor = await getDocumentEditor(page, document.docID);
+        block = renamedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"] .item__text`,
+        )).toHaveText(galleryName);
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === galleryViewID);
+            const duplicate = av.views.find(view => view.id === duplicateViewID);
+            return {
+                current: av.viewID,
+                duplicateType: duplicate?.type,
+                sourceName: source?.name,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: duplicateViewID,
+            duplicateType: "gallery",
+            sourceName: galleryName,
+            viewIDs: [initialViewID, galleryViewID, duplicateViewID],
+        });
+        await page.reload();
+        const duplicateEditor = await getDocumentEditor(page, document.docID);
+        block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+
+        await switchView(initialViewID, "table");
+        await switchView(galleryViewID, "gallery");
+        menu = await openFocusedViewMenu(page, block);
+        await requestTransaction(page, () => menu.locator('[data-id="delete"]').click());
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            viewIDs: [initialViewID, duplicateViewID],
+        });
+        await page.reload();
+        const firstDeleteEditor = await getDocumentEditor(page, document.docID);
+        block = firstDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"]`,
+        )).toHaveCount(0);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "table");
+
+        await switchView(duplicateViewID, "gallery");
+        menu = await openFocusedViewMenu(page, block);
+        await requestTransaction(page, () => menu.locator('[data-id="delete"]').click());
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            viewIDs: [initialViewID],
+        });
+        await page.reload();
+        const secondDeleteEditor = await getDocumentEditor(page, document.docID);
+        block = secondDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__views .layout-tab-bar .item")).toHaveCount(1);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        menu = await openFocusedViewMenu(page, block);
+        await expect(menu.locator('[data-id="delete"]')).toHaveCount(0);
+        await page.keyboard.press("Escape");
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                views: av.views.map(view => ({id: view.id, type: view.type})),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            views: [{id: initialViewID, type: "table"}],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
+        await expect(reloadedBlock.locator(".av__views .layout-tab-bar .item")).toHaveCount(1);
+        await expect(reloadedBlock.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+    });
+
+    test("persists field visibility, order, width, pin, and wrap per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Field Display E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const notesColumn = await addColumn(page, block, "text", "Notes");
+        const scoreColumn = await addColumn(page, block, "number", "Score");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        const editPanel = page.locator(".av__panel");
+        await expect(editPanel).toHaveCount(0);
+
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const sourceViewID = initial.viewID;
+        const sourceColumns = initial.views.find(view => view.id === sourceViewID)?.table?.columns;
+        expect(sourceColumns).toBeTruthy();
+        const baselineColumns = sourceColumns!.map(column => ({...column}));
+        const baselineOrder = baselineColumns.map(column => column.id);
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        const duplicateEditor = await getDocumentEditor(page, document.docID);
+        block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-properties"]').click();
+        await sortFieldBefore(page, panel, statusColumn.id, notesColumn.id);
+        const expectedOrder = baselineOrder.filter(id => id !== statusColumn.id);
+        expectedOrder.splice(expectedOrder.indexOf(notesColumn.id), 0, statusColumn.id);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === sourceViewID)?.table?.columns.map(column => column.id);
+        }, {timeout: 30000}).toEqual(expectedOrder);
+
+        const scoreField = () => panel.locator(
+            `button[data-type="editCol"][data-id="${scoreColumn.id}"]`,
+        );
+        const readScoreHidden = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === sourceViewID)?.table?.columns
+                .find(column => column.id === scoreColumn.id)?.hidden;
+        };
+        let visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="hideCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(true);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="showCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(false);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toBeVisible({timeout: 30000});
+        visibilityTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await scoreField().locator('[data-type="hideCol"]').click();
+        await visibilityTransaction;
+        await expect.poll(readScoreHidden, {timeout: 30000}).toBe(true);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        let notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        const oldWidth = await notesHeader.evaluate(element => (element as HTMLElement).clientWidth);
+        const widthHandle = notesHeader.locator(".av__widthdrag");
+        const handleBox = await widthHandle.boundingBox();
+        expect(handleBox).not.toBeNull();
+        const widthTransaction = waitForTransactionAction(page, "setAttrViewColWidth");
+        const resizePoint = {
+            x: handleBox!.x + handleBox!.width / 2,
+            y: handleBox!.y + handleBox!.height / 2,
+        };
+        await widthHandle.dispatchEvent("mousedown", {
+            button: 0,
+            clientX: resizePoint.x,
+            clientY: resizePoint.y,
+        });
+        await page.evaluate(point => {
+            globalThis.document.dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                clientX: point.x + 80,
+                clientY: point.y,
+            }));
+            globalThis.document.dispatchEvent(new MouseEvent("mouseup", {
+                bubbles: true,
+                clientX: point.x + 80,
+                clientY: point.y,
+            }));
+        }, resizePoint);
+        const widthResponse = await widthTransaction;
+        const widthPayload = widthResponse.request().postDataJSON() as {
+            transactions: Array<{
+                doOperations: Array<{
+                    action: string;
+                    data?: string;
+                    id?: string;
+                }>;
+            }>;
+        };
+        const widthOperation = widthPayload.transactions.flatMap(item => item.doOperations)
+            .find(operation => operation.action === "setAttrViewColWidth");
+        expect(widthOperation?.id).toBe(notesColumn.id);
+        expect(widthOperation?.data).toMatch(/^\d+px$/);
+        expect(Number.parseInt(widthOperation!.data!, 10)).toBeGreaterThanOrEqual(oldWidth + 75);
+        const notesWidth = widthOperation!.data!;
+        await expect(notesHeader).toHaveAttribute("style", new RegExp(`width:\\s*${notesWidth}`));
+
+        const openNotesHeaderMenu = async () => {
+            const menu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+            await expect(async () => {
+                if (await menu.isVisible()) {
+                    return;
+                }
+                await notesHeader.dispatchEvent("click");
+                await expect(menu).toBeVisible({timeout: 2000});
+            }).toPass({timeout: 15000});
+            return menu;
+        };
+        let headerMenu = await openNotesHeaderMenu();
+        const pinTransaction = waitForTransactionAction(page, "setAttrViewColPin");
+        await headerMenu.locator('[data-id="freezeCol"]').click();
+        await pinTransaction;
+        notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(notesHeader).toHaveAttribute("data-pin", "true");
+
+        headerMenu = await openNotesHeaderMenu();
+        const wrap = headerMenu.locator("input.b3-switch");
+        await expect(wrap).not.toBeChecked();
+        const wrapTransaction = waitForTransactionAction(page, "setAttrViewColWrap");
+        await wrap.click();
+        await wrapTransaction;
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID)?.table?.columns;
+            const duplicate = av.views.find(view => view.id === duplicateViewID)?.table?.columns;
+            const notes = source?.find(column => column.id === notesColumn.id);
+            const score = source?.find(column => column.id === scoreColumn.id);
+            return {
+                duplicate,
+                source: source && {
+                    notes: notes && {
+                        hidden: notes.hidden,
+                        pin: notes.pin,
+                        width: notes.width,
+                        wrap: notes.wrap,
+                    },
+                    order: source.map(column => column.id),
+                    scoreHidden: score?.hidden,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineColumns,
+            source: {
+                notes: {
+                    hidden: false,
+                    pin: true,
+                    width: notesWidth,
+                    wrap: true,
+                },
+                order: expectedOrder,
+                scoreHidden: true,
+            },
+        });
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        notesHeader = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(notesHeader).toHaveAttribute("data-pin", "true");
+        await expect(notesHeader).toHaveAttribute("data-wrap", "true");
+        await expect(notesHeader).toHaveAttribute("style", new RegExp(`width:\\s*${notesWidth}`));
+        await expect(notesHeader.locator(".av__cellheadericon--pin")).toHaveCount(1);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect.poll(() => block.locator(
+            ".av__row--header .av__cell--header",
+        ).evaluateAll(headers => headers.map(header => header.getAttribute("data-col-id"))), {
+            timeout: 30000,
+        }).toEqual(expectedOrder.filter(id => id !== scoreColumn.id));
+
+        await switchView(duplicateViewID);
+        const duplicateHeaders = block.locator(".av__row--header .av__cell--header");
+        await expect.poll(() => duplicateHeaders.evaluateAll(headers =>
+            headers.map(header => header.getAttribute("data-col-id"))), {timeout: 30000}).toEqual(baselineOrder);
+        const duplicateNotes = block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toBeVisible();
+        await expect(duplicateNotes).toHaveAttribute("data-pin", "false");
+        await expect(duplicateNotes).toHaveAttribute("data-wrap", "false");
+        await expect(duplicateNotes).toHaveAttribute("style", /width:\s*200px/);
+        await expect(duplicateNotes.locator(".av__cellheadericon--pin")).toHaveCount(0);
+
+        await switchView(sourceViewID);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect(block.locator(
+            `.av__row--header .av__cell--header[data-col-id="${notesColumn.id}"]`,
+        )).toHaveAttribute("data-pin", "true");
+    });
+
+    test("persists gallery cover, card, and field display settings per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Gallery Settings E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const row = await addRow(page, block, "Gallery item");
+        const coverColumn = await addColumn(page, block, "mAsset", "Cover", "assets");
+        const detailsColumn = await addColumn(page, block, "text", "Details");
+        await editCell(page, row.row.locator(`[data-col-id="${detailsColumn.id}"]`),
+            "A detailed gallery description that should wrap across multiple lines.");
+        const png = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        const assetPath = await uploadAssetCell(page, row.row.locator(`[data-col-id="${coverColumn.id}"]`), {
+            buffer: png,
+            mimeType: "image/png",
+            name: `gallery-cover-${Date.now()}.png`,
+        });
+        expect(assetPath).toMatch(/^assets\/.+\.png$/);
+        const assetPanel = page.locator(".av__panel");
+        if (await assetPanel.count() > 0) {
+            await assetPanel.locator('[data-type="close"]').click({force: true});
+            await expect(assetPanel).toHaveCount(0);
+        }
+
+        const sourceViewID = await addAttributeViewView(page, block, "gallery");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID);
+            return {
+                current: av.viewID,
+                gallery: source?.gallery && {
+                    cardAspectRatio: source.gallery.cardAspectRatio,
+                    cardSize: source.gallery.cardSize,
+                    coverFrom: source.gallery.coverFrom,
+                    displayFieldName: source.gallery.displayFieldName,
+                    fitImage: source.gallery.fitImage,
+                    showIcon: source.gallery.showIcon,
+                    wrapField: source.gallery.wrapField,
+                },
+                type: source?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: sourceViewID,
+            gallery: {
+                cardAspectRatio: 0,
+                cardSize: 1,
+                coverFrom: 1,
+                displayFieldName: false,
+                fitImage: false,
+                showIcon: true,
+                wrapField: false,
+            },
+            type: "gallery",
+        });
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const readGallery = async (viewID: string) => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === viewID)?.gallery;
+        };
+        const duplicateBaseline = await readGallery(duplicateViewID);
+        expect(duplicateBaseline).toBeTruthy();
+        const baselineSummary = {
+            cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardAspectRatioValue: duplicateBaseline!.cardAspectRatioValue,
+            cardSize: duplicateBaseline!.cardSize,
+            cardWidth: duplicateBaseline!.cardWidth,
+            coverFrom: duplicateBaseline!.coverFrom,
+            coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
+            displayFieldName: duplicateBaseline!.displayFieldName,
+            fields: duplicateBaseline!.fields.map(field => ({...field})),
+            fitImage: duplicateBaseline!.fitImage,
+            showIcon: duplicateBaseline!.showIcon,
+            wrapField: duplicateBaseline!.wrapField,
+        };
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, document.docID);
+            block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", "gallery");
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-layout"]').click();
+        const chooseLayoutOption = async (trigger: string, action: string, label: string) => {
+            await panel.locator(`[data-type="${trigger}"]`).click();
+            const menu = page.locator("#commonMenu:not(.fn__none)");
+            await expect(menu).toBeVisible();
+            const transaction = waitForTransactionAction(page, action);
+            await menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: label}),
+            }).click();
+            await transaction;
+        };
+        await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
+        const largeLabel = await page.evaluate(() => window.siyuan.languages.large);
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardWidth", largeLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatioValue", "1:1");
+
+        const toggleSetting = async (type: string, action: string, checked: boolean) => {
+            const input = panel.locator(`input[data-type="${type}"]`);
+            await expect(input).toBeChecked({checked: !checked});
+            const transaction = waitForTransactionAction(page, action);
+            await input.click();
+            await transaction;
+            await expect(input).toBeChecked({checked});
+        };
+        await toggleSetting("toggle-gallery-fit", "setAttrViewFitImage", true);
+        await toggleSetting("toggle-gallery-name", "setAttrViewDisplayFieldName", true);
+        await toggleSetting("toggle-entries-icons", "setAttrViewShowIcon", false);
+        await toggleSetting("toggle-entries-wrap", "setAttrViewWrapField", true);
+
+        await panel.locator('[data-type="go-config"]').click();
+        await panel.locator('[data-type="go-properties"]').click();
+        const detailsField = () => panel.locator(
+            `button[data-type="editCol"][data-id="${detailsColumn.id}"]`,
+        );
+        const hideTransaction = waitForTransactionAction(page, "setAttrViewColHidden");
+        await detailsField().locator('[data-type="hideCol"]').click();
+        await hideTransaction;
+        await expect.poll(async () => {
+            const gallery = await readGallery(sourceViewID);
+            return gallery?.fields.find(field => field.id === detailsColumn.id)?.hidden;
+        }, {timeout: 30000}).toBe(true);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        await expect.poll(async () => {
+            const source = await readGallery(sourceViewID);
+            const duplicate = await readGallery(duplicateViewID);
+            return {
+                duplicate: duplicate && {
+                    cardAspectRatio: duplicate.cardAspectRatio,
+                    cardAspectRatioValue: duplicate.cardAspectRatioValue,
+                    cardSize: duplicate.cardSize,
+                    cardWidth: duplicate.cardWidth,
+                    coverFrom: duplicate.coverFrom,
+                    coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
+                    displayFieldName: duplicate.displayFieldName,
+                    fields: duplicate.fields,
+                    fitImage: duplicate.fitImage,
+                    showIcon: duplicate.showIcon,
+                    wrapField: duplicate.wrapField,
+                },
+                source: source && {
+                    cardAspectRatio: source.cardAspectRatio,
+                    cardAspectRatioValue: source.cardAspectRatioValue,
+                    cardSize: source.cardSize,
+                    cardWidth: source.cardWidth,
+                    coverFrom: source.coverFrom,
+                    coverFromAssetKeyID: source.coverFromAssetKeyID,
+                    detailsHidden: source.fields.find(field => field.id === detailsColumn.id)?.hidden,
+                    displayFieldName: source.displayFieldName,
+                    fieldsWrapped: source.fields.every(field => field.wrap),
+                    fitImage: source.fitImage,
+                    showIcon: source.showIcon,
+                    wrapField: source.wrapField,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineSummary,
+            source: {
+                cardAspectRatio: 0,
+                cardAspectRatioValue: 1,
+                cardSize: 1,
+                cardWidth: 320,
+                coverFrom: 2,
+                coverFromAssetKeyID: coverColumn.id,
+                detailsHidden: true,
+                displayFieldName: true,
+                fieldsWrapped: true,
+                fitImage: true,
+                showIcon: false,
+                wrapField: true,
+            },
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const sourceCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "1", width: "320px"});
+        const coverImage = sourceCard.locator(".av__gallery-img");
+        await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
+        await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        await expect(sourceCard.locator(".av__gallery-field--name")).not.toHaveCount(0);
+        await expect(sourceCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveCount(0);
+        await expect.poll(() => sourceCard.locator(".av__cell").evaluateAll(cells =>
+            cells.map(cell => cell.getAttribute("data-wrap"))), {timeout: 30000})
+            .toEqual(["true", "true", "true"]);
+
+        await switchView(duplicateViewID);
+        const duplicateCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: `${16 / 9}`, width: "260px"});
+        await expect(duplicateCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--0/);
+        await expect(duplicateCard.locator(".av__gallery-field--name")).toHaveCount(0);
+        await expect(duplicateCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toBeVisible();
+        await expect.poll(() => duplicateCard.locator(".av__cell").evaluateAll(cells =>
+            cells.map(cell => cell.getAttribute("data-wrap"))), {timeout: 30000})
+            .toEqual(["false", "false", "false", "false"]);
+
+        await switchView(sourceViewID);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "1", width: "320px"});
+        await expect(block.locator(`.av__gallery-item[data-id="${row.id}"] .av__gallery-img`))
+            .toHaveClass(/av__gallery-img--fit/);
+    });
+
+    test("persists kanban cover, card, field, and background settings per view", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Settings E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const planned = await addRow(page, block, "Planned card");
+        const done = await addRow(page, block, "Done card");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        const coverColumn = await addColumn(page, block, "mAsset", "Cover", "assets");
+        const detailsColumn = await addColumn(page, block, "text", "Details");
+        await editCell(page, planned.row.locator(`[data-col-id="${detailsColumn.id}"]`),
+            "A detailed Kanban description that should wrap across multiple lines.");
+        const png = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        const assetPath = await uploadAssetCell(page, planned.row.locator(`[data-col-id="${coverColumn.id}"]`), {
+            buffer: png,
+            mimeType: "image/png",
+            name: `kanban-cover-${Date.now()}.png`,
+        });
+        expect(assetPath).toMatch(/^assets\/.+\.png$/);
+        const assetPanel = page.locator(".av__panel");
+        if (await assetPanel.count() > 0) {
+            await assetPanel.locator('[data-type="close"]').click({force: true});
+            await expect(assetPanel).toHaveCount(0);
+        }
+        await editSelectCell(page, planned.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Planned"], false);
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await editSelectCell(page, block.locator(
+            `.av__row[data-id="${done.id}"] [data-col-id="${statusColumn.id}"]`,
+        ), ["Done"], false);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+
+        const sourceViewID = (await getAttributeView(siyuanAPI, avID)).viewID;
+        expect(sourceViewID).toBeTruthy();
+        const setupPanel = await openAttributeViewConfig(page, block);
+        await setupPanel.locator('[data-type="goGroups"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            setupPanel.locator(`[data-type="setGroupMethod"][data-id="${statusColumn.id}"]`).click(),
+        ]);
+        await setupPanel.locator('[data-type="go-config"]').click();
+        await setupPanel.locator('[data-type="go-layout"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/changeAttrViewLayout"),
+            setupPanel.locator('[data-type="set-layout"][data-view-type="kanban"]').click(),
+        ]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === sourceViewID);
+            return {
+                current: av.viewID,
+                group: source?.group && {
+                    field: source.group.field,
+                    hideEmpty: source.group.hideEmpty,
+                    method: source.group.method,
+                    order: source.group.order,
+                },
+                kanban: source?.kanban && {
+                    cardAspectRatio: source.kanban.cardAspectRatio,
+                    cardSize: source.kanban.cardSize,
+                    coverFrom: source.kanban.coverFrom,
+                    displayFieldName: source.kanban.displayFieldName,
+                    fillColBackgroundColor: source.kanban.fillColBackgroundColor,
+                    fitImage: source.kanban.fitImage,
+                    showIcon: source.kanban.showIcon,
+                    wrapField: source.kanban.wrapField,
+                },
+                type: source?.type,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: sourceViewID,
+            group: {
+                field: statusColumn.id,
+                hideEmpty: true,
+                method: 0,
+                order: 3,
+            },
+            kanban: {
+                cardAspectRatio: 0,
+                cardSize: 1,
+                coverFrom: 1,
+                displayFieldName: false,
+                fillColBackgroundColor: false,
+                fitImage: false,
+                showIcon: true,
+                wrapField: false,
+            },
+            type: "kanban",
+        });
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block).toHaveAttribute("data-av-type", "kanban");
+        await expect(block.locator(".av__kanban-group")).toHaveCount(2);
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(duplicateViewID);
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        const readKanban = async (viewID: string) => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === viewID)?.kanban;
+        };
+        const duplicateBaseline = await readKanban(duplicateViewID);
+        expect(duplicateBaseline).toBeTruthy();
+        const baselineSummary = {
+            cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardAspectRatioValue: duplicateBaseline!.cardAspectRatioValue,
+            cardSize: duplicateBaseline!.cardSize,
+            cardWidth: duplicateBaseline!.cardWidth,
+            coverFrom: duplicateBaseline!.coverFrom,
+            coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
+            displayFieldName: duplicateBaseline!.displayFieldName,
+            fields: duplicateBaseline!.fields.map(field => ({...field})),
+            fillColBackgroundColor: duplicateBaseline!.fillColBackgroundColor,
+            fitImage: duplicateBaseline!.fitImage,
+            showIcon: duplicateBaseline!.showIcon,
+            wrapField: duplicateBaseline!.wrapField,
+        };
+        const switchView = async (viewID: string) => {
+            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
+            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+            await transaction;
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, document.docID);
+            block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", "kanban");
+        };
+        await switchView(sourceViewID);
+
+        const panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="go-layout"]').click();
+        const chooseLayoutOption = async (trigger: string, action: string, label: string) => {
+            await panel.locator(`[data-type="${trigger}"]`).click();
+            const menu = page.locator("#commonMenu:not(.fn__none)");
+            await expect(menu).toBeVisible();
+            const transaction = waitForTransactionAction(page, action);
+            await menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: label}),
+            }).click();
+            await transaction;
+        };
+        await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
+        const smallLabel = await page.evaluate(() => window.siyuan.languages.small);
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardWidth", smallLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatioValue", "3:4");
+
+        const toggleSetting = async (type: string, action: string, checked: boolean) => {
+            const input = panel.locator(`input[data-type="${type}"]`);
+            await expect(input).toBeChecked({checked: !checked});
+            const transaction = waitForTransactionAction(page, action);
+            await input.click();
+            await transaction;
+            await expect(input).toBeChecked({checked});
+        };
+        await toggleSetting("toggle-gallery-fit", "setAttrViewFitImage", true);
+        await toggleSetting("toggle-gallery-name", "setAttrViewDisplayFieldName", true);
+        await toggleSetting("toggle-entries-icons", "setAttrViewShowIcon", false);
+        await toggleSetting("toggle-entries-wrap", "setAttrViewWrapField", true);
+        await toggleSetting("toggle-kanban-bg", "setAttrViewFillColBackgroundColor", true);
+        await page.locator(".av__panel").locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(page.locator(".av__panel")).toHaveCount(0);
+
+        await expect.poll(async () => {
+            const source = await readKanban(sourceViewID);
+            const duplicate = await readKanban(duplicateViewID);
+            return {
+                duplicate: duplicate && {
+                    cardAspectRatio: duplicate.cardAspectRatio,
+                    cardAspectRatioValue: duplicate.cardAspectRatioValue,
+                    cardSize: duplicate.cardSize,
+                    cardWidth: duplicate.cardWidth,
+                    coverFrom: duplicate.coverFrom,
+                    coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
+                    displayFieldName: duplicate.displayFieldName,
+                    fields: duplicate.fields,
+                    fillColBackgroundColor: duplicate.fillColBackgroundColor,
+                    fitImage: duplicate.fitImage,
+                    showIcon: duplicate.showIcon,
+                    wrapField: duplicate.wrapField,
+                },
+                source: source && {
+                    cardAspectRatio: source.cardAspectRatio,
+                    cardAspectRatioValue: source.cardAspectRatioValue,
+                    cardSize: source.cardSize,
+                    cardWidth: source.cardWidth,
+                    coverFrom: source.coverFrom,
+                    coverFromAssetKeyID: source.coverFromAssetKeyID,
+                    displayFieldName: source.displayFieldName,
+                    fieldsWrapped: source.fields.every(field => field.wrap),
+                    fillColBackgroundColor: source.fillColBackgroundColor,
+                    fitImage: source.fitImage,
+                    showIcon: source.showIcon,
+                    wrapField: source.wrapField,
+                },
+            };
+        }, {timeout: 30000}).toEqual({
+            duplicate: baselineSummary,
+            source: {
+                cardAspectRatio: 0,
+                cardAspectRatioValue: 0.75,
+                cardSize: 1,
+                cardWidth: 180,
+                coverFrom: 2,
+                coverFromAssetKeyID: coverColumn.id,
+                displayFieldName: true,
+                fieldsWrapped: true,
+                fillColBackgroundColor: true,
+                fitImage: true,
+                showIcon: false,
+                wrapField: true,
+            },
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const sourceGroups = block.locator(".av__kanban-group");
+        const sourceCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
+        await expect(sourceGroups).toHaveCount(2);
+        await expect.poll(() => block.locator(".av__kanban").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "0.75", width: "180px"});
+        await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
+        await expect.poll(() => sourceGroups.evaluateAll(groups =>
+            groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
+        {timeout: 30000}).toEqual([true, true]);
+        const coverImage = sourceCard.locator(".av__gallery-img");
+        await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
+        await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        await expect(sourceCard.locator(".av__gallery-field--name")).not.toHaveCount(0);
+        await expect(sourceCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveAttribute("data-wrap", "true");
+
+        await switchView(duplicateViewID);
+        const duplicateGroups = block.locator(".av__kanban-group");
+        const duplicateCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
+        await expect(duplicateGroups).toHaveCount(2);
+        await expect.poll(() => block.locator(".av__kanban").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: `${16 / 9}`, width: "260px"});
+        await expect(block.locator(".av__kanban")).not.toHaveClass(/av__kanban--bg/);
+        await expect.poll(() => duplicateGroups.evaluateAll(groups =>
+            groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
+        {timeout: 30000}).toEqual([false, false]);
+        await expect(duplicateCard.locator(".av__gallery-cover")).toHaveCount(0);
+        await expect(duplicateCard.locator(".av__gallery-field--name")).toHaveCount(0);
+        await expect(duplicateCard.locator(
+            `.av__cell[data-field-id="${detailsColumn.id}"]`,
+        )).toHaveAttribute("data-wrap", "false");
+
+        await switchView(sourceViewID);
+        await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
+        await expect(block.locator(`.av__gallery-item[data-id="${planned.id}"] .av__gallery-img`))
+            .toHaveClass(/av__gallery-img--fit/);
+    });
+
+    test("moves a Kanban card across select groups with reverse, reapply, and reload persistence", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Cross Group E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Planned card", status: "Planned"},
+            {content: "Done card", status: "Done"},
+        ]);
+        const {avID, blockID, rowIDs, statusColumn} = prepared;
+        let block = prepared.block;
+        const plannedGroup = getKanbanGroup(block, "Planned");
+        const doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup).toHaveCount(1);
+        await expect(doneGroup).toHaveCount(1);
+        const plannedCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`);
+        const doneCard = doneGroup.locator(`.av__gallery-item[data-id="${rowIDs["Done card"]}"]`);
+
+        const dragPayload = await dragKanbanCard(page, plannedCard, doneCard, "bottom") as {
+            app: string;
+            session: string;
+            transactions: Array<{
+                doOperations: Array<Record<string, unknown>>;
+                undoOperations: Array<Record<string, unknown>>;
+            }>;
+        };
+        await expect(plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`)).toHaveCount(0);
+        await expect.poll(() => doneGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Done card"], rowIDs["Planned card"]]);
+
+        const readMoveState = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const status = av.keyValues.find(item => item.key.id === statusColumn.id)?.values
+                ?.find(value => value.blockID === rowIDs["Planned card"])?.mSelect?.map(option => option.content);
+            return {
+                done: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Done")?.groupItemIds,
+                planned: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds,
+                status,
+            };
+        };
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"], rowIDs["Planned card"]],
+            planned: [],
+            status: ["Done"],
+        });
+
+        const dragTransaction = dragPayload.transactions[0];
+        expect(dragTransaction.doOperations).toHaveLength(1);
+        expect(dragTransaction.undoOperations).toHaveLength(1);
+        expect(dragTransaction.undoOperations[0]).toMatchObject({
+            action: "sortAttrViewRow",
+            id: rowIDs["Planned card"],
+            previousID: "",
+        });
+        await siyuanAPI.post("/api/transactions", {
+            app: dragPayload.app,
+            reqId: Date.now(),
+            session: dragPayload.session,
+            transactions: [{
+                doOperations: dragTransaction.undoOperations,
+                undoOperations: dragTransaction.doOperations,
+            }],
+        });
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"]],
+            planned: [rowIDs["Planned card"]],
+            status: ["Planned"],
+        });
+        await siyuanAPI.post("/api/transactions", {
+            app: dragPayload.app,
+            reqId: Date.now(),
+            session: dragPayload.session,
+            transactions: [{
+                doOperations: dragTransaction.doOperations,
+                undoOperations: dragTransaction.undoOperations,
+            }],
+        });
+        await expect.poll(readMoveState, {timeout: 30000}).toEqual({
+            done: [rowIDs["Done card"], rowIDs["Planned card"]],
+            planned: [],
+            status: ["Done"],
+        });
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const reloadedDone = getKanbanGroup(block, "Done");
+        await expect.poll(() => reloadedDone.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Done card"], rowIDs["Planned card"]]);
+        await expect(block.locator(`.av__gallery-item[data-id="${rowIDs["Planned card"]}"]`)).toHaveCount(1);
+    });
+
+    test("reorders Kanban cards within a group and restores the order after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Reorder E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "First card", status: "Planned"},
+            {content: "Second card", status: "Planned"},
+            {content: "Third card", status: "Planned"},
+        ]);
+        const {avID, blockID, rowIDs} = prepared;
+        let block = prepared.block;
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        const firstCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["First card"]}"]`);
+        const thirdCard = plannedGroup.locator(`.av__gallery-item[data-id="${rowIDs["Third card"]}"]`);
+
+        await dragKanbanCard(page, thirdCard, firstCard, "top");
+        const expectedOrder = [rowIDs["Third card"], rowIDs["First card"], rowIDs["Second card"]];
+        await expect.poll(() => plannedGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000}).toEqual(expectedOrder);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return view?.groups?.find(group =>
+                group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds;
+        }, {timeout: 30000}).toEqual(expectedOrder);
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        await expect.poll(() => plannedGroup.locator(".av__gallery-item").evaluateAll(cards =>
+            cards.map(card => card.getAttribute("data-id"))), {timeout: 30000}).toEqual(expectedOrder);
+    });
+
+    test("adds a Kanban card from a group and assigns that group's select value", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Group Add E2E", "Database seed");
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Existing planned", status: "Planned"},
+            {content: "Existing done", status: "Done"},
+        ]);
+        const {avID, blockID, statusColumn} = prepared;
+        let block = prepared.block;
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        const oldCount = await plannedGroup.locator(".av__gallery-item").count();
+        await requestTransaction(page, () => plannedGroup.locator('[data-type="av-add-top"]').click());
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(oldCount + 1, {timeout: 30000});
+        const input = page.locator(".av__mask .b3-text-field");
+        await expect(input).toBeVisible();
+        await input.fill("New planned card");
+        await requestTransaction(page, () => input.press("Enter"));
+
+        let newRowID = "";
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const blockValue = av.keyValues.find(item => item.key.type === "block")?.values
+                ?.find(value => value.block?.content === "New planned card");
+            newRowID = blockValue?.blockID || "";
+            const status = av.keyValues.find(item => item.key.id === statusColumn.id)?.values
+                ?.find(value => value.blockID === newRowID)?.mSelect?.map(option => option.content);
+            const view = av.views.find(item => item.id === av.viewID);
+            return {
+                firstInGroup: view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds?.[0],
+                status,
+            };
+        }, {timeout: 30000}).toEqual({
+            firstInGroup: expect.any(String),
+            status: ["Planned"],
+        });
+        expect(newRowID).toBeTruthy();
+        const state = await getAttributeView(siyuanAPI, avID);
+        expect(state.views.find(item => item.id === state.viewID)?.groups?.find(group =>
+            group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds?.[0]).toBe(newRowID);
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        await expect(plannedGroup.locator(".av__gallery-item").first()).toHaveAttribute("data-id", newRowID);
+        await expect(plannedGroup.locator(`.av__gallery-item[data-id="${newRowID}"]`))
+            .toContainText("New planned card");
+    });
+
+    test("loads Gallery pages incrementally and uses a bounded virtual window for large data", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Gallery Pagination E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const blockKey = initial.keyValues.find(item => item.key.type === "block");
+        expect(blockKey).toBeTruthy();
+        const contents = Array.from({length: 120}, (_, index) =>
+            `Gallery item ${index.toString().padStart(3, "0")}`);
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: contents.map(content => [{
+                block: {content},
+                keyID: blockKey!.key.id,
+            }]),
+        });
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === av.viewID)?.itemIds?.length;
+        }, {timeout: 30000}).toBe(contents.length);
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        let block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(block).toBeVisible({timeout: 30000});
+        const galleryViewID = await addAttributeViewView(page, block, "gallery");
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await setAttributeViewPageSize(page, block, "5");
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        const cards = block.locator(".av__body .av__gallery-item");
+        const loadMore = block.locator(".av__body [data-type=\"av-load-more\"]");
+        await expect(cards).toHaveCount(5);
+        await expect(loadMore).toBeVisible();
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === galleryViewID);
+            return {current: av.viewID, pageSize: view?.pageSize, type: view?.type};
+        }, {timeout: 30000}).toEqual({
+            current: galleryViewID,
+            pageSize: 5,
+            type: "gallery",
+        });
+
+        let render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await loadMore.click();
+        await render;
+        await expect(cards).toHaveCount(10);
+        await expect(loadMore).toBeVisible();
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "10");
+
+        render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await loadMore.click();
+        await render;
+        await expect(cards).toHaveCount(15);
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "15");
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(block.locator(".av__body .av__gallery-item")).toHaveCount(5);
+        await expect(block.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+
+        await setAttributeViewPageSize(page, block, "all");
+        await expect(block).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
+        await expect(block.locator(".av__body .av__gallery-item")).toHaveCount(100);
+        await expect.poll(() => block.locator(
+            ".av__body .av__gallery-item .av__cell[data-dtype=\"block\"]",
+        ).evaluateAll(items => items.map(item => item.textContent?.trim() || "")), {timeout: 30000}).toEqual(
+            contents.slice(0, 100),
+        );
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                itemCount: av.views.find(view => view.id === galleryViewID)?.itemIds?.length,
+                pageSize: av.views.find(view => view.id === galleryViewID)?.pageSize,
+            };
+        }, {timeout: 30000}).toEqual({
+            itemCount: 120,
+            pageSize: 102400,
+        });
+    });
+
+    test("loads Kanban groups independently and restores the persisted page size after reload", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Kanban Pagination E2E", "Database seed");
+        const rows = [
+            ...Array.from({length: 8}, (_, index) => ({
+                content: `Planned ${index.toString().padStart(2, "0")}`,
+                status: "Planned",
+            })),
+            ...Array.from({length: 7}, (_, index) => ({
+                content: `Done ${index.toString().padStart(2, "0")}`,
+                status: "Done",
+            })),
+        ];
+        const prepared = await prepareKanban(page, document.editor, document.docID, siyuanAPI, rows);
+        const {avID, blockID} = prepared;
+        let block = prepared.block;
+        await setAttributeViewPageSize(page, block, "5");
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        let plannedGroup = getKanbanGroup(block, "Planned");
+        let doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        const plannedLoadMore = plannedGroup.locator('[data-type="av-load-more"]');
+        const doneLoadMore = doneGroup.locator('[data-type="av-load-more"]');
+        await expect(plannedLoadMore).toBeVisible();
+        await expect(doneLoadMore).toBeVisible();
+
+        const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+        await plannedLoadMore.click();
+        await render;
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(8);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(plannedLoadMore).toBeHidden();
+        await expect(doneLoadMore).toBeVisible();
+        await expect(plannedGroup.locator(".av__body")).toHaveAttribute("data-page-size", "10");
+        await expect(doneGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === av.viewID)?.pageSize;
+        }, {timeout: 30000}).toBe(5);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        plannedGroup = getKanbanGroup(block, "Planned");
+        doneGroup = getKanbanGroup(block, "Done");
+        await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(doneGroup.locator(".av__gallery-item")).toHaveCount(5);
+        await expect(plannedGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+        await expect(doneGroup.locator(".av__body")).toHaveAttribute("data-page-size", "5");
+    });
+
+    test("searches literal special text across fields and restores rows with empty values", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Search Boundary E2E", "Database seed");
+        const literal = "Literal %_[] ' OR 1=1 --";
+        const prepared = await prepareSearchTable(page, document.editor, document.docID, siyuanAPI, [
+            {content: "Alpha row", notes: "Contains the unique needle"},
+            {content: "Empty notes row"},
+            {content: literal, notes: ""},
+        ]);
+        const {avID, block, notesColumn, rowIDs} = prepared;
+        const rows = block.locator(".av__body .av__row[data-id]");
+
+        await searchAttributeView(page, block, "unique needle");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Alpha row"]]);
+
+        await searchAttributeView(page, block, "%_[]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs[literal]]);
+        await expect(rows.first().locator('[data-dtype="block"]')).toContainText(literal);
+
+        await searchAttributeView(page, block, "missing-value");
+        await expect(rows).toHaveCount(0);
+        await expect(block.locator(".av__row--util [data-type=\"av-add-bottom\"]")).toBeVisible();
+
+        await searchAttributeView(page, block, "");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Alpha row"],
+            rowIDs["Empty notes row"],
+            rowIDs[literal],
+        ]);
+        const emptyNotes = block.locator(
+            `.av__row[data-id="${rowIDs["Empty notes row"]}"] [data-col-id="${notesColumn.id}"]`,
+        );
+        await expect(emptyNotes).toHaveText("");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.keyValues.find(item => item.key.id === notesColumn.id)?.values
+                ?.some(value => value.blockID === rowIDs["Empty notes row"]) || false;
+        }, {timeout: 30000}).toBe(false);
+    });
+
+    test("removes a filtered row without losing the active Attribute View search", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Search Delete E2E", "Database seed");
+        const prepared = await prepareSearchTable(page, document.editor, document.docID, siyuanAPI, [
+            {content: "First match", notes: "shared needle"},
+            {content: "Second match", notes: "shared needle"},
+            {content: "Empty survivor"},
+        ]);
+        const {avID, blockID, rowIDs} = prepared;
+        let block = prepared.block;
+        await searchAttributeView(page, block, "shared needle");
+        let rows = block.locator(".av__body .av__row[data-id]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["First match"],
+            rowIDs["Second match"],
+        ]);
+
+        const firstMatch = block.locator(`.av__row[data-id="${rowIDs["First match"]}"]`);
+        await firstMatch.locator(".av__firstcol").click();
+        await expect(firstMatch).toHaveClass(/av__row--select/);
+        const removeTransaction = waitForTransactionAction(page, "removeAttrViewBlock");
+        await page.keyboard.press("Backspace");
+        await removeTransaction;
+        await expect(block.locator('[data-type="av-search"]')).toHaveText("shared needle");
+        rows = block.locator(".av__body .av__row[data-id]");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000})
+            .toEqual([rowIDs["Second match"]]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return {
+                itemCount: view?.itemIds?.length,
+                removed: view?.itemIds?.includes(rowIDs["First match"]) || false,
+            };
+        }, {timeout: 30000}).toEqual({
+            itemCount: 2,
+            removed: false,
+        });
+
+        await searchAttributeView(page, block, "");
+        await expect.poll(() => rows.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Second match"],
+            rowIDs["Empty survivor"],
+        ]);
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator('[data-type="av-search"]')).toHaveText("");
+        await expect.poll(() => block.locator(".av__body .av__row[data-id]").evaluateAll(items =>
+            items.map(item => item.getAttribute("data-id"))), {timeout: 30000}).toEqual([
+            rowIDs["Second match"],
+            rowIDs["Empty survivor"],
+        ]);
+    });
+
     test("edits the database name, fields, row, and common cell values", async ({
         createTestDocument,
         page,
@@ -564,19 +2411,10 @@ test.describe("attribute views", () => {
         await requestTransaction(page, () => title.fill(databaseName));
         await expect(title).toHaveText(databaseName);
 
-        await requestTransaction(page, () => block.locator('[data-type="av-add-bottom"]').click());
-        const row = block.locator(".av__body .av__row:not(.av__row--header):not([data-type=ghost])").first();
-        await expect(row).toBeVisible({timeout: 15000});
-        const rowID = await row.getAttribute("data-id");
-        expect(rowID).toBeTruthy();
-        const dataRow = block.locator(`.av__body .av__row[data-id="${rowID}"]`);
+        const {id: rowID, row: dataRow} = await addRow(page, block, "First item");
         const primaryColumnID = await block.locator('.av__row--header [data-dtype="block"]')
             .getAttribute("data-col-id");
         expect(primaryColumnID).toBeTruthy();
-        const newRowInput = page.locator(".av__mask .b3-text-field");
-        await expect(newRowInput).toBeVisible();
-        await newRowInput.fill("First item");
-        await requestTransaction(page, () => newRowInput.press("Enter"));
 
         const textColumn = await addColumn(page, block, "text", "Notes");
         const numberColumn = await addColumn(page, block, "number", "Estimate");
@@ -598,7 +2436,7 @@ test.describe("attribute views", () => {
                 estimate: values.Estimate?.number?.content,
                 item: values[av.keyValues[0].key.name]?.block?.content,
                 notes: values.Notes?.text?.content,
-                rowIncluded: av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID!),
+                rowIncluded: av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID),
             };
         }, {timeout: 30000}).toEqual({
             databaseName,
@@ -618,6 +2456,121 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${textColumn.id}"]`)).toContainText("Ready for review");
         await expect(reloadedRow.locator(`[data-col-id="${numberColumn.id}"]`)).toContainText("13.5");
         await expect(reloadedRow.locator(`[data-col-id="${checkboxColumn.id}"]`)).toHaveClass(/av__cell-check/);
+    });
+
+    test("formats, clears, and restores numeric values", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Number Format E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const negativeRow = await addRow(page, block, "Negative amount");
+        const zeroRow = await addRow(page, block, "Zero amount");
+        const column = await addColumn(page, block, "number", "Amount");
+        let rendered = {
+            header: column.header,
+            negativeCell: negativeRow.row.locator(`[data-col-id="${column.id}"]`),
+            zeroCell: zeroRow.row.locator(`[data-col-id="${column.id}"]`),
+        };
+        await editCell(page, rendered.negativeCell, "-1234567.126");
+        await editCell(page, rendered.zeroCell, "0");
+
+        const readNumberState = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const keyValues = av.keyValues.find(item => item.key.id === column.id);
+            const values = new Map(keyValues?.values?.map(value => [value.blockID, value.number && {
+                content: value.number.content,
+                isNotEmpty: value.number.isNotEmpty,
+            }]));
+            return {
+                format: keyValues?.key.numberFormat,
+                negative: values.get(negativeRow.id),
+                zero: values.get(zeroRow.id),
+            };
+        };
+        const reloadNumberCells = async () => {
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            const reloadedBlock = editor.locator(`:scope > [data-av-id="${avID}"]`);
+            return {
+                header: reloadedBlock.locator(
+                    `.av__row--header .av__cell--header[data-col-id="${column.id}"]`,
+                ),
+                negativeCell: reloadedBlock.locator(
+                    `.av__row[data-id="${negativeRow.id}"] [data-col-id="${column.id}"]`,
+                ),
+                zeroCell: reloadedBlock.locator(
+                    `.av__row[data-id="${zeroRow.id}"] [data-col-id="${column.id}"]`,
+                ),
+            };
+        };
+        await expect.poll(readNumberState, {timeout: 30000}).toEqual({
+            format: "",
+            negative: {
+                content: -1234567.126,
+                isNotEmpty: true,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await setNumberFormat(page, rendered.header, "commas");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "commas"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("-1,234,567.126");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("0");
+
+        await setNumberFormat(page, rendered.header, "percent");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "percent"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("-123456712.6%");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("0%");
+
+        await setNumberFormat(page, rendered.header, "USD");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "USD"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("$-1,234,567.13");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("$0.00");
+
+        await editCell(page, rendered.negativeCell, "");
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({
+            format: "USD",
+            negative: {
+                isNotEmpty: false,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await editCell(page, rendered.negativeCell, "42.5");
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("$42.50");
+        await expect.poll(readNumberState, {timeout: 30000}).toEqual({
+            format: "USD",
+            negative: {
+                content: 42.5,
+                isNotEmpty: true,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${negativeRow.id}"] [data-col-id="${column.id}"] .av__celltext`,
+        )).toHaveText("$42.50");
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${zeroRow.id}"] [data-col-id="${column.id}"] .av__celltext`,
+        )).toHaveText("$0.00");
     });
 
     test("edits select, multi-select, and date values and restores them after reload", async ({
@@ -689,6 +2642,211 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
             .toHaveText(["Frontend", "Urgent"]);
         await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
+    });
+
+    test("sets, clears, and restores a timed date range", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Date Range E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Scheduled item");
+        const column = await addColumn(page, block, "date", "Schedule");
+        const cell = row.row.locator(`[data-col-id="${column.id}"]`);
+        const firstRange = {
+            end: "2026-09-18T17:45",
+            start: "2026-09-14T09:15",
+        };
+        const firstTimestamps = await page.evaluate(range => ({
+            end: new Date(range.end).getTime(),
+            start: new Date(range.start).getTime(),
+        }), firstRange);
+        await setTimedDateRange(page, cell, firstRange.start, firstRange.end);
+        await expect(cell.locator(".av__celltext")).toContainText("2026-09-14 09:15");
+        await expect(cell.locator(".av__celltext")).toContainText("2026-09-18 17:45");
+
+        const readDateValue = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const value = av.keyValues.find(item => item.key.id === column.id)
+                ?.values?.find(item => item.blockID === row.id);
+            return {
+                content: value?.date?.content ?? null,
+                content2: value?.date?.content2 ?? null,
+                hasEndDate: value?.date?.hasEndDate ?? false,
+                isNotEmpty: value?.date?.isNotEmpty ?? false,
+                isNotEmpty2: value?.date?.isNotEmpty2 ?? false,
+                isNotTime: value?.date?.isNotTime ?? true,
+                type: value?.type,
+            };
+        };
+        await expect.poll(readDateValue, {timeout: 30000}).toEqual({
+            content: firstTimestamps.start,
+            content2: firstTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+            type: "date",
+        });
+
+        await cell.click();
+        let panel = page.locator(".av__panel");
+        await expect(panel.locator('[data-type="clearDate"]')).toBeVisible();
+        await requestTransaction(page, () => panel.locator('[data-type="clearDate"]').click());
+        await expect(panel).toHaveCount(0);
+        await expect(cell.locator(".av__celltext")).toHaveText("");
+        await expect.poll(readDateValue, {timeout: 30000}).toMatchObject({
+            hasEndDate: false,
+            isNotEmpty: false,
+            isNotEmpty2: false,
+            isNotTime: true,
+            type: "date",
+        });
+
+        const finalRange = {
+            end: "2026-10-23T16:40",
+            start: "2026-10-21T08:05",
+        };
+        const finalTimestamps = await page.evaluate(range => ({
+            end: new Date(range.end).getTime(),
+            start: new Date(range.start).getTime(),
+        }), finalRange);
+        await setTimedDateRange(page, cell, finalRange.start, finalRange.end);
+        await expect.poll(readDateValue, {timeout: 30000}).toEqual({
+            content: finalTimestamps.start,
+            content2: finalTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+            type: "date",
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedCell = reloadedEditor.locator(
+            `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] ` +
+            `[data-col-id="${column.id}"]`,
+        );
+        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-21 08:05");
+        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-23 16:40");
+        await expect(reloadedCell.locator(".av__celltext")).toHaveAttribute(
+            "data-value", expect.stringContaining('"hasEndDate":true'),
+        );
+    });
+
+    test("renames, reorders, and deletes single-select options across existing rows", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Select Options E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const first = await addRow(page, block, "First status item");
+        const second = await addRow(page, block, "Second status item");
+        const column = await addColumn(page, block, "select", "Status");
+        const firstCell = first.row.locator(`[data-col-id="${column.id}"]`);
+        const secondCell = second.row.locator(`[data-col-id="${column.id}"]`);
+        await editSelectCell(page, firstCell, ["Draft"]);
+        await editSelectCell(page, secondCell, ["Review"]);
+
+        let panel = await openSelectCellPanel(page, secondCell);
+        await renameSelectOption(page, panel, "Review", "Approved");
+        await expect(secondCell.locator(".b3-chip")).toHaveText("Approved");
+        await sortSelectOptionBefore(page, panel, "Approved", "Draft");
+        expect(await panel.locator('[data-type="addColOptionOrCell"]').evaluateAll(options =>
+            options.map(option => option.getAttribute("data-name")))).toEqual(["Approved", "Draft"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(panel).toHaveCount(0);
+
+        panel = await openSelectCellPanel(page, firstCell);
+        await deleteSelectOption(page, panel, "Draft");
+        await expect(firstCell.locator(".b3-chip")).toHaveCount(0);
+        await expect(secondCell.locator(".b3-chip")).toHaveText("Approved");
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const field = av.keyValues.find(item => item.key.id === column.id);
+            return {
+                first: field?.values?.find(value => value.blockID === first.id)?.mSelect
+                    ?.map(option => option.content) || [],
+                options: field?.key.options?.map(option => option.name),
+                second: field?.values?.find(value => value.blockID === second.id)?.mSelect
+                    ?.map(option => option.content) || [],
+            };
+        }, {timeout: 30000}).toEqual({
+            first: [],
+            options: ["Approved"],
+            second: ["Approved"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${first.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveCount(0);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${second.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText("Approved");
+    });
+
+    test("renames and deletes multi-select options across existing rows", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument(
+            "Attribute View Multi Select Options E2E", "Database seed",
+        );
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const first = await addRow(page, block, "First label item");
+        const second = await addRow(page, block, "Second label item");
+        const column = await addColumn(page, block, "mSelect", "Labels", "multiSelect");
+        const firstCell = first.row.locator(`[data-col-id="${column.id}"]`);
+        const secondCell = second.row.locator(`[data-col-id="${column.id}"]`);
+        await editSelectCell(page, firstCell, ["Frontend", "Urgent"]);
+        await editSelectCell(page, secondCell, ["Backend", "Urgent"]);
+
+        let panel = await openSelectCellPanel(page, firstCell);
+        await renameSelectOption(page, panel, "Urgent", "Critical");
+        await expect(firstCell.locator(".b3-chip")).toHaveText(["Frontend", "Critical"]);
+        await expect(secondCell.locator(".b3-chip")).toHaveText(["Backend", "Critical"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        panel = await openSelectCellPanel(page, secondCell);
+        await deleteSelectOption(page, panel, "Critical");
+        await expect(firstCell.locator(".b3-chip")).toHaveText(["Frontend"]);
+        await expect(secondCell.locator(".b3-chip")).toHaveText(["Backend"]);
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const field = av.keyValues.find(item => item.key.id === column.id);
+            return {
+                first: field?.values?.find(value => value.blockID === first.id)?.mSelect
+                    ?.map(option => option.content) || [],
+                options: field?.key.options?.map(option => option.name),
+                second: field?.values?.find(value => value.blockID === second.id)?.mSelect
+                    ?.map(option => option.content) || [],
+            };
+        }, {timeout: 30000}).toEqual({
+            first: ["Frontend"],
+            options: ["Frontend", "Backend"],
+            second: ["Backend"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${first.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText(["Frontend"]);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${second.id}"] [data-col-id="${column.id}"] .b3-chip`,
+        )).toHaveText(["Backend"]);
     });
 
     test("edits URL, email, and phone values and restores their link semantics after reload", async ({
@@ -1244,15 +3402,7 @@ test.describe("attribute views", () => {
     }) => {
         const document = await createTestDocument("Attribute View History E2E", "Database seed");
         const {avID, block} = await insertAttributeView(page, document.editor);
-        await requestTransaction(page, () => block.locator('[data-type="av-add-bottom"]').click());
-        const row = block.locator(".av__body .av__row:not(.av__row--header):not([data-type=ghost])").first();
-        await expect(row).toBeVisible({timeout: 15000});
-        const rowID = await row.getAttribute("data-id");
-        expect(rowID).toBeTruthy();
-        const newRowInput = page.locator(".av__mask .b3-text-field");
-        await expect(newRowInput).toBeVisible();
-        await newRowInput.fill("History item");
-        await requestTransaction(page, () => newRowInput.press("Enter"));
+        const {id: rowID, row} = await addRow(page, block, "History item");
 
         const textColumn = await addColumn(page, block, "text", "Temporary");
 
@@ -1280,7 +3430,7 @@ test.describe("attribute views", () => {
         await expect(block.locator(`.av__row[data-id="${rowID}"]`)).toHaveCount(0);
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
-            return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID!) ?? false;
+            return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID) ?? false;
         }, {timeout: 30000}).toBe(false);
 
         await requestHistoryAction(page, block, UNDO_SHORTCUT, "undo");
@@ -1306,7 +3456,7 @@ test.describe("attribute views", () => {
             siyuanAPI, document.docID, await block.getAttribute("data-node-id") || "", avID,
         );
         expect(final.keyValues.some(item => item.key.id === textColumn.id)).toBe(false);
-        expect(final.views.find(view => view.id === final.viewID)?.itemIds?.includes(rowID!) ?? false).toBe(false);
+        expect(final.views.find(view => view.id === final.viewID)?.itemIds?.includes(rowID) ?? false).toBe(false);
 
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, document.docID);
@@ -1448,6 +3598,168 @@ test.describe("attribute views", () => {
         await expectRowOrder(reloadedBlock, [bravo.id]);
     });
 
+    test("combines multi-field sorting and nested OR filters across views", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        test.slow();
+        const document = await createTestDocument("Attribute View Advanced Rules E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const alphaLow = await addRow(page, block, "Alpha");
+        const alphaHigh = await addRow(page, block, "Alpha");
+        const bravo = await addRow(page, block, "Bravo");
+        const charlie = await addRow(page, block, "Charlie");
+        const scoreColumn = await addColumn(page, block, "number", "Score");
+        await editCell(page, alphaLow.row.locator(`[data-col-id="${scoreColumn.id}"]`), "10");
+        await editCell(page, alphaHigh.row.locator(`[data-col-id="${scoreColumn.id}"]`), "20");
+        await editCell(page, bravo.row.locator(`[data-col-id="${scoreColumn.id}"]`), "15");
+        await editCell(page, charlie.row.locator(`[data-col-id="${scoreColumn.id}"]`), "99");
+        const primaryColumn = block.locator('.av__row--header [data-dtype="block"]');
+        const primaryColumnID = await primaryColumn.getAttribute("data-col-id");
+        const primaryColumnName = await primaryColumn.locator(".av__celltext").innerText();
+        expect(primaryColumnID).toBeTruthy();
+
+        await block.locator('[data-type="av-sort"]').click();
+        const panel = page.locator(".av__panel .b3-menu");
+        await expect(panel).toBeVisible({timeout: 15000});
+        await panel.locator('[data-type="addSort"]').click();
+        let menu = page.locator('#commonMenu[data-name="av-add-sort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        await requestTransaction(page, () => menu.locator(".b3-menu__item").filter({
+            hasText: primaryColumnName,
+        }).click());
+
+        await panel.locator('[data-type="addSort"]').click();
+        menu = page.locator('#commonMenu[data-name="av-add-sort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        await requestTransaction(page, () => menu.locator(".b3-menu__item").filter({
+            hasText: "Score",
+        }).click());
+        const scoreSort = panel.locator(`.b3-menu__item[data-id="${scoreColumn.id}"]`);
+        await requestTransaction(page, async () => {
+            await scoreSort.locator("select").last().selectOption("DESC");
+        });
+
+        await panel.locator('[data-type="go-config"]').click();
+        await panel.locator('[data-type="goFilters"]').click();
+        await panel.locator('[data-type="addFilterCondition"][data-path=""]').click();
+        let conditionMenu = page.locator('#commonMenu[data-name="addFilterCondition"]:not(.fn__none)');
+        await expect(conditionMenu).toBeVisible();
+        await requestTransaction(page, () => conditionMenu.locator(".b3-menu__item").nth(1).click());
+
+        const nestedGroup = panel.locator('.av__filter-group-item[data-path="0"]');
+        await expect(nestedGroup).toBeVisible();
+        await nestedGroup.locator('[data-type="addFilterCondition"][data-path="0"]').click();
+        conditionMenu = page.locator('#commonMenu[data-name="addFilterCondition"]:not(.fn__none)');
+        await expect(conditionMenu).toBeVisible();
+        await conditionMenu.locator(".b3-menu__item").first().click();
+        const filterMenu = page.locator('#commonMenu[data-name="av-add-filter"]:not(.fn__none)');
+        await expect(filterMenu).toBeVisible();
+        await requestTransaction(page, () => filterMenu.locator(".b3-menu__item").filter({
+            hasText: primaryColumnName,
+        }).click());
+
+        const combination = panel.locator('[data-type="toggleCombination"][data-path="0"]');
+        await expect(combination).toBeVisible();
+        await requestTransaction(page, async () => {
+            await combination.selectOption("or");
+        });
+        const alphaFilter = panel.locator('.av__filter-row[data-path="0,0"] [data-type="filterValue"]');
+        const bravoFilter = panel.locator('.av__filter-row[data-path="0,1"] [data-type="filterValue"]');
+        await alphaFilter.fill("Alpha");
+        await requestTransaction(page, () => alphaFilter.press("Enter"));
+        await bravoFilter.fill("Bravo");
+        await requestTransaction(page, () => bravoFilter.press("Enter"));
+
+        const readCurrentRules = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const root = view?.filters?.[0] as {
+                combination?: string;
+                filters?: Array<{
+                    combination?: string;
+                    filters?: Array<{
+                        column?: string;
+                        operator?: string;
+                        value?: {block?: {content?: string}};
+                    }>;
+                }>;
+            };
+            const nested = root?.filters?.[0];
+            return {
+                combination: nested?.combination,
+                filters: nested?.filters?.map(filter => ({
+                    column: filter.column,
+                    operator: filter.operator,
+                    value: filter.value?.block?.content,
+                })),
+                sorts: view?.sorts,
+                viewID: av.viewID,
+            };
+        };
+        const originalViewID = (await getAttributeView(siyuanAPI, avID)).viewID;
+        await expect.poll(readCurrentRules, {timeout: 30000}).toEqual({
+            combination: "or",
+            filters: [
+                {column: primaryColumnID, operator: "Contains", value: "Alpha"},
+                {column: primaryColumnID, operator: "Contains", value: "Bravo"},
+            ],
+            sorts: [
+                {column: primaryColumnID, order: "ASC"},
+                {column: scoreColumn.id, order: "DESC"},
+            ],
+            viewID: originalViewID,
+        });
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expectRowOrder(block, [alphaHigh.id, alphaLow.id, bravo.id]);
+        const isolatedViewID = await addAttributeViewView(page, block, "table");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === isolatedViewID);
+            const countFilterLeaves = (filters: Array<{column?: string; filters?: unknown[]}> = []): number =>
+                filters.reduce((count, filter) => count + (filter.filters
+                    ? countFilterLeaves(filter.filters as Array<{column?: string; filters?: unknown[]}>)
+                    : (filter.column ? 1 : 0)), 0);
+            return {
+                current: av.viewID,
+                filterLeaves: countFilterLeaves(view?.filters),
+                sortCount: view?.sorts?.length || 0,
+            };
+        }, {timeout: 30000}).toEqual({
+            current: isolatedViewID,
+            filterLeaves: 0,
+            sortCount: 0,
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expectRowOrder(block, [alphaLow.id, alphaHigh.id, bravo.id, charlie.id]);
+        await requestTransaction(page, () => block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${originalViewID}"]`,
+        ).click());
+        await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+            timeout: 30000,
+        }).toBe(originalViewID);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator('[data-type="av-sort"]')).toHaveClass(/block__icon--active/);
+        await expect(block.locator('[data-type="av-filter"]')).toHaveClass(/block__icon--active/);
+        await expectRowOrder(block, [alphaHigh.id, alphaLow.id, bravo.id]);
+        await expect.poll(readCurrentRules, {timeout: 30000}).toMatchObject({
+            combination: "or",
+            viewID: originalViewID,
+        });
+    });
+
     test("groups rows and switches table, gallery, and kanban layouts", async ({
         createTestDocument,
         page,
@@ -1506,6 +3818,176 @@ test.describe("attribute views", () => {
         const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
         await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
         await expect(reloadedBlock.locator(".av__body[data-group-id]")).toHaveCount(2);
+    });
+
+    test("sorts, hides, folds, and removes attribute view groups", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Group State E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const planned = await addRow(page, block, "Planned item");
+        const done = await addRow(page, block, "Done item");
+        const empty = await addRow(page, block, "Unassigned item");
+        const statusColumn = await addColumn(page, block, "select", "Status");
+        await statusColumn.header.click();
+        const headerMenu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+        await expect(headerMenu).toBeVisible();
+        await headerMenu.locator('[data-id="edit"]').click();
+        const columnPanel = page.locator(".av__panel");
+        const addOptionInput = columnPanel.locator('[data-type="addOption"]');
+        await expect(addOptionInput).toBeVisible();
+        await addOptionInput.fill("Deferred");
+        await requestTransaction(page, () => addOptionInput.press("Enter"));
+        await columnPanel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(columnPanel).toHaveCount(0);
+        await editSelectCell(page, planned.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Planned"]);
+        await editSelectCell(page, done.row.locator(`[data-col-id="${statusColumn.id}"]`), ["Done"]);
+
+        let panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            panel.locator(`[data-type="setGroupMethod"][data-id="${statusColumn.id}"]`).click(),
+        ]);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(3, {timeout: 30000});
+
+        const hideEmpty = panel.locator('input[type="checkbox"]');
+        await expect(hideEmpty).toBeChecked();
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            hideEmpty.click(),
+        ]);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(4, {timeout: 30000});
+
+        await panel.locator('[data-type="goGroupsSort"]').click();
+        let menu = page.locator('#commonMenu[data-name="avGroupSort"]:not(.fn__none)');
+        await expect(menu).toBeVisible();
+        const descendingLabel = await page.evaluate(() => window.siyuan.languages.desc);
+        await Promise.all([
+            waitForResponse(page, "/api/av/setAttrViewGroup"),
+            menu.locator(".b3-menu__item").filter({
+                has: page.locator(".b3-menu__label", {hasText: descendingLabel}),
+            }).click(),
+        ]);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(item => item.id === av.viewID)?.group?.order;
+        }, {timeout: 30000}).toBe(1);
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect.poll(() => block.locator(".av__group-title .b3-chip").evaluateAll(chips =>
+            chips.map(chip => chip.textContent?.trim() || "")), {timeout: 30000})
+            .toEqual(["Planned", "Done", "Deferred"]);
+
+        panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        const doneMenuItem = panel.locator("button.b3-menu__item[data-id]").filter({hasText: "Done"});
+        const doneGroupID = await doneMenuItem.getAttribute("data-id");
+        expect(doneGroupID).toBeTruthy();
+        const doneVisibility = doneMenuItem.locator('[data-type="hideGroup"]');
+        const toggleDoneVisibility = async () => {
+            const transaction = waitForTransactionAction(page, "hideAttrViewGroup");
+            await doneVisibility.click();
+            const response = await transaction;
+            const payload = response.request().postDataJSON() as {
+                transactions: Array<{
+                    doOperations: Array<{
+                        action: string;
+                        data?: number;
+                        id?: string;
+                    }>;
+                }>;
+            };
+            return payload.transactions.flatMap(item => item.doOperations)
+                .find(operation => operation.action === "hideAttrViewGroup");
+        };
+        if (await doneVisibility.locator("use").getAttribute("xlink:href") !== "#iconEye") {
+            expect(await toggleDoneVisibility()).toMatchObject({data: 0, id: doneGroupID});
+            await expect.poll(async () => {
+                const av = await getAttributeView(siyuanAPI, avID);
+                const view = av.views.find(item => item.id === av.viewID);
+                return view?.groups?.find(group =>
+                    group.groupVal?.mSelect?.[0]?.content === "Done")?.groupHidden;
+            }, {timeout: 30000}).toBe(0);
+        }
+        expect(await toggleDoneVisibility()).toMatchObject({data: 2, id: doneGroupID});
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            return view?.groups?.find(group =>
+                group.groupVal?.mSelect?.[0]?.content === "Done")?.groupHidden;
+        }, {timeout: 30000}).toBe(2);
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__group-title").filter({hasText: "Done"})).toHaveCount(0);
+        const plannedTitle = block.locator(".av__group-title").filter({hasText: "Planned"});
+        const plannedFold = plannedTitle.locator('[data-type="av-group-fold"]');
+        const foldTransaction = waitForTransactionAction(page, "foldAttrViewGroup");
+        await plannedFold.click();
+        await foldTransaction;
+        await expect(plannedTitle.locator("xpath=following-sibling::*[1]")).toHaveClass(/fn__none/);
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const view = av.views.find(item => item.id === av.viewID);
+            const groups = new Map(view?.groups?.map(group => [
+                group.groupVal?.mSelect?.[0]?.content || "",
+                {
+                    folded: group.groupFolded,
+                    hidden: group.groupHidden,
+                },
+            ]));
+            return {
+                doneHidden: groups.get("Done")?.hidden,
+                group: view?.group && {
+                    field: view.group.field,
+                    hideEmpty: view.group.hideEmpty,
+                    method: view.group.method,
+                    order: view.group.order,
+                },
+                plannedFolded: groups.get("Planned")?.folded,
+            };
+        }, {timeout: 30000}).toEqual({
+            doneHidden: 2,
+            group: {
+                field: statusColumn.id,
+                hideEmpty: false,
+                method: 0,
+                order: 1,
+            },
+            plannedFolded: true,
+        });
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        const reloadedPlannedTitle = block.locator(".av__group-title").filter({hasText: "Planned"});
+        await expect(reloadedPlannedTitle.locator("xpath=following-sibling::*[1]")).toHaveClass(/fn__none/);
+        await expect(block.locator(".av__group-title").filter({hasText: "Done"})).toHaveCount(0);
+        await expect(block.locator(".av__body[data-group-id]")).toHaveCount(3);
+
+        panel = await openAttributeViewConfig(page, block);
+        await panel.locator('[data-type="goGroups"]').click();
+        const removeTransaction = waitForTransactionAction(page, "removeAttrViewGroup");
+        await panel.locator('[data-type="removeGroups"]').click();
+        await removeTransaction;
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(item => item.id === av.viewID)?.group || null;
+        }, {timeout: 30000}).toBeNull();
+
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__group-title")).toHaveCount(0);
+        await expectRowOrder(block, [planned.id, done.id, empty.id]);
     });
 
     test("pastes beyond existing rows while the database uses virtual scrolling", async ({
@@ -1594,10 +4076,23 @@ test.describe("attribute views", () => {
         await firstCell.dispatchEvent("mousedown", {button: 0, buttons: 1});
         await firstCell.dispatchEvent("mouseup", {button: 0, buttons: 0});
         await expect(firstCell).toHaveClass(/av__cell--select/);
+        await expect(block.locator(".av__cell--select")).toHaveCount(1);
+
+        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
+        await pasteTarget.evaluate((element) => {
+            element.focus();
+            const range = element.ownerDocument.createRange();
+            range.selectNodeContents(element);
+            range.collapse(false);
+            const selection = element.ownerDocument.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        });
+        await expect(firstCell).toHaveClass(/av__cell--select/);
+        await expect(block.locator(".av__cell--select")).toHaveCount(1);
 
         const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
         const pasteTransaction = waitForResponse(page, "/api/transactions");
-        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
         await pasteTarget.evaluate((element) => {
             const clipboardData = new DataTransfer();
             clipboardData.setData("text/plain", "q\tw\ne\tr\nt\ty");
@@ -1610,6 +4105,9 @@ test.describe("attribute views", () => {
                 clipboardData,
             }));
         });
+        const pasteAsData = page.locator('.b3-dialog button[data-action="data"]:visible');
+        await expect(pasteAsData).toBeVisible();
+        await pasteAsData.click();
         await Promise.all([pasteRowsResponse, pasteTransaction]);
 
         await expect.poll(async () => {

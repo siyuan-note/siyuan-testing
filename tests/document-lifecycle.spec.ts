@@ -95,9 +95,18 @@ test.describe("document lifecycle", () => {
             }
             await expect(parentItem).toBeVisible({timeout: 15000});
             const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
-            if (!await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
-                await parentItem.locator(":scope > .b3-list-item__toggle").click({force: true});
+            const parentToggle = parentItem.locator(":scope > .b3-list-item__toggle");
+            if (await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
+                await parentToggle.click({force: true});
+                await expect(parentArrow).not.toHaveClass(/b3-list-item__arrow--open/);
             }
+            const listChildren = page.waitForResponse(response =>
+                new URL(response.url()).pathname === "/api/filetree/listDocsByPath" &&
+                response.request().postDataJSON()?.path === `/${parent.docID}.sy`,
+            );
+            await parentToggle.click({force: true});
+            await listChildren;
+            await expect(parentArrow).toHaveClass(/b3-list-item__arrow--open/);
             await expect(parentItem.locator(
                 `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,
             )).toBeVisible({timeout: 15000});

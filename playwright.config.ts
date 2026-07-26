@@ -8,9 +8,13 @@ const knowledgeNavigationTests = [
     "**/backlink.spec.ts",
 ];
 
-const statefulEditorTests = [
-    "**/editor-copy-paste.spec.ts",
-    "**/editor-cross-document.spec.ts",
+const parallelTests = [
+    "**/api-robustness.spec.ts",
+    "**/kernel-log.spec.ts",
+];
+
+const editorTests = [
+    "**/editor*.spec.ts",
 ];
 
 const encryptedNotebookTests = [
@@ -42,14 +46,22 @@ export default defineConfig({
             teardown: "cleanup",
         },
         {
-            name: "main",
+            name: "parallel",
             dependencies: ["setup"],
+            testMatch: parallelTests,
+            workers: 2,
+        },
+        {
+            name: "main",
+            dependencies: ["parallel"],
             testIgnore: [
                 ...encryptedNotebookTests,
-                ...statefulEditorTests,
+                ...editorTests,
                 ...documentNavigationTests,
                 ...knowledgeNavigationTests,
+                ...parallelTests,
             ],
+            workers: 1,
         },
         {
             name: "encrypted-notebook",
@@ -58,14 +70,14 @@ export default defineConfig({
             workers: 1,
         },
         {
-            name: "stateful-editor",
+            name: "editor",
             dependencies: ["encrypted-notebook"],
-            testMatch: statefulEditorTests,
+            testMatch: editorTests,
             workers: 1,
         },
         {
             name: "document-navigation",
-            dependencies: ["stateful-editor"],
+            dependencies: ["editor"],
             testMatch: documentNavigationTests,
             workers: 1,
         },

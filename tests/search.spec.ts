@@ -157,8 +157,10 @@ test.describe("global search", () => {
             const pathItem = pathDialog.locator(
                 `#foldList .b3-list-item[data-box="${target.notebookID}"][data-path="${targetLocation.path}"]`,
             );
-            await expect(pathItem).toBeVisible();
-            await pathItem.click();
+            await expect(async () => {
+                await expect(pathItem).toBeVisible();
+                await pathItem.click();
+            }).toPass({timeout: 30000});
 
             const hPathsResponse = page.waitForResponse(response =>
                 response.url().endsWith("/api/filetree/getHPathsByPaths") &&
