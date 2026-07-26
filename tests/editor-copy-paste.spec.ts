@@ -387,6 +387,9 @@ test.describe("block copy, cut, and paste", () => {
         await useBlockClipboardAction(page, list, "cut");
         await expectClipboardText(page, ["Parent item", "Nested child", "Sibling item"]);
         await expect(document.editor.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await expect.poll(async () => Object.values(await siyuanAPI.checkBlocksExist(originalIDs)), {
+            timeout: 30000,
+        }).toEqual(originalIDs.map(() => false));
         await focusAtEnd(anchor);
         await page.keyboard.press("Enter");
         await focusAtEnd(document.editor.locator(':scope > [data-type="NodeParagraph"]').last());

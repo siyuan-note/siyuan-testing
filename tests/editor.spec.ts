@@ -2,6 +2,16 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {expectSearchIndex, submitSearch, withKeywordSearch} from "./helpers/search";
+import {requestTransactionAction} from "./helpers/transactions";
+
+interface ISyNode {
+    Children?: ISyNode[];
+    ID?: string;
+}
+
+const countPersistedID = (node: ISyNode, id: string): number =>
+    (node.ID === id ? 1 : 0) + (node.Children || []).reduce((count, child) =>
+        count + countPersistedID(child, id), 0);
 
 const focusEditable = async (editable: Locator) => {
     await expect(editable).toBeVisible();
@@ -62,26 +72,43 @@ test.describe("editor", () => {
         });
     });
 
-    test("folds and unfolds a heading", async ({page, createTestDocument}) => {
-        const {editor} = await createTestDocument(
+    test("folds and unfolds a heading", async ({page, createTestDocument, siyuanAPI}) => {
+        const {docID, editor} = await createTestDocument(
             "Heading Fold E2E",
             "## Fold Me\n\nsub content under heading\n\nmore sub content",
         );
         const heading = editor.locator('[data-type="NodeHeading"]').filter({hasText: "Fold Me"});
         await expect(heading).toBeVisible();
-        await heading.click();
-
-        await page.keyboard.press("ControlOrMeta+ArrowUp");
-        await expect(heading).toHaveAttribute("fold", "1");
         const firstChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "sub content under heading"});
         const secondChild = editor.locator('[data-type="NodeParagraph"]').filter({hasText: "more sub content"});
+        await expect(firstChild).toHaveCount(1);
+        await expect(secondChild).toHaveCount(1);
+        const firstChildID = await firstChild.getAttribute("data-node-id");
+        const secondChildID = await secondChild.getAttribute("data-node-id");
+        expect(firstChildID).toBeTruthy();
+        expect(secondChildID).toBeTruthy();
+        await heading.click();
+
+        await requestTransactionAction(page, "foldHeading",
+            () => page.keyboard.press("ControlOrMeta+ArrowUp"));
+        await expect(heading).toHaveAttribute("fold", "1");
         await expect(firstChild).toHaveCount(0);
         await expect(secondChild).toHaveCount(0);
 
-        await page.keyboard.press("ControlOrMeta+ArrowUp");
+        await requestTransactionAction(page, "unfoldHeading",
+            () => page.keyboard.press("ControlOrMeta+ArrowUp"));
         await expect(heading).not.toHaveAttribute("fold", "1");
-        await expect(firstChild).toBeVisible();
-        await expect(secondChild).toBeVisible();
+        const unfoldedFirstChild = editor.locator(`[data-node-id="${firstChildID}"]`);
+        const unfoldedSecondChild = editor.locator(`[data-node-id="${secondChildID}"]`);
+        await expect(unfoldedFirstChild.first()).toBeVisible();
+        await expect(unfoldedSecondChild.first()).toBeVisible();
+        await expect.poll(async () => {
+            const persisted = await siyuanAPI.readDocument<ISyNode>(docID);
+            return [
+                countPersistedID(persisted, firstChildID!),
+                countPersistedID(persisted, secondChildID!),
+            ];
+        }, {timeout: 30000}).toEqual([1, 1]);
     });
 
     test("undoes and redoes immediately after rapid input", async ({page, createTestDocument, siyuanAPI}) => {

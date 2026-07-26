@@ -250,6 +250,10 @@ export class SiyuanAPI {
         return this.post<IEncryptedNotebookStatus>("/api/notebook/getEncryptedNotebookStatus", {});
     }
 
+    async checkBlocksExist(ids: string[]) {
+        return this.post<Record<string, boolean>>("/api/block/checkBlocksExist", {ids});
+    }
+
     async lockNotebook(notebook: string) {
         await this.post<null>("/api/notebook/lockNotebook", {notebook});
     }

@@ -56,6 +56,7 @@ test.describe("encrypted notebook", () => {
 
             await openWorkspace(page, `/?id=${docID}`);
             await expect(await getDocumentEditor(page, docID)).toContainText(marker);
+            await page.waitForLoadState("networkidle");
             await page.goto("about:blank");
 
             await siyuanAPI.lockNotebook(notebookID);
@@ -100,6 +101,7 @@ test.describe("encrypted notebook", () => {
             await expect(await getDocumentEditor(page, docID)).toContainText(marker);
             await page.reload();
             await expect(await getDocumentEditor(page, docID)).toContainText(marker);
+            await page.waitForLoadState("networkidle");
             await page.goto("about:blank");
 
             await siyuanAPI.removeNotebook(notebookID);

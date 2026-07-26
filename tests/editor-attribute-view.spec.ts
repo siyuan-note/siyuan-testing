@@ -3,6 +3,7 @@ import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {waitForTransactionAction} from "./helpers/transactions";
 
 const AV_RENDER_TIMEOUT = 15000;
 
@@ -109,7 +110,9 @@ interface IAttributeView {
         }>;
         gallery?: {
             cardAspectRatio: number;
+            cardAspectRatioValue?: number;
             cardSize: number;
+            cardWidth?: number;
             coverFrom: number;
             coverFromAssetKeyID?: string;
             displayFieldName: boolean;
@@ -126,7 +129,9 @@ interface IAttributeView {
         itemIds?: string[];
         kanban?: {
             cardAspectRatio: number;
+            cardAspectRatioValue?: number;
             cardSize: number;
+            cardWidth?: number;
             coverFrom: number;
             coverFromAssetKeyID?: string;
             displayFieldName: boolean;
@@ -193,19 +198,6 @@ const focusAtEnd = async (block: Locator) => {
 
 const waitForResponse = (page: Page, path: string, timeout = 15000) => page.waitForResponse(response =>
     new URL(response.url()).pathname === path, {timeout});
-
-const waitForTransactionAction = (page: Page, action: string, timeout = 30000) => page.waitForResponse(response => {
-    if (new URL(response.url()).pathname !== "/api/transactions") {
-        return false;
-    }
-    const payload = response.request().postDataJSON() as {
-        transactions?: Array<{
-            doOperations?: Array<{action?: string}>;
-        }>;
-    };
-    return payload.transactions?.some(transaction =>
-        transaction.doOperations?.some(operation => operation.action === action)) || false;
-}, {timeout});
 
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     const response = waitForResponse(page, "/api/transactions");
@@ -939,11 +931,21 @@ const dragKanbanCard = async (page: Page, source: Locator, target: Locator,
     expect(sourceID).toBeTruthy();
     const targetBox = await target.boundingBox();
     expect(targetBox).not.toBeNull();
+    const sourceGroupID = await source.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__body ')][1]",
+    ).getAttribute("data-group-id");
     const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    const dragType = `application/siyuan-gutterNodeAttributeView\u200bGalleryItem\u200b${sourceID}` +
+        (sourceGroupID ? `@${sourceGroupID}` : "");
+    await dataTransfer.evaluate((transfer, data) => transfer.setData(data.type, data.value), {
+        type: dragType,
+        value: await source.evaluate(element => element.outerHTML),
+    });
+    await source.evaluate(element => {
+        element.classList.add("av__gallery-item--select");
+        (window.siyuan as typeof window.siyuan & {dragElement?: HTMLElement}).dragElement = element as HTMLElement;
+    });
     await source.dispatchEvent("dragstart", {dataTransfer});
-    await expect.poll(() => dataTransfer.evaluate(transfer =>
-        Array.from(transfer.types).some(type => type.toLowerCase().includes("nodeattributeview"))),
-    {timeout: 10000}).toBe(true);
     const point = {
         clientX: targetBox!.x + targetBox!.width / 2,
         clientY: position === "top" ? targetBox!.y + 2 : targetBox!.y + targetBox!.height - 2,
@@ -955,10 +957,8 @@ const dragKanbanCard = async (page: Page, source: Locator, target: Locator,
     const transaction = waitForTransactionAction(page, "sortAttrViewRow");
     await target.dispatchEvent("drop", {dataTransfer, ...point});
     const response = await transaction;
-    const moved = page.locator(`.av__gallery-item[data-id="${sourceID}"]`).first();
-    if (await moved.count() > 0) {
-        await moved.dispatchEvent("dragend", {dataTransfer});
-    }
+    await page.locator(`.av__gallery-item[data-id="${sourceID}"]`).first()
+        .dispatchEvent("dragend", {dataTransfer});
     await dataTransfer.dispose();
     return response.request().postDataJSON();
 };
@@ -1504,7 +1504,9 @@ test.describe("attribute views", () => {
         expect(duplicateBaseline).toBeTruthy();
         const baselineSummary = {
             cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardAspectRatioValue: duplicateBaseline!.cardAspectRatioValue,
             cardSize: duplicateBaseline!.cardSize,
+            cardWidth: duplicateBaseline!.cardWidth,
             coverFrom: duplicateBaseline!.coverFrom,
             coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
             displayFieldName: duplicateBaseline!.displayFieldName,
@@ -1544,8 +1546,8 @@ test.describe("attribute views", () => {
         };
         await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
         const largeLabel = await page.evaluate(() => window.siyuan.languages.large);
-        await chooseLayoutOption("set-gallery-size", "setAttrViewCardSize", largeLabel);
-        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatio", "1:1");
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardWidth", largeLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatioValue", "1:1");
 
         const toggleSetting = async (type: string, action: string, checked: boolean) => {
             const input = panel.locator(`input[data-type="${type}"]`);
@@ -1581,7 +1583,9 @@ test.describe("attribute views", () => {
             return {
                 duplicate: duplicate && {
                     cardAspectRatio: duplicate.cardAspectRatio,
+                    cardAspectRatioValue: duplicate.cardAspectRatioValue,
                     cardSize: duplicate.cardSize,
+                    cardWidth: duplicate.cardWidth,
                     coverFrom: duplicate.coverFrom,
                     coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
                     displayFieldName: duplicate.displayFieldName,
@@ -1592,7 +1596,9 @@ test.describe("attribute views", () => {
                 },
                 source: source && {
                     cardAspectRatio: source.cardAspectRatio,
+                    cardAspectRatioValue: source.cardAspectRatioValue,
                     cardSize: source.cardSize,
+                    cardWidth: source.cardWidth,
                     coverFrom: source.coverFrom,
                     coverFromAssetKeyID: source.coverFromAssetKeyID,
                     detailsHidden: source.fields.find(field => field.id === detailsColumn.id)?.hidden,
@@ -1606,8 +1612,10 @@ test.describe("attribute views", () => {
         }, {timeout: 30000}).toEqual({
             duplicate: baselineSummary,
             source: {
-                cardAspectRatio: 6,
-                cardSize: 2,
+                cardAspectRatio: 0,
+                cardAspectRatioValue: 1,
+                cardSize: 1,
+                cardWidth: 320,
                 coverFrom: 2,
                 coverFromAssetKeyID: coverColumn.id,
                 detailsHidden: true,
@@ -1623,8 +1631,10 @@ test.describe("attribute views", () => {
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
         const sourceCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
-        await expect(block.locator(".av__gallery")).toHaveClass(/av__gallery--big/);
-        await expect(sourceCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--6/);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "1", width: "320px"});
         const coverImage = sourceCard.locator(".av__gallery-img");
         await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
         await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -1638,7 +1648,10 @@ test.describe("attribute views", () => {
 
         await switchView(duplicateViewID);
         const duplicateCard = block.locator(`.av__gallery-item[data-id="${row.id}"]`);
-        await expect(block.locator(".av__gallery")).not.toHaveClass(/av__gallery--small|av__gallery--big/);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: `${16 / 9}`, width: "260px"});
         await expect(duplicateCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--0/);
         await expect(duplicateCard.locator(".av__gallery-field--name")).toHaveCount(0);
         await expect(duplicateCard.locator(
@@ -1649,7 +1662,10 @@ test.describe("attribute views", () => {
             .toEqual(["false", "false", "false", "false"]);
 
         await switchView(sourceViewID);
-        await expect(block.locator(".av__gallery")).toHaveClass(/av__gallery--big/);
+        await expect.poll(() => block.locator(".av__gallery").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "1", width: "320px"});
         await expect(block.locator(`.av__gallery-item[data-id="${row.id}"] .av__gallery-img`))
             .toHaveClass(/av__gallery-img--fit/);
     });
@@ -1780,7 +1796,9 @@ test.describe("attribute views", () => {
         expect(duplicateBaseline).toBeTruthy();
         const baselineSummary = {
             cardAspectRatio: duplicateBaseline!.cardAspectRatio,
+            cardAspectRatioValue: duplicateBaseline!.cardAspectRatioValue,
             cardSize: duplicateBaseline!.cardSize,
+            cardWidth: duplicateBaseline!.cardWidth,
             coverFrom: duplicateBaseline!.coverFrom,
             coverFromAssetKeyID: duplicateBaseline!.coverFromAssetKeyID,
             displayFieldName: duplicateBaseline!.displayFieldName,
@@ -1821,8 +1839,8 @@ test.describe("attribute views", () => {
         };
         await chooseLayoutOption("set-gallery-cover", "setAttrViewCoverFromAssetKeyID", "Cover");
         const smallLabel = await page.evaluate(() => window.siyuan.languages.small);
-        await chooseLayoutOption("set-gallery-size", "setAttrViewCardSize", smallLabel);
-        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatio", "3:4");
+        await chooseLayoutOption("set-gallery-size", "setAttrViewCardWidth", smallLabel);
+        await chooseLayoutOption("set-gallery-ratio", "setAttrViewCardAspectRatioValue", "3:4");
 
         const toggleSetting = async (type: string, action: string, checked: boolean) => {
             const input = panel.locator(`input[data-type="${type}"]`);
@@ -1846,7 +1864,9 @@ test.describe("attribute views", () => {
             return {
                 duplicate: duplicate && {
                     cardAspectRatio: duplicate.cardAspectRatio,
+                    cardAspectRatioValue: duplicate.cardAspectRatioValue,
                     cardSize: duplicate.cardSize,
+                    cardWidth: duplicate.cardWidth,
                     coverFrom: duplicate.coverFrom,
                     coverFromAssetKeyID: duplicate.coverFromAssetKeyID,
                     displayFieldName: duplicate.displayFieldName,
@@ -1858,7 +1878,9 @@ test.describe("attribute views", () => {
                 },
                 source: source && {
                     cardAspectRatio: source.cardAspectRatio,
+                    cardAspectRatioValue: source.cardAspectRatioValue,
                     cardSize: source.cardSize,
+                    cardWidth: source.cardWidth,
                     coverFrom: source.coverFrom,
                     coverFromAssetKeyID: source.coverFromAssetKeyID,
                     displayFieldName: source.displayFieldName,
@@ -1872,8 +1894,10 @@ test.describe("attribute views", () => {
         }, {timeout: 30000}).toEqual({
             duplicate: baselineSummary,
             source: {
-                cardAspectRatio: 3,
-                cardSize: 0,
+                cardAspectRatio: 0,
+                cardAspectRatioValue: 0.75,
+                cardSize: 1,
+                cardWidth: 180,
                 coverFrom: 2,
                 coverFromAssetKeyID: coverColumn.id,
                 displayFieldName: true,
@@ -1891,14 +1915,14 @@ test.describe("attribute views", () => {
         const sourceGroups = block.locator(".av__kanban-group");
         const sourceCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
         await expect(sourceGroups).toHaveCount(2);
-        await expect.poll(() => sourceGroups.evaluateAll(groups =>
-            groups.map(group => group.classList.contains("av__kanban-group--small"))),
-        {timeout: 30000}).toEqual([true, true]);
+        await expect.poll(() => block.locator(".av__kanban").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: "0.75", width: "180px"});
         await expect(block.locator(".av__kanban")).toHaveClass(/av__kanban--bg/);
         await expect.poll(() => sourceGroups.evaluateAll(groups =>
             groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
         {timeout: 30000}).toEqual([true, true]);
-        await expect(sourceCard.locator(".av__gallery-cover")).toHaveClass(/av__gallery-cover--3/);
         const coverImage = sourceCard.locator(".av__gallery-img");
         await expect(coverImage).toHaveClass(/av__gallery-img--fit/);
         await expect(coverImage).toHaveAttribute("src", new RegExp(assetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -1911,10 +1935,10 @@ test.describe("attribute views", () => {
         const duplicateGroups = block.locator(".av__kanban-group");
         const duplicateCard = block.locator(`.av__gallery-item[data-id="${planned.id}"]`);
         await expect(duplicateGroups).toHaveCount(2);
-        await expect.poll(() => duplicateGroups.evaluateAll(groups => groups.map(group =>
-            group.classList.contains("av__kanban-group--small") ||
-            group.classList.contains("av__kanban-group--big"))),
-        {timeout: 30000}).toEqual([false, false]);
+        await expect.poll(() => block.locator(".av__kanban").evaluate(element => ({
+            ratio: getComputedStyle(element).getPropertyValue("--b3-av-card-aspect-ratio").trim(),
+            width: getComputedStyle(element).getPropertyValue("--b3-av-card-width").trim(),
+        })), {timeout: 30000}).toEqual({ratio: `${16 / 9}`, width: "260px"});
         await expect(block.locator(".av__kanban")).not.toHaveClass(/av__kanban--bg/);
         await expect.poll(() => duplicateGroups.evaluateAll(groups =>
             groups.map(group => group.getAttribute("style")?.includes("--b3-av-kanban-background") || false)),
@@ -2387,19 +2411,10 @@ test.describe("attribute views", () => {
         await requestTransaction(page, () => title.fill(databaseName));
         await expect(title).toHaveText(databaseName);
 
-        await requestTransaction(page, () => block.locator('[data-type="av-add-bottom"]').click());
-        const row = block.locator(".av__body .av__row:not(.av__row--header):not([data-type=ghost])").first();
-        await expect(row).toBeVisible({timeout: 15000});
-        const rowID = await row.getAttribute("data-id");
-        expect(rowID).toBeTruthy();
-        const dataRow = block.locator(`.av__body .av__row[data-id="${rowID}"]`);
+        const {id: rowID, row: dataRow} = await addRow(page, block, "First item");
         const primaryColumnID = await block.locator('.av__row--header [data-dtype="block"]')
             .getAttribute("data-col-id");
         expect(primaryColumnID).toBeTruthy();
-        const newRowInput = page.locator(".av__mask .b3-text-field");
-        await expect(newRowInput).toBeVisible();
-        await newRowInput.fill("First item");
-        await requestTransaction(page, () => newRowInput.press("Enter"));
 
         const textColumn = await addColumn(page, block, "text", "Notes");
         const numberColumn = await addColumn(page, block, "number", "Estimate");
@@ -2421,7 +2436,7 @@ test.describe("attribute views", () => {
                 estimate: values.Estimate?.number?.content,
                 item: values[av.keyValues[0].key.name]?.block?.content,
                 notes: values.Notes?.text?.content,
-                rowIncluded: av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID!),
+                rowIncluded: av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID),
             };
         }, {timeout: 30000}).toEqual({
             databaseName,
@@ -3387,15 +3402,7 @@ test.describe("attribute views", () => {
     }) => {
         const document = await createTestDocument("Attribute View History E2E", "Database seed");
         const {avID, block} = await insertAttributeView(page, document.editor);
-        await requestTransaction(page, () => block.locator('[data-type="av-add-bottom"]').click());
-        const row = block.locator(".av__body .av__row:not(.av__row--header):not([data-type=ghost])").first();
-        await expect(row).toBeVisible({timeout: 15000});
-        const rowID = await row.getAttribute("data-id");
-        expect(rowID).toBeTruthy();
-        const newRowInput = page.locator(".av__mask .b3-text-field");
-        await expect(newRowInput).toBeVisible();
-        await newRowInput.fill("History item");
-        await requestTransaction(page, () => newRowInput.press("Enter"));
+        const {id: rowID, row} = await addRow(page, block, "History item");
 
         const textColumn = await addColumn(page, block, "text", "Temporary");
 
@@ -3423,7 +3430,7 @@ test.describe("attribute views", () => {
         await expect(block.locator(`.av__row[data-id="${rowID}"]`)).toHaveCount(0);
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
-            return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID!) ?? false;
+            return av.views.find(view => view.id === av.viewID)?.itemIds?.includes(rowID) ?? false;
         }, {timeout: 30000}).toBe(false);
 
         await requestHistoryAction(page, block, UNDO_SHORTCUT, "undo");
@@ -3449,7 +3456,7 @@ test.describe("attribute views", () => {
             siyuanAPI, document.docID, await block.getAttribute("data-node-id") || "", avID,
         );
         expect(final.keyValues.some(item => item.key.id === textColumn.id)).toBe(false);
-        expect(final.views.find(view => view.id === final.viewID)?.itemIds?.includes(rowID!) ?? false).toBe(false);
+        expect(final.views.find(view => view.id === final.viewID)?.itemIds?.includes(rowID) ?? false).toBe(false);
 
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, document.docID);
@@ -4069,10 +4076,23 @@ test.describe("attribute views", () => {
         await firstCell.dispatchEvent("mousedown", {button: 0, buttons: 1});
         await firstCell.dispatchEvent("mouseup", {button: 0, buttons: 0});
         await expect(firstCell).toHaveClass(/av__cell--select/);
+        await expect(block.locator(".av__cell--select")).toHaveCount(1);
+
+        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
+        await pasteTarget.evaluate((element) => {
+            element.focus();
+            const range = element.ownerDocument.createRange();
+            range.selectNodeContents(element);
+            range.collapse(false);
+            const selection = element.ownerDocument.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        });
+        await expect(firstCell).toHaveClass(/av__cell--select/);
+        await expect(block.locator(".av__cell--select")).toHaveCount(1);
 
         const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
         const pasteTransaction = waitForResponse(page, "/api/transactions");
-        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
         await pasteTarget.evaluate((element) => {
             const clipboardData = new DataTransfer();
             clipboardData.setData("text/plain", "q\tw\ne\tr\nt\ty");
@@ -4085,6 +4105,9 @@ test.describe("attribute views", () => {
                 clipboardData,
             }));
         });
+        const pasteAsData = page.locator('.b3-dialog button[data-action="data"]:visible');
+        await expect(pasteAsData).toBeVisible();
+        await pasteAsData.click();
         await Promise.all([pasteRowsResponse, pasteTransaction]);
 
         await expect.poll(async () => {

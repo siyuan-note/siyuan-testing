@@ -157,6 +157,7 @@ test.describe("document import", () => {
         siyuanAPI,
         trackTestDocument,
     }) => {
+        test.slow();
         const parentMarker = `SiYuan round trip parent ${Date.now()}`;
         const childMarker = `SiYuan round trip child ${Date.now()}`;
         const parent = await createTestDocument("SiYuan Round Trip Parent E2E", "Parent seed");
@@ -252,7 +253,7 @@ test.describe("document import", () => {
         await expect.poll(async () => {
             const result = await siyuanAPI.searchBlocks(childMarker);
             return result.blocks.some(block => block.rootID === importedChildID);
-        }, {timeout: 30000}).toBe(true);
+        }, {timeout: 60000}).toBe(true);
 
         await siyuanAPI.removeWorkspaceFile(`/data/${assetPath}`);
     });

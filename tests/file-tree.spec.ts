@@ -212,6 +212,10 @@ test.describe("file tree", () => {
             )).toBeVisible();
             await expect(editor.locator(`[data-node-id="${childBlockID}"]`)).toHaveAttribute("bookmark", bookmark);
         });
+        await siyuanAPI.setBlockAttrs(childBlockID!, {bookmark: ""});
+        await expect.poll(async () => (await siyuanAPI.getBookmarks()).some(
+            item => item.name === bookmark,
+        ), {timeout: 30000}).toBe(false);
     });
 });
 
