@@ -19,6 +19,7 @@ interface IAttributeViewKey {
     created?: {includeTime: boolean};
     id: string;
     name: string;
+    numberFormat?: string;
     options?: Array<{
         color: string;
         name: string;
@@ -395,6 +396,38 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     await expect(input).toHaveCount(0);
 };
 
+const setNumberFormat = async (page: Page, header: Locator,
+                               format: "commas" | "percent" | "USD") => {
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(header).toBeVisible();
+        await header.click();
+        const headerMenu = page.locator('#commonMenu[data-name="av-header-cell"]:not(.fn__none)');
+        await expect(headerMenu).toBeVisible({timeout: 2000});
+        await headerMenu.locator('[data-id="edit"]').click();
+        await expect(panel.locator('[data-type="numberFormat"]')).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    await panel.locator('[data-type="numberFormat"]').click();
+
+    const menu = page.locator('#commonMenu[data-name="av-col-format-number"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    const label = await page.evaluate(value => {
+        if (value === "commas") {
+            return window.siyuan.languages.numberFormatCommas;
+        }
+        if (value === "percent") {
+            return window.siyuan.languages.numberFormatPercent;
+        }
+        return window.siyuan.languages.numberFormatUSD;
+    }, format);
+    const option = menu.locator(".b3-menu__item").filter({
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    });
+    await expect(option).toBeVisible();
+    await requestTransaction(page, () => option.click());
+    await expect(panel).toHaveCount(0);
+};
+
 const editSelectCell = async (page: Page, cell: Locator, values: string[]) => {
     const input = page.locator(".av__panel .b3-chips input:visible");
     const block = cell.locator(
@@ -730,6 +763,121 @@ test.describe("attribute views", () => {
         await expect(reloadedRow.locator(`[data-col-id="${textColumn.id}"]`)).toContainText("Ready for review");
         await expect(reloadedRow.locator(`[data-col-id="${numberColumn.id}"]`)).toContainText("13.5");
         await expect(reloadedRow.locator(`[data-col-id="${checkboxColumn.id}"]`)).toHaveClass(/av__cell-check/);
+    });
+
+    test("formats, clears, and restores numeric values", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Number Format E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const negativeRow = await addRow(page, block, "Negative amount");
+        const zeroRow = await addRow(page, block, "Zero amount");
+        const column = await addColumn(page, block, "number", "Amount");
+        let rendered = {
+            header: column.header,
+            negativeCell: negativeRow.row.locator(`[data-col-id="${column.id}"]`),
+            zeroCell: zeroRow.row.locator(`[data-col-id="${column.id}"]`),
+        };
+        await editCell(page, rendered.negativeCell, "-1234567.126");
+        await editCell(page, rendered.zeroCell, "0");
+
+        const readNumberState = async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const keyValues = av.keyValues.find(item => item.key.id === column.id);
+            const values = new Map(keyValues?.values?.map(value => [value.blockID, value.number && {
+                content: value.number.content,
+                isNotEmpty: value.number.isNotEmpty,
+            }]));
+            return {
+                format: keyValues?.key.numberFormat,
+                negative: values.get(negativeRow.id),
+                zero: values.get(zeroRow.id),
+            };
+        };
+        const reloadNumberCells = async () => {
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            const reloadedBlock = editor.locator(`:scope > [data-av-id="${avID}"]`);
+            return {
+                header: reloadedBlock.locator(
+                    `.av__row--header .av__cell--header[data-col-id="${column.id}"]`,
+                ),
+                negativeCell: reloadedBlock.locator(
+                    `.av__row[data-id="${negativeRow.id}"] [data-col-id="${column.id}"]`,
+                ),
+                zeroCell: reloadedBlock.locator(
+                    `.av__row[data-id="${zeroRow.id}"] [data-col-id="${column.id}"]`,
+                ),
+            };
+        };
+        await expect.poll(readNumberState, {timeout: 30000}).toEqual({
+            format: "",
+            negative: {
+                content: -1234567.126,
+                isNotEmpty: true,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await setNumberFormat(page, rendered.header, "commas");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "commas"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("-1,234,567.126");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("0");
+
+        await setNumberFormat(page, rendered.header, "percent");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "percent"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("-123456712.6%");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("0%");
+
+        await setNumberFormat(page, rendered.header, "USD");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({format: "USD"});
+        rendered = await reloadNumberCells();
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("$-1,234,567.13");
+        await expect(rendered.zeroCell.locator(".av__celltext")).toHaveText("$0.00");
+
+        await editCell(page, rendered.negativeCell, "");
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("");
+        await expect.poll(readNumberState, {timeout: 30000}).toMatchObject({
+            format: "USD",
+            negative: {
+                isNotEmpty: false,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await editCell(page, rendered.negativeCell, "42.5");
+        await expect(rendered.negativeCell.locator(".av__celltext")).toHaveText("$42.50");
+        await expect.poll(readNumberState, {timeout: 30000}).toEqual({
+            format: "USD",
+            negative: {
+                content: 42.5,
+                isNotEmpty: true,
+            },
+            zero: {
+                content: 0,
+                isNotEmpty: true,
+            },
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-av-id="${avID}"]`);
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${negativeRow.id}"] [data-col-id="${column.id}"] .av__celltext`,
+        )).toHaveText("$42.50");
+        await expect(reloadedBlock.locator(
+            `.av__row[data-id="${zeroRow.id}"] [data-col-id="${column.id}"] .av__celltext`,
+        )).toHaveText("$0.00");
     });
 
     test("edits select, multi-select, and date values and restores them after reload", async ({
