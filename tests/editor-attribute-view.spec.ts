@@ -144,6 +144,19 @@ const focusAtEnd = async (block: Locator) => {
 const waitForResponse = (page: Page, path: string, timeout = 15000) => page.waitForResponse(response =>
     new URL(response.url()).pathname === path, {timeout});
 
+const waitForTransactionAction = (page: Page, action: string, timeout = 30000) => page.waitForResponse(response => {
+    if (new URL(response.url()).pathname !== "/api/transactions") {
+        return false;
+    }
+    const payload = response.request().postDataJSON() as {
+        transactions?: Array<{
+            doOperations?: Array<{action?: string}>;
+        }>;
+    };
+    return payload.transactions?.some(transaction =>
+        transaction.doOperations?.some(operation => operation.action === action)) || false;
+}, {timeout});
+
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
     const response = waitForResponse(page, "/api/transactions");
     await action();
@@ -658,6 +671,62 @@ const addRow = async (page: Page, block: Locator, content: string) => {
     return {id: rowID!, row: block.locator(`.av__row[data-id="${rowID}"]`)};
 };
 
+const addAttributeViewView = async (page: Page, block: Locator, layout: "gallery" | "kanban" | "table") => {
+    await block.locator('[data-type="av-add"]').click();
+    const menu = page.locator("#commonMenu:not(.fn__none)");
+    await expect(menu).toBeVisible();
+    const label = await page.evaluate(value => window.siyuan.languages[value], layout);
+    const transaction = waitForTransactionAction(page, "addAttrViewView");
+    await menu.locator(".b3-menu__item").filter({
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    }).click();
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+                layout?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "addAttrViewView");
+    expect(operation?.id).toBeTruthy();
+    const panel = page.locator(".av__panel");
+    if (await panel.count() > 0) {
+        await panel.locator('[data-type="close"]').click({position: {x: 5, y: 5}});
+        await expect(panel).toHaveCount(0);
+    }
+    return operation!.id!;
+};
+
+const openFocusedViewMenu = async (page: Page, block: Locator) => {
+    await block.locator(".av__views .layout-tab-bar .item--focus").click();
+    const menu = page.locator('#commonMenu[data-name="av-view"]:not(.fn__none)');
+    await expect(menu).toBeVisible();
+    return menu;
+};
+
+const duplicateFocusedView = async (page: Page, block: Locator) => {
+    const menu = await openFocusedViewMenu(page, block);
+    const transaction = waitForTransactionAction(page, "duplicateAttrViewView");
+    await menu.locator('[data-id="duplicate"]').click();
+    const response = await transaction;
+    const payload = response.request().postDataJSON() as {
+        transactions: Array<{
+            doOperations: Array<{
+                action: string;
+                id?: string;
+            }>;
+        }>;
+    };
+    const operation = payload.transactions.flatMap(item => item.doOperations)
+        .find(item => item.action === "duplicateAttrViewView");
+    expect(operation?.id).toBeTruthy();
+    return operation!.id!;
+};
+
 const openAttributeViewConfig = async (page: Page, block: Locator) => {
     await block.locator('[data-type="av-more"]').click();
     const panel = page.locator(".av__panel .b3-menu");
@@ -695,6 +764,172 @@ test.describe("attribute views", () => {
         await expect(block).toHaveAttribute("data-av-id", inserted.avID);
         await expectRenderedAttributeView(block, stored);
         expect(await getAttributeView(siyuanAPI, inserted.avID)).toEqual(stored);
+    });
+
+    test("creates, renames, duplicates, switches, and deletes views", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Views E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        let block = inserted.block;
+        const initial = await getAttributeView(siyuanAPI, avID);
+        const initialViewID = initial.viewID;
+        expect(initial.views).toHaveLength(1);
+        expect(initial.views[0].type).toBe("table");
+        const switchView = async (viewID: string, layout: "gallery" | "table") => {
+            await requestTransaction(page, () => block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            ).click());
+            await expect.poll(async () => (await getAttributeView(siyuanAPI, avID)).viewID, {
+                timeout: 30000,
+            }).toBe(viewID);
+            await page.reload();
+            const editor = await getDocumentEditor(page, document.docID);
+            block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+            await expect(block.locator(
+                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
+            )).toHaveClass(/item--focus/);
+            await expect(block).toHaveAttribute("data-av-type", layout);
+        };
+
+        const galleryViewID = await addAttributeViewView(page, block, "gallery");
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                type: av.views.find(view => view.id === galleryViewID)?.type,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: galleryViewID,
+            type: "gallery",
+            viewIDs: [initialViewID, galleryViewID],
+        });
+        await page.reload();
+        const galleryEditor = await getDocumentEditor(page, document.docID);
+        block = galleryEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+        const galleryName = `Gallery workflow ${Date.now()}`;
+        let menu = await openFocusedViewMenu(page, block);
+        await menu.locator('[data-id="rename"]').click();
+        const panel = page.locator(".av__panel");
+        const nameInput = panel.locator('.b3-text-field[data-type="name"]');
+        await expect(nameInput).toBeVisible();
+        await nameInput.fill(galleryName);
+        await requestTransaction(page, () => nameInput.press("Enter"));
+        await expect(panel).toHaveCount(0);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === galleryViewID)?.name;
+        }, {timeout: 30000}).toBe(galleryName);
+        await page.reload();
+        const renamedEditor = await getDocumentEditor(page, document.docID);
+        block = renamedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"] .item__text`,
+        )).toHaveText(galleryName);
+
+        const duplicateViewID = await duplicateFocusedView(page, block);
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            const source = av.views.find(view => view.id === galleryViewID);
+            const duplicate = av.views.find(view => view.id === duplicateViewID);
+            return {
+                current: av.viewID,
+                duplicateType: duplicate?.type,
+                sourceName: source?.name,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: duplicateViewID,
+            duplicateType: "gallery",
+            sourceName: galleryName,
+            viewIDs: [initialViewID, galleryViewID, duplicateViewID],
+        });
+        await page.reload();
+        const duplicateEditor = await getDocumentEditor(page, document.docID);
+        block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${duplicateViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+
+        await switchView(initialViewID, "table");
+        await switchView(galleryViewID, "gallery");
+        menu = await openFocusedViewMenu(page, block);
+        await requestTransaction(page, () => menu.locator('[data-id="delete"]').click());
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            viewIDs: [initialViewID, duplicateViewID],
+        });
+        await page.reload();
+        const firstDeleteEditor = await getDocumentEditor(page, document.docID);
+        block = firstDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${galleryViewID}"]`,
+        )).toHaveCount(0);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expect(block).toHaveAttribute("data-av-type", "table");
+
+        await switchView(duplicateViewID, "gallery");
+        menu = await openFocusedViewMenu(page, block);
+        await requestTransaction(page, () => menu.locator('[data-id="delete"]').click());
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                viewIDs: av.views.map(view => view.id),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            viewIDs: [initialViewID],
+        });
+        await page.reload();
+        const secondDeleteEditor = await getDocumentEditor(page, document.docID);
+        block = secondDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block.locator(".av__views .layout-tab-bar .item")).toHaveCount(1);
+        await expect(block.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+
+        menu = await openFocusedViewMenu(page, block);
+        await expect(menu.locator('[data-id="delete"]')).toHaveCount(0);
+        await page.keyboard.press("Escape");
+
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return {
+                current: av.viewID,
+                views: av.views.map(view => ({id: view.id, type: view.type})),
+            };
+        }, {timeout: 30000}).toEqual({
+            current: initialViewID,
+            views: [{id: initialViewID, type: "table"}],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, document.docID);
+        const reloadedBlock = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
+        await expect(reloadedBlock.locator(".av__views .layout-tab-bar .item")).toHaveCount(1);
+        await expect(reloadedBlock.locator(
+            `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
+        )).toHaveClass(/item--focus/);
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
     });
 
     test("edits the database name, fields, row, and common cell values", async ({
