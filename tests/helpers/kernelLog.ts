@@ -15,6 +15,25 @@ export interface IKernelLogAudit {
     reason?: string;
 }
 
+const normalizeLogPath = (value: string) => value.replace(/\\/g, "/").toLowerCase();
+
+const isLoadAfterConfirmedRemoval = (lines: string[], index: number) => {
+    const missingPath = lines[index].match(/ tree\.go:\d+: load tree failed: open (.+\.sy): /)?.[1];
+    if (!missingPath) {
+        return false;
+    }
+    const normalizedMissingPath = normalizeLogPath(missingPath);
+    return lines.slice(Math.max(0, index - 10), index).some(line => {
+        const removedPath = line.match(/ file\.go:\d+: removed doc \[(.+\.sy)]$/)?.[1];
+        if (!removedPath) {
+            return false;
+        }
+        const normalizedRemovedPath = normalizeLogPath(removedPath);
+        return normalizedMissingPath === normalizedRemovedPath ||
+            normalizedMissingPath.endsWith(`/${normalizedRemovedPath}`);
+    });
+};
+
 export const extractKernelErrors = (log: string) => {
     const lines = log.split(/\r?\n/);
     return lines.filter((line, index) => {
@@ -23,6 +42,9 @@ export const extractKernelErrors = (log: string) => {
             return true;
         }
         if (!/^E \d{4}\/\d{2}\/\d{2} /.test(line)) {
+            return false;
+        }
+        if (isLoadAfterConfirmedRemoval(lines, index)) {
             return false;
         }
         if (!/ repo\.go:\d+: file changed \[/.test(line)) {

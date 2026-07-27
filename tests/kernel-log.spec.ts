@@ -16,4 +16,26 @@ test.describe("kernel log audit", () => {
         expect(extractKernelErrors([...retried, terminal, unrelated, panic].join("\n")))
             .toEqual([terminal, unrelated, panic]);
     });
+
+    test("ignores missing trees only after the same document was removed", () => {
+        const windowsRemoval = [
+            "I 2026/07/27 08:34:10 file.go:1997: removed doc [box-id/doc-id.sy]",
+            "W 2026/07/27 08:34:10 file.go:477: query root block ref count elapsed [2327ms]",
+            "E 2026/07/27 08:34:11 tree.go:101: load tree failed: open F:\\Workspace\\data\\box-id\\doc-id.sy: " +
+            "The system cannot find the file specified.",
+        ];
+        const linuxRemoval = [
+            "I 2026/07/27 08:35:10 file.go:1997: removed doc [box-id/other-id.sy]",
+            "E 2026/07/27 08:35:11 tree.go:101: load tree failed: open /workspace/data/box-id/other-id.sy: " +
+            "no such file or directory",
+        ];
+        expect(extractKernelErrors([...windowsRemoval, ...linuxRemoval].join("\n"))).toEqual([]);
+
+        const unrelatedRemoval = [
+            "I 2026/07/27 08:36:10 file.go:1997: removed doc [box-id/removed-id.sy]",
+            "E 2026/07/27 08:36:11 tree.go:101: load tree failed: open /workspace/data/box-id/missing-id.sy: " +
+            "no such file or directory",
+        ];
+        expect(extractKernelErrors(unrelatedRemoval.join("\n"))).toEqual([unrelatedRemoval[1]]);
+    });
 });

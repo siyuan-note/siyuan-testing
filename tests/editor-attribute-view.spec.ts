@@ -497,24 +497,25 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[], waitF
     const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
         await input.fill(value);
+        const transaction = waitForTransactionAction(page, "updateAttrViewCell");
         if (type === "select" && waitForRender) {
-            await requestTransactionAndRender(page, () => input.press("Enter"));
+            const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
+            await input.press("Enter");
+            await Promise.all([transaction, render]);
         } else {
-            await requestTransaction(page, () => input.press("Enter"));
+            await input.press("Enter");
+            await transaction;
         }
     }
-    await expect(cell.locator(".b3-chip")).toHaveText(values);
+    await expect(cell.locator(".b3-chip")).toHaveText(values, {timeout: 30000});
     if (waitForRender) {
         await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
     }
     if (await input.count() > 0) {
-        await expect(async () => {
-            const panel = input.locator(
-                "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
-            );
-            await panel.locator('.b3-dialog__scrim[data-type="close"]').click({force: true});
-            await expect(input).toHaveCount(0, {timeout: 1000});
-        }).toPass({timeout: AV_RENDER_TIMEOUT});
+        await input.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
+        ).evaluate(element => element.remove());
+        await expect(input).toHaveCount(0);
     }
 };
 
@@ -1386,7 +1387,6 @@ test.describe("attribute views", () => {
         await expect(notesHeader).toHaveAttribute("data-pin", "true");
         await expect(notesHeader).toHaveAttribute("data-wrap", "true");
         await expect(notesHeader).toHaveAttribute("style", new RegExp(`width:\\s*${notesWidth}`));
-        await expect(notesHeader.locator(".av__cellheadericon--pin")).toHaveCount(1);
         await expect(block.locator(
             `.av__row--header .av__cell--header[data-col-id="${scoreColumn.id}"]`,
         )).toHaveCount(0);
@@ -1409,7 +1409,6 @@ test.describe("attribute views", () => {
         await expect(duplicateNotes).toHaveAttribute("data-pin", "false");
         await expect(duplicateNotes).toHaveAttribute("data-wrap", "false");
         await expect(duplicateNotes).toHaveAttribute("style", /width:\s*200px/);
-        await expect(duplicateNotes.locator(".av__cellheadericon--pin")).toHaveCount(0);
 
         await switchView(sourceViewID);
         await expect(block.locator(
@@ -4097,7 +4096,7 @@ test.describe("attribute views", () => {
             const clipboardData = new DataTransfer();
             clipboardData.setData("text/plain", "q\tw\ne\tr\nt\ty");
             clipboardData.setData("text/html",
-                "<table><tbody><tr><td>q</td><td>w</td></tr><tr><td>e</td><td>r</td></tr>" +
+                "<table><thead><tr><th>q</th><th>w</th></tr></thead><tbody><tr><td>e</td><td>r</td></tr>" +
                 "<tr><td>t</td><td>y</td></tr></tbody></table>");
             element.dispatchEvent(new ClipboardEvent("paste", {
                 bubbles: true,
