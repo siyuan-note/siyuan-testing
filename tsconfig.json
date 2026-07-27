@@ -10,5 +10,5 @@
     "lib": ["ES2022", "DOM"],
     "noEmit": true
   },
-  "include": ["playwright.config.ts", "tests/**/*.ts"]
+  "include": ["playwright*.ts", "tests/**/*.ts"]
 }

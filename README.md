@@ -24,6 +24,7 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test:headed`: run all tests with a visible browser.
 - `pnpm test:ui`: open Playwright UI mode.
 - `pnpm test:list`: list discovered tests without executing them.
+- `pnpm test:shards`: verify that the isolated CI shards cover every default test exactly once, except for explicit opt-in tests.
 - `pnpm test:repeat`: repeat the suite ten times to find synchronization problems.
 - `pnpm typecheck`: type-check the configuration, fixtures, helpers, and specs.
 - `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts`: run one spec file.

@@ -12,6 +12,7 @@
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "test:list": "playwright test --list",
+    "test:shards": "node scripts/check-shards.mjs",
     "test:repeat": "playwright test --repeat-each=10",
     "typecheck": "tsc"
   },
