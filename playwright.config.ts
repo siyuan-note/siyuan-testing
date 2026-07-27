@@ -17,6 +17,10 @@ const editorTests = [
     "**/editor*.spec.ts",
 ];
 
+const attributeViewTests = [
+    "**/editor-attribute-view.spec.ts",
+];
+
 const encryptedNotebookTests = [
     "**/encrypted-notebook.spec.ts",
 ];
@@ -73,6 +77,8 @@ export default defineConfig({
             name: "editor",
             dependencies: ["encrypted-notebook"],
             testMatch: editorTests,
+            testIgnore: process.env.SIYUAN_E2E_EXCLUDE_ATTRIBUTE_VIEW === "1" ?
+                attributeViewTests : undefined,
             workers: 1,
         },
         {

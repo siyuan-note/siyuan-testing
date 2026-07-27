@@ -1,4 +1,4 @@
-import {BrowserContext, JSHandle, Locator, Page} from "@playwright/test";
+import {JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -218,15 +218,6 @@ const requestHistoryAction = async (page: Page, block: Locator, shortcut: string
     await block.locator(".av__title").click();
     await page.keyboard.press(shortcut);
     await response;
-};
-
-const allowClipboard = async (context: BrowserContext, baseURL: string | undefined) => {
-    if (!baseURL) {
-        throw new Error("playwright.config.ts must define use.baseURL");
-    }
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: new URL(baseURL).origin,
-    });
 };
 
 const getAttributeView = async (api: SiyuanAPI, avID: string) => {
@@ -3990,8 +3981,6 @@ test.describe("attribute views", () => {
     });
 
     test("pastes beyond existing rows while the database uses virtual scrolling", async ({
-        baseURL,
-        context,
         createTestDocument,
         page,
         siyuanAPI,
@@ -4032,18 +4021,34 @@ test.describe("attribute views", () => {
             pageSize: 102400,
         });
 
-        await allowClipboard(context, baseURL);
         const pasteContents = Array.from({length: 130}, (_, index) =>
             `Pasted ${index.toString().padStart(3, "0")}`);
         const firstCell = reloadedBlock.locator(".av__body .av__row[data-id] [data-dtype=block]").first();
         await firstCell.click();
         await page.keyboard.press("Escape");
         await expect(firstCell).toHaveClass(/av__cell--select/);
-        await page.evaluate(text => navigator.clipboard.writeText(text), pasteContents.join("\n"));
-
+        const pasteTarget = reloadedBlock.locator('.av__cursor[contenteditable="true"]').first();
+        await pasteTarget.evaluate((element) => {
+            element.focus();
+            const range = element.ownerDocument.createRange();
+            range.selectNodeContents(element);
+            range.collapse(false);
+            const selection = element.ownerDocument.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        });
+        await expect(firstCell).toHaveClass(/av__cell--select/);
         const pasteRowsResponse = waitForResponse(page, "/api/av/getAttributeViewPasteRows");
         const pasteTransaction = waitForResponse(page, "/api/transactions");
-        await page.keyboard.press("ControlOrMeta+V");
+        await pasteTarget.evaluate((element, text) => {
+            const clipboardData = new DataTransfer();
+            clipboardData.setData("text/plain", text);
+            element.dispatchEvent(new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData,
+            }));
+        }, pasteContents.join("\n"));
         await Promise.all([pasteRowsResponse, pasteTransaction]);
         await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
             contents: pasteContents,

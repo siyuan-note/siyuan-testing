@@ -57,7 +57,10 @@ export const extractKernelErrors = (log: string) => {
     });
 };
 
-const BASELINE_PATH = path.resolve("test-results", ".kernel-log-baseline.json");
+const BASELINE_PATH = path.resolve(
+    process.env.SIYUAN_TEST_RESULTS_DIR?.trim() || "test-results",
+    ".kernel-log-baseline.json",
+);
 
 const writeBaseline = async (baseline: IKernelLogBaseline) => {
     await mkdir(path.dirname(BASELINE_PATH), {recursive: true});
