@@ -4275,4 +4275,249 @@ test.describe("attribute views", () => {
         await expect(reloadedBlock.locator(`.av__row[data-id="${rows[6].id}"] ` +
             `[data-col-id="${checkboxColumn.id}"]`)).toHaveClass(/av__cell-check/);
     });
+
+    test("supports database range selection across virtual rows and pastes into every selected row", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Range Selection Virtual E2E", "Database seed");
+        const {avID, blockID} = await insertAttributeView(page, document.editor);
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        const blockKey = (await getAttributeView(siyuanAPI, avID)).keyValues.find(item => item.key.type === "block");
+        expect(blockKey).toBeTruthy();
+        const seedContents = Array.from({length: 120}, (_, index) =>
+            `Range seed ${index.toString().padStart(3, "0")}`);
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: seedContents.map(content => [{
+                block: {content},
+                keyID: blockKey!.key.id,
+            }]),
+        });
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            contents: seedContents,
+        });
+
+        await page.reload();
+        const editor = await getDocumentEditor(page, document.docID);
+        const block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await setAttributeViewPageSize(page, block, "all");
+        await expect(block).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
+        const itemIDs = (await getOrderedBlockContents(siyuanAPI, avID)).itemIds;
+        expect(itemIDs).toHaveLength(seedContents.length);
+
+        const firstRow = block.locator(`.av__row[data-id="${itemIDs[0]}"]`);
+        await firstRow.locator(".av__firstcol").click();
+        await expect(firstRow).toHaveClass(/av__row--select/);
+
+        const content = block.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle-content ')][1]",
+        );
+        const lastRow = block.locator(`.av__row[data-id="${itemIDs.at(-1)}"]`);
+        await expect(async () => {
+            await content.evaluate(element => {
+                element.scrollTop = element.scrollHeight;
+                element.dispatchEvent(new Event("scroll"));
+            });
+            await expect(lastRow).toHaveCount(1, {timeout: 2000});
+            await lastRow.locator(".av__firstcol").dispatchEvent("click", {
+                button: 0,
+                shiftKey: true,
+            });
+            await expect(lastRow).toHaveClass(/av__row--select/, {timeout: 2000});
+        }).toPass({timeout: 30000});
+
+        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("120");
+
+        const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
+        await pasteTarget.evaluate(element => {
+            element.focus();
+            const range = element.ownerDocument.createRange();
+            range.selectNodeContents(element);
+            range.collapse(false);
+            const selection = element.ownerDocument.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        });
+        const transaction = waitForResponse(page, "/api/transactions", 30000);
+        await pasteTarget.evaluate((element, text) => {
+            const clipboardData = new DataTransfer();
+            clipboardData.setData("text/plain", text);
+            element.dispatchEvent(new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData,
+            }));
+        }, "Range pasted");
+        await transaction;
+        await expect.poll(() => getOrderedBlockContents(siyuanAPI, avID), {timeout: 30000}).toMatchObject({
+            contents: seedContents.map(() => "Range pasted"),
+        });
+        await expect(lastRow.locator('[data-dtype="block"]')).toContainText("Range pasted", {timeout: 30000});
+        await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("120");
+
+        await searchAttributeView(page, block, "does-not-match-range-selection");
+        await expect(block.locator(".av__counter:not(.fn__none)")).toHaveCount(0);
+        await searchAttributeView(page, block, "");
+        await expect(block.locator(".av__row--select[data-id]")).toHaveCount(0);
+    });
+
+    test("uses the exact duplicate card occurrence as the database range selection anchor", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Attribute View Range Selection Grouped Gallery E2E",
+            "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = inserted;
+        const statusColumn = await addColumn(page, inserted.block, "mSelect", "Status", "multiSelect");
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        const blockKey = (await getAttributeView(siyuanAPI, avID)).keyValues.find(item => item.key.type === "block");
+        expect(blockKey).toBeTruthy();
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: [[{
+                block: {content: "Duplicate card"},
+                keyID: blockKey!.key.id,
+            }, {
+                keyID: statusColumn.id,
+                mSelect: [
+                    {color: "1", content: "Alpha"},
+                    {color: "2", content: "Beta"},
+                ],
+            }]],
+        });
+        await siyuanAPI.post("/api/av/appendAttributeViewDetachedBlocksWithValues", {
+            avID,
+            blocksValues: [
+                [{
+                    block: {content: "Alpha target"},
+                    keyID: blockKey!.key.id,
+                }, {
+                    keyID: statusColumn.id,
+                    mSelect: [{color: "1", content: "Alpha"}],
+                }],
+                [{
+                    block: {content: "Beta target"},
+                    keyID: blockKey!.key.id,
+                }, {
+                    keyID: statusColumn.id,
+                    mSelect: [{color: "2", content: "Beta"}],
+                }],
+            ],
+        });
+        await expect.poll(async () => {
+            const av = await getAttributeView(siyuanAPI, avID);
+            return av.views.find(view => view.id === av.viewID)?.itemIds?.length;
+        }, {timeout: 30000}).toBe(3);
+
+        await page.reload();
+        let editor = await getDocumentEditor(page, document.docID);
+        let block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await convertToGroupedLayout(page, block, statusColumn.id, "gallery");
+        await page.reload();
+        editor = await getDocumentEditor(page, document.docID);
+        block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
+        await expect(block).toHaveAttribute("data-av-type", "gallery");
+
+        const av = await getAttributeView(siyuanAPI, avID);
+        const blockValues = av.keyValues.find(item => item.key.type === "block")?.values || [];
+        const duplicateID = blockValues.find(value => value.block?.content === "Duplicate card")?.blockID;
+        const betaTargetID = blockValues.find(value => value.block?.content === "Beta target")?.blockID;
+        expect(duplicateID).toBeTruthy();
+        expect(betaTargetID).toBeTruthy();
+        const alphaBody = block.locator(".av__group-title").filter({hasText: "Alpha"})
+            .locator("xpath=following-sibling::*[1]");
+        const betaBody = block.locator(".av__group-title").filter({hasText: "Beta"})
+            .locator("xpath=following-sibling::*[1]");
+        const alphaDuplicate = alphaBody.locator(`.av__gallery-item[data-id="${duplicateID}"]`);
+        const betaDuplicate = betaBody.locator(`.av__gallery-item[data-id="${duplicateID}"]`);
+        const betaTarget = betaBody.locator(`.av__gallery-item[data-id="${betaTargetID}"]`);
+        await expect(alphaDuplicate).toBeVisible();
+        await expect(betaDuplicate).toBeVisible();
+        await expect(betaTarget).toBeVisible();
+
+        const toggleModifier = process.platform === "darwin" ? "Meta" as const : "Control" as const;
+        await betaDuplicate.click({modifiers: [toggleModifier]});
+        await expect(betaDuplicate).toHaveClass(/av__gallery-item--select/);
+        await expect(alphaDuplicate).not.toHaveClass(/av__gallery-item--select/);
+        await betaTarget.click({modifiers: ["Shift"]});
+
+        await expect(betaDuplicate).toHaveClass(/av__gallery-item--select/);
+        await expect(betaTarget).toHaveClass(/av__gallery-item--select/);
+        await expect(alphaDuplicate).not.toHaveClass(/av__gallery-item--select/);
+        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("2");
+    });
+
+    test("collapses a database cell range to its anchor after fields are reordered", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const document = await createTestDocument("Attribute View Range Selection Column Sort E2E", "Database seed");
+        const inserted = await insertAttributeView(page, document.editor);
+        const notesColumn = await addColumn(page, inserted.block, "text", "Range notes");
+        const extraColumn = await addColumn(page, inserted.block, "text", "Reordered field");
+        const rows = [
+            await addRow(page, inserted.block, "First row"),
+            await addRow(page, inserted.block, "Second row"),
+            await addRow(page, inserted.block, "Third row"),
+        ];
+        const anchorCell = rows[0].row.locator(`[data-col-id="${notesColumn.id}"]`);
+        const focusCell = rows[2].row.locator(`[data-col-id="${notesColumn.id}"]`);
+        await anchorCell.dispatchEvent("mousedown", {button: 0, buttons: 1});
+        await anchorCell.dispatchEvent("mouseup", {button: 0, buttons: 0});
+        await expect(anchorCell).toHaveClass(/av__cell--select/);
+        await focusCell.click({modifiers: ["Shift"]});
+        await expect(inserted.block.locator(
+            `.av__cell--active[data-col-id="${notesColumn.id}"]`,
+        )).toHaveCount(3);
+
+        const sourceHeader = inserted.block.locator(
+            `.av__cell--header[data-col-id="${extraColumn.id}"]`,
+        );
+        const targetHeader = inserted.block.locator(
+            `.av__cell--header[data-col-id="${notesColumn.id}"]`,
+        );
+        const targetBox = await targetHeader.boundingBox();
+        expect(targetBox).not.toBeNull();
+        await expect(inserted.block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
+        let dataTransfer: JSHandle<DataTransfer> | undefined;
+        await expect(async () => {
+            dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+            await sourceHeader.dispatchEvent("dragstart", {dataTransfer});
+            const point = {
+                clientX: targetBox!.x + 2,
+                clientY: targetBox!.y + targetBox!.height / 2,
+            };
+            await targetHeader.dispatchEvent("dragenter", {dataTransfer, ...point});
+            await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
+            await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
+            try {
+                await expect(targetHeader).toHaveClass(/dragover__left/, {timeout: 2000});
+            } catch (error) {
+                await sourceHeader.dispatchEvent("dragend", {dataTransfer});
+                await dataTransfer.dispose();
+                dataTransfer = undefined;
+                throw error;
+            }
+        }).toPass({timeout: 30000});
+        const sortTransaction = waitForTransactionAction(page, "sortAttrViewCol");
+        await targetHeader.dispatchEvent("drop", {
+            dataTransfer,
+            clientX: targetBox!.x + 2,
+            clientY: targetBox!.y + targetBox!.height / 2,
+        });
+        await sortTransaction;
+        await sourceHeader.dispatchEvent("dragend", {dataTransfer});
+        await dataTransfer!.dispose();
+
+        await expect(inserted.block.locator(".av__cell--active")).toHaveCount(1);
+        await expect(rows[0].row.locator(`[data-col-id="${notesColumn.id}"]`))
+            .toHaveClass(/av__cell--active/);
+        await expect(rows[0].row.locator(`[data-col-id="${notesColumn.id}"]`))
+            .toHaveClass(/av__cell--select/);
+    });
 });
