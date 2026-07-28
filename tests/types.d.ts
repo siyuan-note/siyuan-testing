@@ -8,6 +8,9 @@ declare global {
                     mode: number;
                     modeOS: boolean;
                 };
+                fileTree: Record<string, unknown> & {
+                    docCreateTemplatePath: string;
+                };
                 uiLayout: {
                     hideDock: boolean;
                 };

@@ -164,6 +164,11 @@ export interface IAppearanceSettings {
     [key: string]: unknown;
 }
 
+export interface IFileTreeSettings {
+    docCreateTemplatePath: string;
+    [key: string]: unknown;
+}
+
 export interface IWorkspaceInfo {
     workspaceDir: string;
     siyuanVer: string;
@@ -221,11 +226,18 @@ export class SiyuanAPI {
     }
 
     async getConf() {
-        return this.post<{conf: {appearance: IAppearanceSettings}}>("/api/system/getConf", {});
+        return this.post<{conf: {
+            appearance: IAppearanceSettings;
+            fileTree: IFileTreeSettings;
+        }}>("/api/system/getConf", {});
     }
 
     async setAppearance(appearance: IAppearanceSettings) {
         return this.post<IAppearanceSettings>("/api/setting/setAppearance", appearance);
+    }
+
+    async setFileTree(fileTree: IFileTreeSettings) {
+        return this.post<IFileTreeSettings>("/api/setting/setFiletree", fileTree);
     }
 
     async listNotebooks() {
@@ -378,6 +390,14 @@ export class SiyuanAPI {
 
     async flushTransactions() {
         await this.post<null>("/api/sqlite/flushTransaction", {}, 30000);
+    }
+
+    async querySQL(stmt: string) {
+        return this.post<Array<Record<string, unknown>>>("/api/query/sql", {stmt}, 30000);
+    }
+
+    async createDailyNote(notebook: string) {
+        return this.post<{id: string}>("/api/filetree/createDailyNote", {notebook}, 30000);
     }
 
     async moveDocuments(fromIDs: string[], toID: string) {
