@@ -4,6 +4,7 @@
   "description": "Integration testing for SiYuan",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
+    "start:siyuan": "node scripts/start-siyuan.mjs",
     "test": "playwright test",
     "test:smoke": "playwright test --config=playwright.focused.config.ts --grep @smoke",
     "test:editor": "playwright test --config=playwright.focused.config.ts tests/editor",
@@ -14,7 +15,8 @@
     "test:list": "playwright test --list",
     "test:shards": "node scripts/check-shards.mjs",
     "test:repeat": "playwright test --repeat-each=10",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "workspace:prepare": "node scripts/start-siyuan.mjs --prepare-only"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

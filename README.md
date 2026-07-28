@@ -4,11 +4,12 @@ End-to-end tests for a running SiYuan instance.
 
 ## Requirements
 
-- Start SiYuan before running the tests.
-- Use a workspace that may safely contain the dedicated `SiYuan Testing` notebook.
+- Start SiYuan with `pnpm start:siyuan` before running the tests.
 - Install dependencies with `pnpm install`.
 
-The default target is `http://127.0.0.1:6806`. Set `SIYUAN_BASE_URL` to use another local address. Non-loopback targets are rejected unless `SIYUAN_ALLOW_REMOTE=1` is explicitly set. Set `SIYUAN_EXPECT_WORKSPACE` to the expected absolute workspace path when an exact workspace guard is useful.
+The local launcher automatically creates and uses `SiYuan-Testing` under the current user's home directory. It compiles and watches the desktop bundle from the sibling `../siyuan/app` checkout, starts its existing kernel binary, and refuses to reuse the target port when it belongs to another workspace. Set `SIYUAN_APP_DIR` or `SIYUAN_KERNEL_PATH` when those paths are elsewhere.
+
+The default target is `http://127.0.0.1:6807`, which allows the test workspace to run beside a normal SiYuan instance on port 6806. Set `SIYUAN_BASE_URL` to use another local address. Non-loopback targets are rejected unless `SIYUAN_ALLOW_REMOTE=1` is explicitly set. Every test run expects the home-directory test workspace by default; set `SIYUAN_EXPECT_WORKSPACE` to override it with another absolute path. The expected workspace is created automatically before target validation.
 
 The setup prints the target URL, workspace path, and SiYuan version before running any feature tests.
 
@@ -16,6 +17,8 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 
 ## Commands
 
+- `pnpm start:siyuan`: create the expected test workspace, compile and watch the SiYuan desktop bundle, and start its kernel on the test target.
+- `pnpm workspace:prepare`: create the expected test workspace and print its path without starting SiYuan.
 - `pnpm test`: run all tests in headless mode; API robustness and pure log-audit checks use two workers, while UI projects run serially against the shared SiYuan instance.
 - `pnpm test:smoke`: run the tagged startup, document, editor, import, flashcard, and WebSocket checks in about one to two minutes.
 - `pnpm test:editor`: run all editor specs serially.

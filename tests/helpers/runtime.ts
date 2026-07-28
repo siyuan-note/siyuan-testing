@@ -1,9 +1,15 @@
 import {expect, Page} from "@playwright/test";
+import {mkdir} from "node:fs/promises";
+import {homedir} from "node:os";
+import path from "node:path";
 import {IWorkspaceInfo, SiyuanAPI} from "./siyuanAPI";
 
-export const DEFAULT_BASE_URL = "http://127.0.0.1:6806";
+export const DEFAULT_BASE_URL = "http://127.0.0.1:6807";
+export const DEFAULT_TEST_WORKSPACE = path.join(homedir(), "SiYuan-Testing");
 
 export const getBaseURL = () => process.env.SIYUAN_BASE_URL || DEFAULT_BASE_URL;
+export const getExpectedWorkspace = () =>
+    process.env.SIYUAN_EXPECT_WORKSPACE?.trim() || DEFAULT_TEST_WORKSPACE;
 
 export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
     const target = new URL(baseURL);
@@ -15,6 +21,17 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
         );
     }
 
+    const configuredWorkspace = process.env.SIYUAN_EXPECT_WORKSPACE?.trim();
+    if (!isLoopback && !configuredWorkspace) {
+        throw new Error("SIYUAN_EXPECT_WORKSPACE is required for a remote test target.");
+    }
+    const expectedWorkspace = getExpectedWorkspace();
+    if (isLoopback) {
+        if (!path.isAbsolute(expectedWorkspace)) {
+            throw new Error(`SIYUAN_EXPECT_WORKSPACE must be absolute, received ${expectedWorkspace}.`);
+        }
+        await mkdir(expectedWorkspace, {recursive: true});
+    }
     let workspaceInfo: IWorkspaceInfo | undefined;
     await expect.poll(async () => {
         try {
@@ -31,9 +48,8 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
         throw new Error(`SiYuan at ${target.origin} did not return workspace information.`);
     }
 
-    const expectedWorkspace = process.env.SIYUAN_EXPECT_WORKSPACE;
     const normalizeWorkspace = (value: string) => value.replace(/[\\/]+$/, "").toLocaleLowerCase();
-    if (expectedWorkspace && normalizeWorkspace(workspaceInfo.workspaceDir) !== normalizeWorkspace(expectedWorkspace)) {
+    if (normalizeWorkspace(workspaceInfo.workspaceDir) !== normalizeWorkspace(expectedWorkspace)) {
         throw new Error(
             `SiYuan is using workspace ${workspaceInfo.workspaceDir}, expected ${expectedWorkspace}.`,
         );
