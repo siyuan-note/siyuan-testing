@@ -135,6 +135,21 @@ type TableControlType = "row" | "column" | "cell";
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
 
+const openTableControlMenu = async (page: Page, cell: Locator, type: TableControlType) => {
+    await cell.hover();
+    const control = getVisibleTableControl(page, type);
+    await expect(control).toHaveCount(1);
+    await control.click({button: "right"});
+    const menu = page.locator("#commonMenu:not(.fn__none)");
+    await expect(menu).toBeVisible();
+    return menu;
+};
+
+const getMenuItemByLabel = (page: Page, scope: Locator, label: string) =>
+    scope.locator(".b3-menu__item", {
+        has: page.locator(".b3-menu__label", {hasText: label}),
+    }).first();
+
 const clickTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
     await expect(cell).toBeVisible();
     await cell.hover();
@@ -400,6 +415,137 @@ test.describe("table editing", () => {
             plain: "Item\tStatus\nAlpha\tReady\nBeta\tDone\nGamma\tWaiting",
         });
         expect(copied.types).toEqual(expect.arrayContaining(["text/html", "text/plain", "text/siyuan"]));
+    });
+
+    test("shows table control descriptions and current cell style states", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Control State E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const firstCell = table.locator("tbody tr").first().locator("td").first();
+        const secondCell = table.locator("tbody tr").last().locator("td").first();
+        const labels = await page.evaluate(() => ({
+            addColumn: window.siyuan.languages.insertColumnRight,
+            addRow: window.siyuan.languages.insertRowBelow,
+            alignRight: window.siyuan.languages.alignRight,
+            cell: window.siyuan.languages.more,
+            color: window.siyuan.languages.colorPrimary,
+            column: window.siyuan.languages.column,
+            default: window.siyuan.languages.default,
+            defaultHorizontal: window.siyuan.languages.useDefaultHorizontalAlign,
+            row: window.siyuan.languages.row,
+        }));
+
+        await firstCell.hover();
+        for (const [type, label] of [
+            ["row", labels.row],
+            ["column", labels.column],
+            ["cell", labels.cell],
+            ["add-row", labels.addRow],
+            ["add-column", labels.addColumn],
+        ]) {
+            const control = page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
+            await expect(control).toHaveCount(1);
+            await expect(control).toHaveAttribute("type", "button");
+            await expect(control).toHaveAttribute("aria-label", label);
+            await expect(control).toHaveClass(/b3-tooltips/);
+        }
+
+        let menu = await openTableControlMenu(page, firstCell, "cell");
+        let colorItem = getMenuItemByLabel(page, menu, labels.color);
+        let colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
+        let defaultColorItem = getMenuItemByLabel(page, colorSubmenu, labels.default);
+        const firstColorLabel = `${labels.color} 1`;
+        let firstColorItem = getMenuItemByLabel(page, colorSubmenu, firstColorLabel);
+        await expect(defaultColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(1);
+        await expect(firstColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await colorItem.hover();
+        await expect(firstColorItem).toBeVisible();
+        await requestTransaction(page, () => firstColorItem.click());
+
+        menu = await openTableControlMenu(page, firstCell, "cell");
+        colorItem = getMenuItemByLabel(page, menu, labels.color);
+        colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
+        defaultColorItem = getMenuItemByLabel(page, colorSubmenu, labels.default);
+        firstColorItem = getMenuItemByLabel(page, colorSubmenu, firstColorLabel);
+        await expect(defaultColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await expect(firstColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(1);
+        const alignRightItem = getMenuItemByLabel(page, menu, labels.alignRight);
+        await requestTransaction(page, () => alignRightItem.click());
+
+        menu = await openTableControlMenu(page, firstCell, "cell");
+        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
+            .locator(":scope > .b3-menu__checked")).toHaveCount(1);
+        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
+            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+
+        await clickTableControl(page, firstCell, "cell");
+        await clickTableControl(page, secondCell, "cell");
+        menu = await openTableControlMenu(page, secondCell, "cell");
+        colorItem = getMenuItemByLabel(page, menu, labels.color);
+        colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
+        await expect(colorSubmenu.locator(".b3-menu__checked")).toHaveCount(0);
+        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
+            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
+            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+    });
+
+    test("explains disabled table actions when merged cells prevent dragging", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Merged Action State E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const firstRowCells = table.locator("tbody tr").first().locator("td");
+        await clickTableControl(page, firstRowCells.nth(0), "cell");
+        await clickTableControl(page, firstRowCells.nth(1), "cell");
+        let menu = await openTableControlMenu(page, firstRowCells.nth(1), "cell");
+        const labels = await page.evaluate(() => ({
+            cancelMerged: window.siyuan.languages.cancelMerged,
+            deleteRow: window.siyuan.languages["delete-row"],
+            duplicate: window.siyuan.languages.duplicate,
+            merge: window.siyuan.languages.mergeCell,
+        }));
+        await requestTransaction(page, () => getMenuItemByLabel(page, menu, labels.merge).click());
+
+        const mergedCell = table.locator("tbody tr").first().locator("td").first();
+        await mergedCell.hover();
+        const rowControl = getVisibleTableControl(page, "row");
+        const columnControl = getVisibleTableControl(page, "column");
+        await expect(rowControl).toHaveClass(/protyle-table-control__handle--drag-disabled/);
+        await expect(columnControl).toHaveClass(/protyle-table-control__handle--drag-disabled/);
+        await expect(rowControl).toHaveCSS("cursor", "pointer");
+        await expect(columnControl).toHaveCSS("cursor", "pointer");
+
+        menu = await openTableControlMenu(page, mergedCell, "row");
+        const duplicateItem = getMenuItemByLabel(page, menu, labels.duplicate);
+        const deleteItem = getMenuItemByLabel(page, menu, labels.deleteRow);
+        await expect(duplicateItem).toBeDisabled();
+        await expect(deleteItem).toBeDisabled();
+        await expect(duplicateItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
+        await expect(deleteItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
+        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
     });
 
     test("clears discontinuously selected cells and persists the result", async ({
