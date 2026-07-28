@@ -618,11 +618,51 @@ const editDateCell = async (page: Page, cell: Locator) => {
     expect(["date", "datetime-local"]).toContain(inputType);
     const isNotTime = inputType === "date";
     const value = isNotTime ? "2026-08-17" : "2026-08-17T14:30";
-    const display = isNotTime ? "2026-08-17" : "2026-08-17 14:30";
+    const timestamp = await page.evaluate(({dateValue, withoutTime}) => {
+        if (!withoutTime) {
+            return new Date(dateValue).getTime();
+        }
+        const [year, month, day] = dateValue.split("-").map(Number);
+        return new Date(year, month - 1, day).getTime();
+    }, {dateValue: value, withoutTime: isNotTime});
     await input.fill(value);
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);
-    return {display, isNotTime};
+    return {isNotTime, timestamp};
+};
+
+const expectRenderedDateValue = async (cell: Locator, expected: {
+    content: number;
+    content2?: number;
+    hasEndDate?: boolean;
+    isNotEmpty: boolean;
+    isNotEmpty2?: boolean;
+    isNotTime: boolean;
+}) => {
+    const text = cell.locator(".av__celltext");
+    await expect(text).not.toHaveText("");
+    await expect.poll(async () => {
+        const dataValue = await text.getAttribute("data-value");
+        if (!dataValue) {
+            return null;
+        }
+        const value = JSON.parse(dataValue) as {
+            content?: number;
+            content2?: number;
+            hasEndDate?: boolean;
+            isNotEmpty?: boolean;
+            isNotEmpty2?: boolean;
+            isNotTime?: boolean;
+        };
+        return {
+            content: value.content,
+            content2: value.content2,
+            hasEndDate: value.hasEndDate,
+            isNotEmpty: value.isNotEmpty,
+            isNotEmpty2: value.isNotEmpty2,
+            isNotTime: value.isNotTime,
+        };
+    }, {timeout: 30000}).toMatchObject(expected);
 };
 
 const setTimedDateRange = async (page: Page, cell: Locator, start: string, end: string) => {
@@ -2584,7 +2624,11 @@ test.describe("attribute views", () => {
 
         await expect(selectCell.locator(".b3-chip")).toHaveText(["Ready"]);
         await expect(multiSelectCell.locator(".b3-chip")).toHaveText(["Frontend", "Urgent"]);
-        await expect(dateCell).toContainText(date.display);
+        await expectRenderedDateValue(dateCell, {
+            content: date.timestamp,
+            isNotEmpty: true,
+            isNotTime: date.isNotTime,
+        });
 
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
@@ -2593,8 +2637,7 @@ test.describe("attribute views", () => {
             const multiSelectValue = fields.Labels?.values?.find(value => value.blockID === row.id);
             const dateValue = fields["Due date"]?.values?.find(value => value.blockID === row.id);
             return {
-                dateContentPresent: typeof dateValue?.date?.content === "number" &&
-                    dateValue.date.content > 0,
+                dateContent: dateValue?.date?.content,
                 dateIsNotEmpty: dateValue?.date?.isNotEmpty,
                 dateIsNotTime: dateValue?.date?.isNotTime,
                 dateType: dateValue?.type,
@@ -2608,7 +2651,7 @@ test.describe("attribute views", () => {
                 selectValues: selectValue?.mSelect?.map(item => item.content),
             };
         }, {timeout: 30000}).toEqual({
-            dateContentPresent: true,
+            dateContent: date.timestamp,
             dateIsNotEmpty: true,
             dateIsNotTime: date.isNotTime,
             dateType: "date",
@@ -2631,7 +2674,11 @@ test.describe("attribute views", () => {
             .toHaveText(["Ready"]);
         await expect(reloadedRow.locator(`[data-col-id="${multiSelectColumn.id}"] .b3-chip`))
             .toHaveText(["Frontend", "Urgent"]);
-        await expect(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`)).toContainText(date.display);
+        await expectRenderedDateValue(reloadedRow.locator(`[data-col-id="${dateColumn.id}"]`), {
+            content: date.timestamp,
+            isNotEmpty: true,
+            isNotTime: date.isNotTime,
+        });
     });
 
     test("sets, clears, and restores a timed date range", async ({
@@ -2653,8 +2700,14 @@ test.describe("attribute views", () => {
             start: new Date(range.start).getTime(),
         }), firstRange);
         await setTimedDateRange(page, cell, firstRange.start, firstRange.end);
-        await expect(cell.locator(".av__celltext")).toContainText("2026-09-14 09:15");
-        await expect(cell.locator(".av__celltext")).toContainText("2026-09-18 17:45");
+        await expectRenderedDateValue(cell, {
+            content: firstTimestamps.start,
+            content2: firstTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+        });
 
         const readDateValue = async () => {
             const av = await getAttributeView(siyuanAPI, avID);
@@ -2719,11 +2772,14 @@ test.describe("attribute views", () => {
             `:scope > [data-av-id="${avID}"] .av__row[data-id="${row.id}"] ` +
             `[data-col-id="${column.id}"]`,
         );
-        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-21 08:05");
-        await expect(reloadedCell.locator(".av__celltext")).toContainText("2026-10-23 16:40");
-        await expect(reloadedCell.locator(".av__celltext")).toHaveAttribute(
-            "data-value", expect.stringContaining('"hasEndDate":true'),
-        );
+        await expectRenderedDateValue(reloadedCell, {
+            content: finalTimestamps.start,
+            content2: finalTimestamps.end,
+            hasEndDate: true,
+            isNotEmpty: true,
+            isNotEmpty2: true,
+            isNotTime: false,
+        });
     });
 
     test("renames, reorders, and deletes single-select options across existing rows", async ({
