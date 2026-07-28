@@ -14,6 +14,14 @@ const appDir = path.resolve(
 );
 const baseURL = new URL(process.env.SIYUAN_BASE_URL || "http://127.0.0.1:6807");
 const loopbackHosts = ["127.0.0.1", "localhost", "::1"];
+const runTestsIndex = process.argv.indexOf("--run-tests");
+let playwrightArgs;
+if (runTestsIndex !== -1) {
+    playwrightArgs = process.argv.slice(runTestsIndex + 1);
+    if (playwrightArgs[0] === "--") {
+        playwrightArgs.shift();
+    }
+}
 
 if (baseURL.protocol !== "http:" || !loopbackHosts.includes(baseURL.hostname)) {
     throw new Error(`Local SiYuan launcher requires a loopback HTTP URL, received ${baseURL.origin}`);
@@ -55,6 +63,12 @@ if (runningWorkspace) {
             "Stop that instance or choose another SIYUAN_BASE_URL.",
         );
     }
+    if (playwrightArgs) {
+        throw new Error(
+            `Managed tests require an unused target, but SiYuan is already running at ${baseURL.origin}. ` +
+            "Stop it before running the test command.",
+        );
+    }
 }
 
 await access(path.join(appDir, "package.json"));
@@ -88,22 +102,6 @@ const compiler = spawn(process.execPath, [
     stdio: ["inherit", "pipe", "pipe"],
 });
 
-const children = new Set([compiler]);
-let interrupted = false;
-const stopChildren = () => {
-    for (const child of children) {
-        if (child.exitCode === null && child.signalCode === null) {
-            child.kill();
-        }
-    }
-};
-for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-        interrupted = true;
-        stopChildren();
-    });
-}
-
 const stripANSI = value => value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 let compilerOutput = "";
 const compilation = new Promise((resolve, reject) => {
@@ -124,16 +122,170 @@ const compilation = new Promise((resolve, reject) => {
     });
 });
 
+const children = new Set([compiler]);
+let kernel;
+let interrupted = false;
+const isRunning = child => child.exitCode === null && child.signalCode === null;
+const waitForChild = child => {
+    if (!isRunning(child)) {
+        return Promise.resolve({code: child.exitCode, signal: child.signalCode});
+    }
+    return new Promise(resolve => {
+        child.once("error", error => resolve({error}));
+        child.once("exit", (code, signal) => resolve({code, signal}));
+    });
+};
+const wait = timeout => new Promise(resolve => setTimeout(resolve, timeout));
+const requestKernelExit = async () => {
+    if (!kernel || !isRunning(kernel)) {
+        return;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+        await fetch(new URL("/api/system/exit", baseURL), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                force: true,
+                setCurrentWorkspace: false,
+                execInstallPkg: 1,
+            }),
+            signal: controller.signal,
+        });
+    } catch {
+        // 当内核无法接收关闭请求时，下面的进程终止逻辑会兜底。
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+let stopping;
+const stopChildren = () => {
+    if (!stopping) {
+        stopping = (async () => {
+            const runningChildren = [...children].filter(isRunning);
+            for (const child of runningChildren) {
+                if (child !== kernel) {
+                    child.kill();
+                }
+            }
+            await requestKernelExit();
+            await Promise.race([
+                Promise.all(runningChildren.map(waitForChild)),
+                wait(30000),
+            ]);
+            const remainingChildren = [...children].filter(isRunning);
+            for (const child of remainingChildren) {
+                child.kill("SIGKILL");
+            }
+            if (remainingChildren.length > 0) {
+                await Promise.race([
+                    Promise.all(remainingChildren.map(waitForChild)),
+                    wait(2000),
+                ]);
+            }
+        })();
+    }
+    return stopping;
+};
+for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+        interrupted = true;
+        void stopChildren();
+    });
+}
+
+const formatExit = exit => {
+    if (exit.error) {
+        return exit.error.message;
+    }
+    if (exit.signal) {
+        return `signal ${exit.signal}`;
+    }
+    return `code ${exit.code}`;
+};
+
+const setExitCode = exit => {
+    if (interrupted) {
+        process.exitCode = 130;
+    } else if (exit.error || exit.signal) {
+        process.exitCode = 1;
+    } else {
+        process.exitCode = exit.code ?? 1;
+    }
+};
+
+const reportManagedExit = exit => {
+    if (!interrupted && (exit.error || exit.signal || exit.code !== 0)) {
+        console.error(`[siyuan-testing] Managed process exited with ${formatExit(exit)}`);
+    }
+};
+
+const runPlaywright = () => {
+    const testingRequire = createRequire(path.join(projectRoot, "package.json"));
+    const playwrightPath = testingRequire.resolve("@playwright/test/cli");
+    return spawn(process.execPath, [
+        playwrightPath,
+        "test",
+        ...playwrightArgs,
+    ], {
+        cwd: projectRoot,
+        env: process.env,
+        stdio: "inherit",
+    });
+};
+
+const waitForFirstExit = processes => Promise.race(processes.map(async child => ({
+    child,
+    exit: await waitForChild(child),
+})));
+
+const closeManagedProcesses = async () => {
+    await stopChildren();
+    console.log("[siyuan-testing] Test kernel and desktop compiler stopped");
+};
+
+const failWhenServiceStops = async (serviceProcesses, testRunner) => {
+    const firstExit = await waitForFirstExit([...serviceProcesses, testRunner]);
+    if (firstExit.child !== testRunner) {
+        console.error(
+            `[siyuan-testing] Managed process stopped before Playwright completed with ` +
+            formatExit(firstExit.exit),
+        );
+        return {error: new Error("A managed SiYuan process stopped before Playwright completed")};
+    }
+    return firstExit.exit;
+};
+
+const runManagedTests = async serviceProcesses => {
+    const testRunner = runPlaywright();
+    children.add(testRunner);
+    const exit = await failWhenServiceStops(serviceProcesses, testRunner);
+    await closeManagedProcesses();
+    setExitCode(exit);
+};
+
+const watchManagedProcesses = async () => {
+    const firstExit = await waitForFirstExit([...children]);
+    await stopChildren();
+    reportManagedExit(firstExit.exit);
+    setExitCode(firstExit.exit);
+};
+
+const stopAfterError = async error => {
+    await stopChildren();
+    throw error;
+};
+
 try {
     await compilation;
 } catch (error) {
-    stopChildren();
-    throw error;
+    await stopAfterError(error);
 }
 console.log("[siyuan-testing] SiYuan desktop assets compiled; watching for changes");
 
 if (!runningWorkspace) {
-    const kernel = spawn(kernelPath, [
+    kernel = spawn(kernelPath, [
         `--workspace=${workspace}`,
         "serve",
         `--wd=${appDir}`,
@@ -153,49 +305,36 @@ if (!runningWorkspace) {
     let kernelReady = false;
     while (Date.now() < deadline) {
         if (kernelError) {
-            stopChildren();
-            throw new Error(`Unable to start SiYuan kernel: ${kernelError.message}`);
+            await stopAfterError(new Error(`Unable to start SiYuan kernel: ${kernelError.message}`));
         }
-        if (kernel.exitCode !== null || kernel.signalCode !== null) {
-            stopChildren();
-            throw new Error(
-                `SiYuan kernel exited before startup [code=${kernel.exitCode}, signal=${kernel.signalCode}]`,
+        if (!isRunning(kernel)) {
+            await stopAfterError(
+                new Error(
+                    `SiYuan kernel exited before startup [code=${kernel.exitCode}, signal=${kernel.signalCode}]`,
+                ),
             );
         }
         const startedWorkspace = await readRunningWorkspace(1000);
         if (startedWorkspace) {
             if (normalizeWorkspace(startedWorkspace) !== normalizeWorkspace(workspace)) {
-                stopChildren();
-                throw new Error(`SiYuan started with ${startedWorkspace}, expected ${workspace}.`);
+                await stopAfterError(
+                    new Error(`SiYuan started with ${startedWorkspace}, expected ${workspace}.`),
+                );
             }
             kernelReady = true;
             break;
         }
-        await new Promise(resolve => setTimeout(resolve, 250));
+        await wait(250);
     }
     if (!kernelReady) {
-        stopChildren();
-        throw new Error(`Timed out waiting for SiYuan at ${baseURL.origin}`);
+        await stopAfterError(new Error(`Timed out waiting for SiYuan at ${baseURL.origin}`));
     }
 }
 
 console.log(`[siyuan-testing] SiYuan is ready at ${baseURL.origin}`);
 
-const exit = await new Promise(resolve => {
-    for (const child of children) {
-        if (child.exitCode !== null || child.signalCode !== null) {
-            resolve({code: child.exitCode, signal: child.signalCode});
-            return;
-        }
-        child.once("exit", (code, signal) => resolve({code, signal}));
-    }
-});
-stopChildren();
-if (!interrupted) {
-    if (exit.signal) {
-        console.error(`[siyuan-testing] Managed process exited from signal ${exit.signal}`);
-        process.exitCode = 1;
-    } else {
-        process.exitCode = exit.code ?? 1;
-    }
+if (playwrightArgs) {
+    await runManagedTests([compiler, kernel].filter(Boolean));
+} else {
+    await watchManagedProcesses();
 }

@@ -4,23 +4,24 @@ End-to-end tests for a running SiYuan instance.
 
 ## Requirements
 
-- Start SiYuan with `pnpm start:siyuan` before running the tests.
 - Install dependencies with `pnpm install`.
+- Keep the SiYuan source checkout and an existing kernel binary available at the paths described below.
 
-The local launcher automatically creates and uses `SiYuan-Testing` under the current user's home directory. It compiles and watches the desktop bundle from the sibling `../siyuan/app` checkout, starts its existing kernel binary, and refuses to reuse the target port when it belongs to another workspace. Set `SIYUAN_APP_DIR` or `SIYUAN_KERNEL_PATH` when those paths are elsewhere.
+The normal test commands automatically create and use `SiYuan-Testing` under the current user's home directory. Each command compiles and watches the desktop bundle from the sibling `../siyuan/app` checkout, starts its existing kernel binary, runs Playwright, and stops both the kernel and compiler in cleanup even when the tests fail. The managed commands refuse to reuse an already occupied target so they never stop a process they did not start. Set `SIYUAN_APP_DIR` or `SIYUAN_KERNEL_PATH` when those paths are elsewhere.
 
 The default target is `http://127.0.0.1:6807`, which allows the test workspace to run beside a normal SiYuan instance on port 6806. Set `SIYUAN_BASE_URL` to use another local address. Non-loopback targets are rejected unless `SIYUAN_ALLOW_REMOTE=1` is explicitly set. Every test run expects the home-directory test workspace by default; set `SIYUAN_EXPECT_WORKSPACE` to override it with another absolute path. The expected workspace is created automatically before target validation.
 
 The setup prints the target URL, workspace path, and SiYuan version before running any feature tests.
 
-The encrypted-notebook lifecycle test is opt-in because creating its isolated notebook requires the workspace master password. Enable encrypted notebooks yourself, set `SIYUAN_TEST_ENCRYPTION_PASSWORD` in the test process, and run `pnpm exec playwright test --config=playwright.focused.config.ts tests/encrypted-notebook.spec.ts`. The suite never enables or disables encryption and never changes the master password.
+The encrypted-notebook lifecycle test is opt-in because creating its isolated notebook requires the workspace master password. Enable encrypted notebooks yourself, set `SIYUAN_TEST_ENCRYPTION_PASSWORD` in the test process, and run `pnpm test:focused -- tests/encrypted-notebook.spec.ts`. The suite never enables or disables encryption and never changes the master password.
 
 ## Commands
 
-- `pnpm start:siyuan`: create the expected test workspace, compile and watch the SiYuan desktop bundle, and start its kernel on the test target.
+- `pnpm start:siyuan`: start the kernel and desktop compiler without running tests for interactive debugging; stop it manually when finished.
 - `pnpm workspace:prepare`: create the expected test workspace and print its path without starting SiYuan.
-- `pnpm test`: run all tests in headless mode; API robustness and pure log-audit checks use two workers, while UI projects run serially against the shared SiYuan instance.
+- `pnpm test`: start the managed local instance, run all tests in headless mode, and stop the instance; API robustness and pure log-audit checks use two workers, while UI projects run serially.
 - `pnpm test:smoke`: run the tagged startup, document, editor, import, flashcard, and WebSocket checks in about one to two minutes.
+- `pnpm test:focused -- tests/<feature>.spec.ts`: run one spec with a managed local instance.
 - `pnpm test:editor`: run all editor specs serially.
 - `pnpm test:navigation`: run document, notebook, file-tree, tag, bookmark, outline, and backlink specs serially.
 - `pnpm test:data`: run import, export, history, asset, and attribute-view specs serially.
@@ -30,10 +31,10 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test:shards`: verify that the isolated CI shards cover every default test exactly once, except for explicit opt-in tests.
 - `pnpm test:repeat`: repeat the suite ten times to find synchronization problems.
 - `pnpm typecheck`: type-check the configuration, fixtures, helpers, and specs.
-- `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts`: run one spec file.
-- `pnpm exec playwright test --config=playwright.focused.config.ts tests/<feature>.spec.ts --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
+- `pnpm test:focused -- tests/<feature>.spec.ts --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
+- `pnpm exec playwright test ...`: run Playwright against an instance started separately; direct commands do not manage the kernel or desktop compiler lifecycle.
 
-During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Direct Playwright commands that operate the SiYuan UI must use `--workers=1`; only tests that avoid shared UI and global application state are safe to run concurrently.
+During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Managed commands always close their kernel and compiler before returning. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Direct Playwright commands that operate the SiYuan UI must use `--workers=1`; only tests that avoid shared UI and global application state are safe to run concurrently.
 
 ## Coverage
 
