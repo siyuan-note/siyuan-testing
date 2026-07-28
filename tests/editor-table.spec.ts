@@ -130,6 +130,52 @@ const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
     };
 };
 
+type TableControlType = "row" | "column" | "cell";
+
+const getVisibleTableControl = (page: Page, type: TableControlType) =>
+    page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
+
+const clickTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
+    await expect(cell).toBeVisible();
+    await cell.hover();
+    const control = getVisibleTableControl(page, type);
+    await expect(control).toHaveCount(1);
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, {steps: 10});
+    await expect(control).toBeVisible();
+    await control.click({modifiers: [PRIMARY_MODIFIER]});
+};
+
+const copyTableControlSelection = async (page: Page) => page.evaluate(() => {
+    const clipboardData = new DataTransfer();
+    const event = new ClipboardEvent("copy", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+    });
+    document.dispatchEvent(event);
+    const siyuan = clipboardData.getData("text/siyuan");
+    const html = clipboardData.getData("text/html");
+    const container = document.createElement("div");
+    container.innerHTML = siyuan;
+    const table = container.querySelector("table");
+    const getRows = (selector: string) => Array.from(table?.querySelectorAll(selector) || []).map(row =>
+        Array.from(row.querySelectorAll("th, td"))
+            .filter(cell => !cell.classList.contains("fn__none"))
+            .map(cell => cell.textContent?.replace(/\u200b/g, "").trim() || ""));
+    return {
+        body: getRows("tbody tr"),
+        columnCount: table?.querySelectorAll(":scope > colgroup > col").length || 0,
+        defaultPrevented: event.defaultPrevented,
+        hasSiyuanComment: html.startsWith("<!--data-siyuan='"),
+        head: getRows("thead tr"),
+        nodeType: container.firstElementChild?.getAttribute("data-type") || "",
+        plain: clipboardData.getData("text/plain"),
+        types: Array.from(clipboardData.types).sort(),
+    };
+});
+
 test.describe("table editing", () => {
     // 系统剪贴板由同一台测试机共享，这组用例需要串行执行，避免后续复制粘贴测试与其他表格操作交叉。
     test.describe.configure({mode: "serial"});
@@ -274,6 +320,129 @@ test.describe("table editing", () => {
             duplicateIDs: 0,
             head: [["Name", "Status"]],
         });
+    });
+
+    test("selects discontinuous rows and clears the selection without a page error", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Discontinuous Row Selection E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+                "| Gamma | 3 | Waiting |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const firstCells = table.locator("tbody tr td:first-child");
+        const pageErrors: string[] = [];
+        page.on("pageerror", error => pageErrors.push(error.message));
+
+        await clickTableControl(page, firstCells.nth(0), "row");
+        await clickTableControl(page, firstCells.nth(2), "row");
+        const copied = await copyTableControlSelection(page);
+        expect(copied).toMatchObject({
+            body: [["Gamma", "3", "Waiting"]],
+            columnCount: 3,
+            defaultPrevented: true,
+            hasSiyuanComment: true,
+            head: [["Alpha", "1", "Ready"]],
+            nodeType: "NodeTable",
+            plain: "Alpha\t1\tReady\nGamma\t3\tWaiting",
+        });
+        expect(copied.types).toEqual(expect.arrayContaining(["text/html", "text/plain", "text/siyuan"]));
+
+        await clickTableControl(page, firstCells.nth(0), "row");
+        await expect.poll(() => copyTableControlSelection(page)).toMatchObject({
+            body: [],
+            head: [["Gamma", "3", "Waiting"]],
+            plain: "Gamma\t3\tWaiting",
+        });
+        await clickTableControl(page, firstCells.nth(2), "row");
+        await expect.poll(() => copyTableControlSelection(page)).toMatchObject({
+            defaultPrevented: false,
+            plain: "",
+            types: [],
+        });
+        expect(pageErrors).toEqual([]);
+    });
+
+    test("copies discontinuous columns as a valid SiYuan table", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Discontinuous Column Selection E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+                "| Gamma | 3 | Waiting |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const headerCells = table.locator("thead th");
+        await clickTableControl(page, headerCells.nth(0), "column");
+        await clickTableControl(page, headerCells.nth(2), "column");
+
+        const copied = await copyTableControlSelection(page);
+        expect(copied).toMatchObject({
+            body: [["Alpha", "Ready"], ["Beta", "Done"], ["Gamma", "Waiting"]],
+            columnCount: 2,
+            defaultPrevented: true,
+            hasSiyuanComment: true,
+            head: [["Item", "Status"]],
+            nodeType: "NodeTable",
+            plain: "Item\tStatus\nAlpha\tReady\nBeta\tDone\nGamma\tWaiting",
+        });
+        expect(copied.types).toEqual(expect.arrayContaining(["text/html", "text/plain", "text/siyuan"]));
+    });
+
+    test("clears discontinuously selected cells and persists the result", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Discontinuous Cell Selection E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const alpha = table.locator("tbody tr").nth(0).locator("td").nth(0);
+        const done = table.locator("tbody tr").nth(1).locator("td").nth(2);
+        await clickTableControl(page, alpha, "cell");
+        await clickTableControl(page, done, "cell");
+
+        await done.hover();
+        await getVisibleTableControl(page, "cell").click({button: "right"});
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
+        const clearLabel = await page.evaluate(() => window.siyuan.languages.clear);
+        const clearItem = menu.locator(".b3-menu__item", {
+            has: page.locator(".b3-menu__label", {hasText: clearLabel}),
+        }).first();
+        await expect(clearItem).toBeVisible();
+        await requestTransaction(page, () => clearItem.click());
+
+        const clearedState = {
+            body: [["", "1", "Ready"], ["Beta", "2", ""]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(clearedState);
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect.poll(() => getDOMTableState(
+            reloadedEditor.locator(':scope > [data-type="NodeTable"]'),
+        ), {timeout: 30000}).toEqual(clearedState);
     });
 
     test("inserts rows and columns and restores the table structure with undo and redo", async ({
