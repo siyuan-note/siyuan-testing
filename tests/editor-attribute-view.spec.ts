@@ -4328,7 +4328,14 @@ test.describe("attribute views", () => {
             await expect(lastRow).toHaveClass(/av__row--select/, {timeout: 2000});
         }).toPass({timeout: 30000});
 
-        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("120");
+        const selectionCount = block.locator(".av__views--selection .av__selection-count");
+        await expect(selectionCount).toContainText("120");
+        await block.locator('[data-type="av-selection-more"]').click();
+        const fieldsMenuItem = page.locator('.b3-menu [data-id="fields"]');
+        await expect(fieldsMenuItem).toBeVisible();
+        await expect(selectionCount).toContainText("120");
+        await page.keyboard.press("Escape");
+        await expect(fieldsMenuItem).toHaveCount(0);
 
         const pasteTarget = block.locator('.av__cursor[contenteditable="true"]').first();
         await pasteTarget.evaluate(element => {
@@ -4356,10 +4363,11 @@ test.describe("attribute views", () => {
         });
         await expect(lastRow.locator('[data-dtype="block"]')).toContainText("Range pasted", {timeout: 30000});
         await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
-        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("120");
+        await expect(selectionCount).toContainText("120");
 
+        await block.locator(".av__title").click();
+        await expect(selectionCount).toHaveCount(0);
         await searchAttributeView(page, block, "does-not-match-range-selection");
-        await expect(block.locator(".av__counter:not(.fn__none)")).toHaveCount(0);
         await searchAttributeView(page, block, "");
         await expect(block.locator(".av__row--select[data-id]")).toHaveCount(0);
     });
