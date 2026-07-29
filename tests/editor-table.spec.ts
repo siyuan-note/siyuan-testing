@@ -470,6 +470,16 @@ test.describe("table editing", () => {
         await expect(firstColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(0);
         await colorItem.hover();
         await expect(firstColorItem).toBeVisible();
+        const colorItemBox = await colorItem.boundingBox();
+        const colorSubmenuBox = await colorSubmenu.boundingBox();
+        const defaultColorBox = await defaultColorItem.boundingBox();
+        const firstColorBox = await firstColorItem.boundingBox();
+        expect(colorItemBox).not.toBeNull();
+        expect(colorSubmenuBox).not.toBeNull();
+        expect(defaultColorBox).not.toBeNull();
+        expect(firstColorBox).not.toBeNull();
+        expect(Math.abs(colorSubmenuBox!.y - colorItemBox!.y)).toBeLessThan(40);
+        expect(Math.abs(defaultColorBox!.y - firstColorBox!.y)).toBeLessThanOrEqual(1);
         await requestTransaction(page, () => firstColorItem.click());
 
         menu = await openTableControlMenu(page, firstCell, "cell");
