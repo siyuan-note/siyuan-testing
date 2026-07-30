@@ -130,13 +130,38 @@ const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
     };
 };
 
-type TableControlType = "row" | "column" | "cell";
+type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
 
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
 
+const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
+    await expect(cell).toBeVisible();
+    if (type === "cell") {
+        await cell.hover();
+        return;
+    }
+    const table = cell.locator("xpath=ancestor::table");
+    const tableBox = await table.boundingBox();
+    const cellBox = await cell.boundingBox();
+    expect(tableBox).not.toBeNull();
+    expect(cellBox).not.toBeNull();
+    if (type === "row") {
+        const firstRow = await cell.evaluate(element =>
+            element.parentElement === (element.closest("table") as HTMLTableElement).rows[0]);
+        await page.mouse.move(tableBox!.x + (firstRow ? 1 : -1),
+            cellBox!.y + cellBox!.height / 2, {steps: 10});
+    } else if (type === "column") {
+        await page.mouse.move(cellBox!.x + cellBox!.width / 2, tableBox!.y - 1, {steps: 10});
+    } else if (type === "add-row") {
+        await page.mouse.move(tableBox!.x + tableBox!.width / 2, tableBox!.y + tableBox!.height + 1, {steps: 10});
+    } else {
+        await page.mouse.move(tableBox!.x + tableBox!.width + 1, tableBox!.y + tableBox!.height / 2, {steps: 10});
+    }
+};
+
 const openTableControlMenu = async (page: Page, cell: Locator, type: TableControlType) => {
-    await cell.hover();
+    await hoverTableControl(page, cell, type);
     const control = getVisibleTableControl(page, type);
     await expect(control).toHaveCount(1);
     await control.click({button: "right"});
@@ -151,8 +176,7 @@ const getMenuItemByLabel = (page: Page, scope: Locator, label: string) =>
     }).first();
 
 const clickTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
-    await expect(cell).toBeVisible();
-    await cell.hover();
+    await hoverTableControl(page, cell, type);
     const control = getVisibleTableControl(page, type);
     await expect(control).toHaveCount(1);
     const box = await control.boundingBox();
@@ -270,6 +294,39 @@ test.describe("table editing", () => {
             duplicateIDs: 0,
             head: [["Item", "Quantity"]],
         });
+    });
+
+    test("keeps the table block gutter accessible beside the row control", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Block Gutter E2E",
+            [
+                "| Item | Quantity |",
+                "| --- | ---: |",
+                "| Alpha | 1 |",
+            ].join("\n"),
+        );
+        const tableBlock = editor.locator(':scope > [data-type="NodeTable"]');
+        const tableID = await tableBlock.getAttribute("data-node-id");
+        expect(tableID).toBeTruthy();
+        const firstCell = tableBlock.locator("thead th").first();
+        await firstCell.hover();
+        await hoverTableControl(page, firstCell, "row");
+        const rowControl = getVisibleTableControl(page, "row");
+        const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
+        await expect(rowControl).toBeVisible();
+        await expect(gutter).toBeVisible();
+        const rowControlBox = await rowControl.boundingBox();
+        const gutterBox = await gutter.boundingBox();
+        expect(rowControlBox).not.toBeNull();
+        expect(gutterBox).not.toBeNull();
+        expect(gutterBox!.x + gutterBox!.width).toBeLessThanOrEqual(rowControlBox!.x);
+
+        await page.mouse.click(gutterBox!.x + gutterBox!.width / 2, gutterBox!.y + gutterBox!.height / 2);
+        await expect(page.locator("#commonMenu:not(.fn__none)")).toBeVisible();
+        await expect(page.locator(".protyle-table-control__selection:visible")).toHaveCount(0);
     });
 
     test("copies and pastes a table with a new block ID and preserved structure", async ({
@@ -452,7 +509,8 @@ test.describe("table editing", () => {
             ["cell", labels.cell],
             ["add-row", labels.addRow],
             ["add-column", labels.addColumn],
-        ]) {
+        ] as const) {
+            await hoverTableControl(page, firstCell, type);
             const control = page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
             await expect(control).toHaveCount(1);
             await expect(control).toHaveAttribute("type", "button");
