@@ -55,8 +55,7 @@ const requestHistoryAction = async (page: Page, editor: Locator, shortcut: strin
                                      action: "undo" | "redo") => {
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
-    const editable = editor.locator('[contenteditable="true"]').first();
-    await focusAtEnd(editable.locator("xpath=ancestor::*[@data-node-id][1]"));
+    await focusAtEnd(editor.locator(':scope > [data-type="NodeParagraph"]').last());
     await page.keyboard.press(shortcut);
     await response;
 };
@@ -99,6 +98,10 @@ const insertEmbedBlock = async (page: Page, api: SiyuanAPI, docID: string, edito
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     const paragraphID = await paragraph.getAttribute("data-node-id");
     expect(paragraphID).toBeTruthy();
+    const editable = paragraph.locator(':scope > [contenteditable="true"]');
+    if (await editable.textContent()) {
+        await editable.fill("");
+    }
     await focusAtEnd(paragraph);
     await page.keyboard.type(`{{${query}`, {delay: 10});
     const protyle = editor.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]");
@@ -130,9 +133,15 @@ test.describe("block query embeds", () => {
         expect(sourceID).toBeTruthy();
         await waitForIndexedBlock(siyuanAPI, query, sourceID!);
 
-        const target = await createTestDocument("Query Embed Target E2E");
+        const target = await createTestDocument(
+            "Query Embed Target E2E",
+            "Query placeholder\n\nTarget undo anchor",
+        );
         const initialState = await getTopDOMState(target.editor);
-        const typedQueryState = initialState.map(item => ({...item, text: `{{${query}`}));
+        const typedQueryState = initialState.map((item, index) => ({
+            ...item,
+            text: index === 0 ? `{{${query}` : item.text,
+        }));
         let embed = await insertEmbedBlock(page, siyuanAPI, target.docID, target.editor, sourceID!, query);
         const embedID = await embed.getAttribute("data-node-id");
         expect(embedID).toBeTruthy();
@@ -140,7 +149,7 @@ test.describe("block query embeds", () => {
         await expect.poll(() => getPersistedEmbedState(siyuanAPI, target.docID), {timeout: 30000}).toEqual({
             id: embedID,
             query: `select * from blocks where id='${sourceID}'`,
-            topTypes: ["NodeBlockQueryEmbed"],
+            topTypes: ["NodeBlockQueryEmbed", "NodeParagraph"],
         });
 
         await requestHistoryAction(page, target.editor, UNDO_SHORTCUT, "undo");

@@ -1,6 +1,6 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
-import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace} from "./helpers/runtime";
 
@@ -110,31 +110,12 @@ test("moves a block across documents and broadcasts undo and redo", async ({
         );
         const sourceItem = revealedSource.documentItem;
         restoreFileTree = revealedSource.restoreFileTree;
-        const openFilesUseCurrentTab = await page.evaluate(() => {
-            const config = window.siyuan.config as unknown as {
-                fileTree: {openFilesUseCurrentTab: boolean};
-            };
-            return config.fileTree.openFilesUseCurrentTab;
+        await sourceItem.locator(":scope > .b3-list-item__text").click({
+            modifiers: ["Alt", PRIMARY_MODIFIER],
         });
-        await page.evaluate(() => {
-            const config = window.siyuan.config as unknown as {
-                fileTree: {openFilesUseCurrentTab: boolean};
-            };
-            config.fileTree.openFilesUseCurrentTab = false;
-        });
-        try {
-            await sourceItem.locator(":scope > .b3-list-item__text").click();
-            sourceTab = page.locator('li[data-type="tab-header"] .item__text')
-                .filter({hasText: sourceTitle}).locator("xpath=..");
-            await expect(sourceTab).toBeVisible({timeout: 30000});
-        } finally {
-            await page.evaluate(value => {
-                const config = window.siyuan.config as unknown as {
-                    fileTree: {openFilesUseCurrentTab: boolean};
-                };
-                config.fileTree.openFilesUseCurrentTab = value;
-            }, openFilesUseCurrentTab);
-        }
+        sourceTab = page.locator('li[data-type="tab-header"] .item__text')
+            .filter({hasText: sourceTitle}).locator("xpath=..");
+        await expect(sourceTab).toBeVisible({timeout: 30000});
         await restoreFileTree();
         await sourceTab.click({force: true});
         const sourceEditor = await getDocumentEditor(page, sourceID);

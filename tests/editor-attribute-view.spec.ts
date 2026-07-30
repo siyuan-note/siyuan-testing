@@ -488,13 +488,18 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[], waitF
     const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
         await input.fill(value);
+        const panel = input.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
+        );
+        const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${value}"]`);
+        await expect(option).toBeVisible();
         const transaction = waitForTransactionAction(page, "updateAttrViewCell");
         if (type === "select" && waitForRender) {
             const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
-            await input.press("Enter");
+            await option.click();
             await Promise.all([transaction, render]);
         } else {
-            await input.press("Enter");
+            await option.click();
             await transaction;
         }
     }
@@ -4457,7 +4462,7 @@ test.describe("attribute views", () => {
         await expect(betaDuplicate).toHaveClass(/av__gallery-item--select/);
         await expect(betaTarget).toHaveClass(/av__gallery-item--select/);
         await expect(alphaDuplicate).not.toHaveClass(/av__gallery-item--select/);
-        await expect(block.locator(".av__counter:not(.fn__none)").first()).toContainText("2");
+        await expect(block.locator(".av__views--selection .av__selection-count")).toContainText("2");
     });
 
     test("collapses a database cell range to its anchor after fields are reordered", async ({

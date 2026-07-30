@@ -6,6 +6,7 @@ import {
     withKeywordSearch,
     withSearchMethod,
 } from "./helpers/search";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 const uniqueMarker = (prefix: string) =>
     `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 9)}`;
@@ -24,7 +25,7 @@ test.describe("global search", () => {
             await expect(result).toBeVisible();
             await result.dblclick();
             await expect(search.dialog).toHaveCount(0);
-            await expect(page.locator(`.protyle-title[data-node-id="${document.docID}"]`)).toBeVisible();
+            await expect(await getDocumentEditor(page, document.docID)).toBeVisible();
         });
     });
 

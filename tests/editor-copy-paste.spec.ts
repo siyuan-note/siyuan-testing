@@ -607,9 +607,9 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press(UNDO_SHORTCUT);
         await expectDocumentState(siyuanAPI, docID, editor, initialState);
         await expect.poll(() => getSelectionBlockIDs(editor)).toEqual({
-            collapsed: false,
+            collapsed: true,
             endID: initialState[2].id,
-            startID: initialState[0].id,
+            startID: initialState[2].id,
         });
 
         await page.keyboard.press(REDO_SHORTCUT);

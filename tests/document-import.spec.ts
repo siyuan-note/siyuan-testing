@@ -102,7 +102,7 @@ test.describe("document import", () => {
                 `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
             );
             await expect(notebookRoot).toBeVisible();
-            await notebookRoot.hover();
+            await notebookRoot.hover({force: true});
             await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
 
             const menu = page.locator("#commonMenu:not(.fn__none)");
