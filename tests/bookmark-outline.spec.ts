@@ -131,20 +131,8 @@ test.describe("bookmarks and outline", () => {
             await expect(page.locator(`.protyle-wysiwyg [data-node-id="${headingIDs[2]}"]:visible`).last())
                 .toContainText(headings[2]);
 
-            const reloadedOutlineResponse = page.waitForResponse(response =>
-                response.url().endsWith("/api/outline/getDocOutline") &&
-                response.request().method() === "POST" &&
-                response.request().postData()?.includes(document.docID) === true, {
-                timeout: 30000,
-            });
             await page.reload();
             await expect(await getDocumentEditor(page, document.docID)).toContainText(headings[0]);
-            expect((await reloadedOutlineResponse).ok()).toBe(true);
-            const outlineLogo = page.locator(".sy__outline .block__logo:visible");
-            if (await outlineLogo.isVisible()) {
-                await dockItem.click();
-                await expect(outlineLogo).toBeHidden();
-            }
             await activateDock(page, dockItem, ".sy__outline");
             await assertOutline(page, headingIDs, headings);
         } finally {

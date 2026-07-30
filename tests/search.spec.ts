@@ -226,6 +226,8 @@ test.describe("global search", () => {
             const replaceInput = search.dialog.locator("#replaceInput");
             await expect(replaceInput).toBeVisible();
             await replaceInput.fill(newMarker);
+            await expect(search.input).toHaveValue(oldMarker);
+            await expect(replaceInput).toHaveValue(newMarker);
 
             const replaceResponse = page.waitForResponse((response) => {
                 if (!response.url().endsWith("/api/search/findReplace")) {

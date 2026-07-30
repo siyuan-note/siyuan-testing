@@ -282,20 +282,20 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
     await source.dispatchEvent("dragstart", {dataTransfer});
     await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).length))
         .toBeGreaterThan(0);
-    const targetBox = await target.locator(":scope > .b3-list-item__text").boundingBox();
+    const targetBox = await target.boundingBox();
     expect(targetBox).not.toBeNull();
     const point = {
         clientX: targetBox!.x + targetBox!.width / 2,
         clientY: targetBox!.y + targetBox!.height / 2,
     };
-    await target.dispatchEvent("dragenter", {dataTransfer, ...point});
-    await target.dispatchEvent("dragover", {dataTransfer, ...point});
-    await nextAnimationFrame(page);
-    await target.dispatchEvent("dragover", {
-        dataTransfer,
+    const initialPoint = {
         clientX: point.clientX,
-        clientY: point.clientY + 1,
-    });
+        clientY: point.clientY - 1,
+    };
+    await target.dispatchEvent("dragenter", {dataTransfer, ...initialPoint});
+    await target.dispatchEvent("dragover", {dataTransfer, ...initialPoint});
+    await nextAnimationFrame(page);
+    await target.dispatchEvent("dragover", {dataTransfer, ...point});
     await nextAnimationFrame(page);
     await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
     const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
