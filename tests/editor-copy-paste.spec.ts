@@ -166,7 +166,15 @@ const requestHistoryAction = async (page: Page, editor: Locator, shortcut: strin
     const editable = editor.locator('[contenteditable="true"]').last();
     await editable.focus();
     await page.keyboard.press(shortcut);
-    expect((await response).ok()).toBe(true);
+    const historyResponse = await response;
+    expect(historyResponse.ok()).toBe(true);
+    const result = await historyResponse.json() as {
+        code: number;
+        data?: {failed?: boolean; msg?: string};
+        msg: string;
+    };
+    expect(result.code, result.msg).toBe(0);
+    expect(result.data?.failed, result.data?.msg).not.toBe(true);
 };
 
 const selectParagraphRange = async (editor: Locator, startIndex: number, endIndex: number) => {
@@ -955,67 +963,118 @@ test.describe("block copy, cut, and paste", () => {
         await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, docID)).toEqual(pastedTexts);
     });
 
-    test("flattens a nested-list-to-sibling text range and removes virtual block references", async ({
+    test("normalizes a mixed nested-list-to-sibling text range as an ordered list", async ({
         baseURL,
         context,
         createTestDocument,
         page,
         siyuanAPI,
-        trackTestDocument,
     }) => {
         await allowClipboard(context, baseURL);
         const destination = await createTestDocument(
-            "Nested List Text Copy Destination E2E",
-            "Destination anchor",
+            "Nested List Text Copy E2E",
+            [
+                "* Parent",
+                "  1. 2",
+                "* 3",
+                "",
+                "Destination anchor",
+            ].join("\n"),
         );
-        const sourceTitle = `Nested List Text Copy Source E2E ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        const sourceID = await siyuanAPI.createDocument(destination.notebookID, sourceTitle, [
-            "* 1",
-            "  * 2",
-            "* 3",
-        ].join("\n"));
-        trackTestDocument({id: sourceID, notebookID: destination.notebookID, title: sourceTitle});
+        await selectNestedListItemToSibling(destination.editor);
+        await page.keyboard.press("ControlOrMeta+C");
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("2\n3");
 
-        const sourcePage = await context.newPage();
-        try {
-            await openWorkspace(sourcePage, `/?id=${sourceID}`);
-            const sourceEditor = await getDocumentEditor(sourcePage, sourceID);
-            await selectNestedListItemToSibling(sourceEditor);
-            await sourcePage.keyboard.press("ControlOrMeta+C");
-            await expectClipboardText(sourcePage, ["2", "3"]);
-            expect(await sourcePage.evaluate(() => navigator.clipboard.readText())).not.toContain("1");
+        const anchor = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
+        await focusAtEnd(anchor);
+        await page.keyboard.press("Enter");
+        await focusAtEnd(destination.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+        await pasteBlocks(page);
 
-            const anchor = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
-            await focusAtEnd(anchor);
-            await page.keyboard.press("Enter");
-            await focusAtEnd(destination.editor.locator(':scope > [data-type="NodeParagraph"]').last());
-            await pasteBlocks(page);
+        const lists = destination.editor.locator(':scope > [data-type="NodeList"]');
+        await expect(lists).toHaveCount(2);
+        const pastedList = lists.last();
+        await expect(pastedList).toHaveAttribute("data-subtype", "o");
+        const pastedItems = pastedList.locator(':scope > [data-type="NodeListItem"]');
+        await expect(pastedItems).toHaveCount(2);
+        await expect(pastedItems.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-subtype")))).resolves.toEqual(["o", "o"]);
+        await expect(pastedItems.locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        )).toHaveText(["2", "3"]);
+        await expect(pastedItems.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await expect(pastedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
+        await assertValidListDOM(destination.editor);
+        await assertValidSyListTree(siyuanAPI, destination.docID, destination.editor);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, destination.docID))
+            .toEqual(["Parent", "2", "3", "Destination anchor", "2", "3"]);
 
-            const pastedList = destination.editor.locator(':scope > [data-type="NodeList"]');
-            await expect(pastedList).toHaveCount(1);
-            const pastedItems = pastedList.locator(':scope > [data-type="NodeListItem"]');
-            await expect(pastedItems).toHaveCount(2);
-            await expect(pastedItems.locator(
-                ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
-            )).toHaveText(["2", "3"]);
-            await expect(pastedItems.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
-            await expect(pastedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
-            await assertValidListDOM(destination.editor);
-            await assertValidSyListTree(siyuanAPI, destination.docID, destination.editor);
-            await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, destination.docID))
-                .toEqual(["Destination anchor", "2", "3"]);
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, destination.docID);
+        const reloadedLists = reloadedEditor.locator(':scope > [data-type="NodeList"]');
+        await expect(reloadedLists).toHaveCount(2);
+        const reloadedList = reloadedLists.last();
+        await expect(reloadedList).toHaveAttribute("data-subtype", "o");
+        const reloadedItems = reloadedList.locator(':scope > [data-type="NodeListItem"]');
+        await expect(reloadedItems).toHaveCount(2);
+        await expect(reloadedItems.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-subtype")))).resolves.toEqual(["o", "o"]);
+        await expect(reloadedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
+        await assertValidListDOM(reloadedEditor);
+        await assertValidSyListTree(siyuanAPI, destination.docID, reloadedEditor);
+    });
 
-            await page.reload();
-            const reloadedEditor = await getDocumentEditor(page, destination.docID);
-            const reloadedList = reloadedEditor.locator(':scope > [data-type="NodeList"]');
-            await expect(reloadedList).toHaveCount(1);
-            await expect(reloadedList.locator(':scope > [data-type="NodeListItem"]')).toHaveCount(2);
-            await expect(reloadedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
-            await assertValidListDOM(reloadedEditor);
-            await assertValidSyListTree(siyuanAPI, destination.docID, reloadedEditor);
-        } finally {
-            await sourcePage.close();
-        }
+    test("undoes and redoes a pasted cross-block ordered list", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const testDocument = await createTestDocument(
+            "Cross Block Ordered List Paste Undo E2E",
+            [
+                "* Parent",
+                "  1. 2",
+                "* 3",
+                "",
+                "Paste anchor",
+            ].join("\n"),
+        );
+        await selectNestedListItemToSibling(testDocument.editor);
+        await page.keyboard.press("ControlOrMeta+C");
+
+        const anchor = testDocument.editor.locator(':scope > [data-type="NodeParagraph"]');
+        await focusAtEnd(anchor);
+        await page.keyboard.press("Enter");
+        await focusAtEnd(testDocument.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+        const beforePasteTexts = ["Parent", "2", "3", "Paste anchor", ""];
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(beforePasteTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(beforePasteTexts);
+
+        await pasteBlocks(page);
+        const pastedTexts = ["Parent", "2", "3", "Paste anchor", "2", "3"];
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(pastedTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(pastedTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
+
+        await requestHistoryAction(page, testDocument.editor, UNDO_SHORTCUT, "undo");
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(beforePasteTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(beforePasteTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
+
+        await requestHistoryAction(page, testDocument.editor, REDO_SHORTCUT, "redo");
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(pastedTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(pastedTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
     });
 
     test("preserves task-list conversion when replacing a cross-block range", async ({
