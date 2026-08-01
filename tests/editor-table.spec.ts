@@ -130,13 +130,38 @@ const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
     };
 };
 
-type TableControlType = "row" | "column" | "cell";
+type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
 
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
 
+const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
+    await expect(cell).toBeVisible();
+    if (type === "cell") {
+        await cell.hover();
+        return;
+    }
+    const table = cell.locator("xpath=ancestor::table");
+    const tableBox = await table.boundingBox();
+    const cellBox = await cell.boundingBox();
+    expect(tableBox).not.toBeNull();
+    expect(cellBox).not.toBeNull();
+    if (type === "row") {
+        const firstRow = await cell.evaluate(element =>
+            element.parentElement === (element.closest("table") as HTMLTableElement).rows[0]);
+        await page.mouse.move(tableBox!.x + (firstRow ? 1 : -1),
+            cellBox!.y + cellBox!.height / 2, {steps: 10});
+    } else if (type === "column") {
+        await page.mouse.move(cellBox!.x + cellBox!.width / 2, tableBox!.y - 1, {steps: 10});
+    } else if (type === "add-row") {
+        await page.mouse.move(tableBox!.x + tableBox!.width / 2, tableBox!.y + tableBox!.height + 1, {steps: 10});
+    } else {
+        await page.mouse.move(tableBox!.x + tableBox!.width + 1, tableBox!.y + tableBox!.height / 2, {steps: 10});
+    }
+};
+
 const openTableControlMenu = async (page: Page, cell: Locator, type: TableControlType) => {
-    await cell.hover();
+    await hoverTableControl(page, cell, type);
     const control = getVisibleTableControl(page, type);
     await expect(control).toHaveCount(1);
     await control.click({button: "right"});
@@ -151,8 +176,7 @@ const getMenuItemByLabel = (page: Page, scope: Locator, label: string) =>
     }).first();
 
 const clickTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
-    await expect(cell).toBeVisible();
-    await cell.hover();
+    await hoverTableControl(page, cell, type);
     const control = getVisibleTableControl(page, type);
     await expect(control).toHaveCount(1);
     const box = await control.boundingBox();
@@ -270,6 +294,211 @@ test.describe("table editing", () => {
             duplicateIDs: 0,
             head: [["Item", "Quantity"]],
         });
+    });
+
+    test("keeps the table block gutter accessible beside the row control", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Block Gutter E2E",
+            [
+                "| Item | Quantity |",
+                "| --- | ---: |",
+                "| Alpha | 1 |",
+            ].join("\n"),
+        );
+        const tableBlock = editor.locator(':scope > [data-type="NodeTable"]');
+        const tableID = await tableBlock.getAttribute("data-node-id");
+        expect(tableID).toBeTruthy();
+        const firstCell = tableBlock.locator("thead th").first();
+        await firstCell.hover();
+        await hoverTableControl(page, firstCell, "row");
+        const rowControl = getVisibleTableControl(page, "row");
+        const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
+        await expect(rowControl).toBeVisible();
+        await expect(gutter).toBeVisible();
+        const rowControlBox = await rowControl.boundingBox();
+        const gutterBox = await gutter.boundingBox();
+        expect(rowControlBox).not.toBeNull();
+        expect(gutterBox).not.toBeNull();
+        expect(gutterBox!.x + gutterBox!.width).toBeLessThanOrEqual(rowControlBox!.x);
+
+        await page.mouse.click(gutterBox!.x + gutterBox!.width / 2, gutterBox!.y + gutterBox!.height / 2);
+        await expect(page.locator("#commonMenu:not(.fn__none)")).toBeVisible();
+        await expect(page.locator(".protyle-table-control__selection:visible")).toHaveCount(0);
+    });
+
+    test("supports dragging rows and columns directly from outside the table", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table External Control Drag E2E",
+            [
+                "| Item | Quantity |",
+                "| --- | ---: |",
+                "| Alpha | 1 |",
+                "| Beta | 2 |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"] table');
+        const bodyCell = table.locator("tbody td").first();
+        const tableBox = await table.boundingBox();
+        const bodyCellBox = await bodyCell.boundingBox();
+        expect(tableBox).not.toBeNull();
+        expect(bodyCellBox).not.toBeNull();
+
+        await page.mouse.move(tableBox!.x - 40, bodyCellBox!.y + bodyCellBox!.height / 2);
+        await page.mouse.move(tableBox!.x - 1, bodyCellBox!.y + bodyCellBox!.height / 2, {steps: 10});
+        const rowControl = getVisibleTableControl(page, "row");
+        await expect(rowControl).toBeVisible();
+        const rowControlBox = await rowControl.boundingBox();
+        const secondRowBox = await table.locator("tbody tr").nth(1).boundingBox();
+        expect(rowControlBox).not.toBeNull();
+        expect(secondRowBox).not.toBeNull();
+        await requestTransaction(page, async () => {
+            await page.mouse.move(rowControlBox!.x + rowControlBox!.width / 2,
+                rowControlBox!.y + rowControlBox!.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(tableBox!.x + 20, secondRowBox!.y + secondRowBox!.height - 2, {steps: 10});
+            await page.mouse.up();
+        });
+        await expect(table.locator("tbody tr td:first-child")).toHaveText(["Beta", "Alpha"]);
+
+        await page.mouse.move(0, 0);
+        const updatedTableBox = await table.boundingBox();
+        const updatedHeaderCellBox = await table.locator("thead th").first().boundingBox();
+        expect(updatedTableBox).not.toBeNull();
+        expect(updatedHeaderCellBox).not.toBeNull();
+        await page.mouse.move(updatedHeaderCellBox!.x + updatedHeaderCellBox!.width / 2, updatedTableBox!.y - 40);
+        await page.mouse.move(updatedHeaderCellBox!.x + updatedHeaderCellBox!.width / 2,
+            updatedTableBox!.y - 1, {steps: 10});
+        const columnControl = getVisibleTableControl(page, "column");
+        await expect(columnControl).toBeVisible();
+        const columnControlBox = await columnControl.boundingBox();
+        const secondHeaderCellBox = await table.locator("thead th").nth(1).boundingBox();
+        expect(columnControlBox).not.toBeNull();
+        expect(secondHeaderCellBox).not.toBeNull();
+        await requestTransaction(page, async () => {
+            await page.mouse.move(columnControlBox!.x + columnControlBox!.width / 2,
+                columnControlBox!.y + columnControlBox!.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(secondHeaderCellBox!.x + secondHeaderCellBox!.width - 2,
+                updatedTableBox!.y + 20, {steps: 10});
+            await page.mouse.up();
+        });
+        await expect(table.locator("thead th")).toHaveText(["Quantity", "Item"]);
+    });
+
+    test("uses slim table controls without blocking editor scrolling", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const trailingContent = Array.from({length: 80}, (_, index) => `Trailing paragraph ${index + 1}`).join("\n\n");
+        const {editor} = await createTestDocument(
+            "Table Compact Control Scroll E2E",
+            [
+                "| Item | Quantity |",
+                "| --- | ---: |",
+                "| Alpha | 1 |",
+                "",
+                trailingContent,
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const bodyCell = table.locator("tbody td").first();
+        const headerCell = table.locator("thead th").first();
+        await hoverTableControl(page, bodyCell, "row");
+        const rowControl = getVisibleTableControl(page, "row");
+        const rowControlBox = await rowControl.boundingBox();
+        const bodyCellBox = await bodyCell.boundingBox();
+        expect(rowControlBox).not.toBeNull();
+        expect(bodyCellBox).not.toBeNull();
+        expect(rowControlBox!.width).toBeCloseTo(16, 0);
+        expect(rowControlBox!.height).toBeCloseTo(bodyCellBox!.height, 0);
+
+        await hoverTableControl(page, headerCell, "column");
+        const columnControl = getVisibleTableControl(page, "column");
+        const columnControlBox = await columnControl.boundingBox();
+        const headerCellBox = await headerCell.boundingBox();
+        expect(columnControlBox).not.toBeNull();
+        expect(headerCellBox).not.toBeNull();
+        expect(columnControlBox!.width).toBeCloseTo(headerCellBox!.width, 0);
+        expect(columnControlBox!.height).toBeCloseTo(16, 0);
+
+        await hoverTableControl(page, bodyCell, "add-row");
+        const addRowControlBox = await getVisibleTableControl(page, "add-row").boundingBox();
+        const tableBox = await table.locator("table").boundingBox();
+        expect(addRowControlBox).not.toBeNull();
+        expect(tableBox).not.toBeNull();
+        expect(addRowControlBox!.width).toBeCloseTo(tableBox!.width, 0);
+        expect(addRowControlBox!.height).toBeCloseTo(16, 0);
+
+        await hoverTableControl(page, bodyCell, "add-column");
+        const addColumnControlBox = await getVisibleTableControl(page, "add-column").boundingBox();
+        expect(addColumnControlBox).not.toBeNull();
+        expect(addColumnControlBox!.width).toBeCloseTo(16, 0);
+        expect(addColumnControlBox!.height).toBeCloseTo(tableBox!.height, 0);
+
+        const content = editor.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle-content ')][1]",
+        );
+        const scrollState = await content.evaluate(element => ({
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            scrollTop: element.scrollTop,
+        }));
+        expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+        await page.mouse.wheel(0, 240);
+        await expect.poll(() => content.evaluate(element => element.scrollTop))
+            .toBeGreaterThan(scrollState.scrollTop);
+    });
+
+    test("positions a slim row control on the logical row covered by a merged cell", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Merged Logical Row Control E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const firstColumnCells = table.locator("tbody tr td:first-child");
+        await clickTableControl(page, firstColumnCells.nth(0), "cell");
+        await clickTableControl(page, firstColumnCells.nth(1), "cell");
+        const menu = await openTableControlMenu(page, firstColumnCells.nth(1), "cell");
+        const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
+        await requestTransaction(page, () => getMenuItemByLabel(page, menu, mergeLabel).click());
+
+        const bodyRows = table.locator("tbody tr");
+        const firstRowBox = await bodyRows.nth(0).boundingBox();
+        const secondRowBox = await bodyRows.nth(1).boundingBox();
+        expect(firstRowBox).not.toBeNull();
+        expect(secondRowBox).not.toBeNull();
+        const secondRowCell = bodyRows.nth(1).locator("td:not(.fn__none)").first();
+        await hoverTableControl(page, secondRowCell, "row");
+        const rowControl = getVisibleTableControl(page, "row");
+        const rowControlBox = await rowControl.boundingBox();
+        expect(rowControlBox).not.toBeNull();
+        expect(rowControlBox!.width).toBeCloseTo(16, 0);
+        expect(rowControlBox!.height).toBeCloseTo(secondRowBox!.height, 0);
+        expect(rowControlBox!.y + rowControlBox!.height / 2)
+            .toBeCloseTo(secondRowBox!.y + secondRowBox!.height / 2, 0);
+
+        await rowControl.click({modifiers: [PRIMARY_MODIFIER]});
+        const selection = page.locator(".protyle-table-control__selection:visible");
+        await expect(selection).toHaveCount(1);
+        const selectionBox = await selection.boundingBox();
+        expect(selectionBox).not.toBeNull();
+        expect(selectionBox!.y).toBeCloseTo(firstRowBox!.y, 0);
+        expect(selectionBox!.y + selectionBox!.height)
+            .toBeCloseTo(secondRowBox!.y + secondRowBox!.height, 0);
     });
 
     test("copies and pastes a table with a new block ID and preserved structure", async ({
@@ -452,7 +681,8 @@ test.describe("table editing", () => {
             ["cell", labels.cell],
             ["add-row", labels.addRow],
             ["add-column", labels.addColumn],
-        ]) {
+        ] as const) {
+            await hoverTableControl(page, firstCell, type);
             const control = page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
             await expect(control).toHaveCount(1);
             await expect(control).toHaveAttribute("type", "button");
@@ -536,12 +766,13 @@ test.describe("table editing", () => {
         await requestTransaction(page, () => getMenuItemByLabel(page, menu, labels.merge).click());
 
         const mergedCell = table.locator("tbody tr").first().locator("td").first();
-        await mergedCell.hover();
+        await hoverTableControl(page, mergedCell, "row");
         const rowControl = getVisibleTableControl(page, "row");
-        const columnControl = getVisibleTableControl(page, "column");
         await expect(rowControl).toHaveClass(/protyle-table-control__handle--drag-disabled/);
-        await expect(columnControl).toHaveClass(/protyle-table-control__handle--drag-disabled/);
         await expect(rowControl).toHaveCSS("cursor", "pointer");
+        await hoverTableControl(page, mergedCell, "column");
+        const columnControl = getVisibleTableControl(page, "column");
+        await expect(columnControl).toHaveClass(/protyle-table-control__handle--drag-disabled/);
         await expect(columnControl).toHaveCSS("cursor", "pointer");
 
         menu = await openTableControlMenu(page, mergedCell, "row");

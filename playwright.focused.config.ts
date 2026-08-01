@@ -28,17 +28,26 @@ const getFocusedProject = () => {
                     ...encryptedNotebookTests,
                     ...editorTests,
                 ],
+                // main shard 的测试互相独立（独立文档 + teardown），并行提速；
+                // retries 兜底并行下偶发的拖拽时序 flake
+                workers: 2,
+                retries: 1,
             };
         case "editor":
             return {
                 name: "editor",
                 testMatch: editorTests,
                 testIgnore: attributeViewTests,
+                // editor 是多文件 shard，按文件并行提速（测试互相独立：独立文档 + teardown）；
+                // retries 兜底并行下偶发的粘贴/控件时序 flake
+                workers: 2,
+                retries: 1,
             };
         case "attribute-view":
             return {
                 name: "attribute-view",
                 testMatch: attributeViewTests,
+                // attribute-view 是单文件 shard，测试依赖内核事务串行处理，并行实测无提速，保持单 worker
             };
         default:
             throw new Error(`Unknown SIYUAN_E2E_SHARD: ${process.env.SIYUAN_E2E_SHARD}`);
