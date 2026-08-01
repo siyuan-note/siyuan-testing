@@ -470,16 +470,40 @@ test.describe("table editing", () => {
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const tableElement = table.locator("table");
         const bodyCell = table.locator("tbody td").first();
-        const tableRadius = await tableElement.evaluate(element => getComputedStyle(element).borderRadius);
         const smallRadius = await page.evaluate(() =>
             getComputedStyle(document.documentElement).getPropertyValue("--b3-border-radius-s").trim());
-        expect(tableRadius).toBe(smallRadius);
+        const getCornerRadii = (element: Locator) => element.evaluate(item => {
+            const style = getComputedStyle(item);
+            return [
+                style.borderTopLeftRadius,
+                style.borderTopRightRadius,
+                style.borderBottomRightRadius,
+                style.borderBottomLeftRadius,
+            ];
+        });
+        const roundedCorners = [smallRadius, smallRadius, smallRadius, smallRadius];
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
         await expect(tableElement).toHaveCSS("overflow", "hidden");
 
-        for (const type of ["cell", "row", "column", "add-row", "add-column"] as const) {
+        for (const type of ["cell", "row", "column"] as const) {
             await hoverTableControl(page, bodyCell, type);
-            await expect(getVisibleTableControl(page, type)).toHaveCSS("border-radius", tableRadius);
+            await expect.poll(() => getCornerRadii(getVisibleTableControl(page, type))).toEqual(roundedCorners);
         }
+
+        await hoverTableControl(page, bodyCell, "add-row");
+        await expect.poll(() => getCornerRadii(tableElement))
+            .toEqual([smallRadius, smallRadius, "0px", "0px"]);
+        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "add-row")))
+            .toEqual(["0px", "0px", smallRadius, smallRadius]);
+
+        await hoverTableControl(page, bodyCell, "add-column");
+        await expect.poll(() => getCornerRadii(tableElement))
+            .toEqual([smallRadius, "0px", "0px", smallRadius]);
+        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "add-column")))
+            .toEqual(["0px", smallRadius, smallRadius, "0px"]);
+
+        await hoverTableControl(page, bodyCell, "cell");
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
     });
 
     test("positions a slim row control on the logical row covered by a merged cell", async ({
