@@ -455,6 +455,33 @@ test.describe("table editing", () => {
             .toBeGreaterThan(scrollState.scrollTop);
     });
 
+    test("uses consistent small corners for tables and table controls", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Corner E2E",
+            [
+                "| Item | Quantity |",
+                "| --- | ---: |",
+                "| Alpha | 1 |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const tableElement = table.locator("table");
+        const bodyCell = table.locator("tbody td").first();
+        const tableRadius = await tableElement.evaluate(element => getComputedStyle(element).borderRadius);
+        const smallRadius = await page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue("--b3-border-radius-s").trim());
+        expect(tableRadius).toBe(smallRadius);
+        await expect(tableElement).toHaveCSS("overflow", "hidden");
+
+        for (const type of ["cell", "row", "column", "add-row", "add-column"] as const) {
+            await hoverTableControl(page, bodyCell, type);
+            await expect(getVisibleTableControl(page, type)).toHaveCSS("border-radius", tableRadius);
+        }
+    });
+
     test("positions a slim row control on the logical row covered by a merged cell", async ({
         createTestDocument,
         page,
