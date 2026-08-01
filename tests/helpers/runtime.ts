@@ -48,7 +48,9 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
         throw new Error(`SiYuan at ${target.origin} did not return workspace information.`);
     }
 
-    const normalizeWorkspace = (value: string) => value.replace(/[\\/]+$/, "").toLocaleLowerCase();
+    // Windows 内核返回反斜杠路径，统一为正斜杠后再比较，避免分隔符差异导致误判
+    const normalizeWorkspace = (value: string) =>
+        value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
     if (normalizeWorkspace(workspaceInfo.workspaceDir) !== normalizeWorkspace(expectedWorkspace)) {
         throw new Error(
             `SiYuan is using workspace ${workspaceInfo.workspaceDir}, expected ${expectedWorkspace}.`,
