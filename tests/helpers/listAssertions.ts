@@ -37,6 +37,9 @@ export const assertValidListDOM = async (editor: Locator) => {
             ids.add(id);
         });
         element.querySelectorAll<HTMLElement>('[data-type="NodeList"]').forEach(list => {
+            if (list.querySelectorAll(":scope > .protyle-attr").length !== 1) {
+                result.push(`NodeList ${list.dataset.nodeId} does not have exactly one attribute element`);
+            }
             Array.from(list.children).filter(child => child.hasAttribute("data-node-id")).forEach(child => {
                 if (child.getAttribute("data-type") !== "NodeListItem") {
                     result.push(`NodeList ${list.dataset.nodeId} directly contains ${child.getAttribute("data-type")}`);
@@ -50,9 +53,20 @@ export const assertValidListDOM = async (editor: Locator) => {
             if (item.parentElement?.getAttribute("data-type") !== "NodeList") {
                 result.push(`NodeListItem ${item.dataset.nodeId} is not wrapped by NodeList`);
             }
+            if (item.querySelectorAll(":scope > .protyle-action").length !== 1) {
+                result.push(`NodeListItem ${item.dataset.nodeId} does not have exactly one action element`);
+            }
+            if (item.querySelectorAll(":scope > .protyle-attr").length !== 1) {
+                result.push(`NodeListItem ${item.dataset.nodeId} does not have exactly one attribute element`);
+            }
             Array.from(item.children).filter(child => child.hasAttribute("data-node-id")).forEach(child => {
                 if (child.getAttribute("data-type") === "NodeListItem") {
                     result.push(`NodeListItem ${item.dataset.nodeId} directly contains NodeListItem`);
+                }
+                if (child.getAttribute("data-type") !== "NodeThematicBreak" &&
+                    child.querySelectorAll(":scope > .protyle-attr").length !== 1) {
+                    result.push(`${child.getAttribute("data-type")} ${child.getAttribute("data-node-id")} ` +
+                        "does not have exactly one attribute element");
                 }
             });
         });

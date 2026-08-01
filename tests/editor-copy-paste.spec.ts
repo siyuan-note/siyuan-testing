@@ -166,7 +166,15 @@ const requestHistoryAction = async (page: Page, editor: Locator, shortcut: strin
     const editable = editor.locator('[contenteditable="true"]').last();
     await editable.focus();
     await page.keyboard.press(shortcut);
-    expect((await response).ok()).toBe(true);
+    const historyResponse = await response;
+    expect(historyResponse.ok()).toBe(true);
+    const result = await historyResponse.json() as {
+        code: number;
+        data?: {failed?: boolean; msg?: string};
+        msg: string;
+    };
+    expect(result.code, result.msg).toBe(0);
+    expect(result.data?.failed, result.data?.msg).not.toBe(true);
 };
 
 const selectParagraphRange = async (editor: Locator, startIndex: number, endIndex: number) => {
@@ -316,6 +324,40 @@ const selectParagraphToNestedListItem = async (editor: Locator) => {
         const range = document.createRange();
         range.setStart(startText, 0);
         range.setEnd(endText, 1);
+        const selection = getSelection();
+        if (!selection) {
+            throw new Error("selection is unavailable");
+        }
+        selection.removeAllRanges();
+        selection.addRange(range);
+    });
+};
+
+const selectNestedListItemToSibling = async (editor: Locator) => {
+    await editor.evaluate(element => {
+        const topList = element.querySelector<HTMLElement>(":scope > [data-type=\"NodeList\"]");
+        const topItems = topList?.querySelectorAll<HTMLElement>(":scope > [data-type=\"NodeListItem\"]");
+        const startEditable = topItems?.[0]?.querySelector<HTMLElement>(
+            ":scope > [data-type=\"NodeList\"] > [data-type=\"NodeListItem\"] " +
+            "> [data-type=\"NodeParagraph\"] > [contenteditable=\"true\"]",
+        );
+        const endEditable = topItems?.[1]?.querySelector<HTMLElement>(
+            ":scope > [data-type=\"NodeParagraph\"] > [contenteditable=\"true\"]",
+        );
+        if (!startEditable || !endEditable) {
+            throw new Error("nested-list-to-sibling selection boundary is unavailable");
+        }
+        startEditable.innerHTML = "<span data-type=\"virtual-block-ref\">2</span>";
+        endEditable.innerHTML = "<span data-type=\"virtual-block-ref\">3</span>";
+        const startText = startEditable.querySelector("[data-type=\"virtual-block-ref\"]")?.firstChild;
+        const endText = endEditable.querySelector("[data-type=\"virtual-block-ref\"]")?.firstChild;
+        if (!startText || !endText) {
+            throw new Error("virtual block reference boundary is unavailable");
+        }
+        startEditable.focus();
+        const range = document.createRange();
+        range.setStart(startText, 0);
+        range.setEnd(endText, endText.textContent?.length || 0);
         const selection = getSelection();
         if (!selection) {
             throw new Error("selection is unavailable");
@@ -919,6 +961,120 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press(REDO_SHORTCUT);
         await expect.poll(() => getAllParagraphTexts(editor)).toEqual(pastedTexts);
         await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, docID)).toEqual(pastedTexts);
+    });
+
+    test("normalizes a mixed nested-list-to-sibling text range as an ordered list", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const destination = await createTestDocument(
+            "Nested List Text Copy E2E",
+            [
+                "* Parent",
+                "  1. 2",
+                "* 3",
+                "",
+                "Destination anchor",
+            ].join("\n"),
+        );
+        await selectNestedListItemToSibling(destination.editor);
+        await page.keyboard.press("ControlOrMeta+C");
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("2\n3");
+
+        const anchor = destination.editor.locator(':scope > [data-type="NodeParagraph"]');
+        await focusAtEnd(anchor);
+        await page.keyboard.press("Enter");
+        await focusAtEnd(destination.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+        await pasteBlocks(page);
+
+        const lists = destination.editor.locator(':scope > [data-type="NodeList"]');
+        await expect(lists).toHaveCount(2);
+        const pastedList = lists.last();
+        await expect(pastedList).toHaveAttribute("data-subtype", "o");
+        const pastedItems = pastedList.locator(':scope > [data-type="NodeListItem"]');
+        await expect(pastedItems).toHaveCount(2);
+        await expect(pastedItems.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-subtype")))).resolves.toEqual(["o", "o"]);
+        await expect(pastedItems.locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        )).toHaveText(["2", "3"]);
+        await expect(pastedItems.locator(':scope > [data-type="NodeList"]')).toHaveCount(0);
+        await expect(pastedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
+        await assertValidListDOM(destination.editor);
+        await assertValidSyListTree(siyuanAPI, destination.docID, destination.editor);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, destination.docID))
+            .toEqual(["Parent", "2", "3", "Destination anchor", "2", "3"]);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, destination.docID);
+        const reloadedLists = reloadedEditor.locator(':scope > [data-type="NodeList"]');
+        await expect(reloadedLists).toHaveCount(2);
+        const reloadedList = reloadedLists.last();
+        await expect(reloadedList).toHaveAttribute("data-subtype", "o");
+        const reloadedItems = reloadedList.locator(':scope > [data-type="NodeListItem"]');
+        await expect(reloadedItems).toHaveCount(2);
+        await expect(reloadedItems.evaluateAll(items =>
+            items.map(item => item.getAttribute("data-subtype")))).resolves.toEqual(["o", "o"]);
+        await expect(reloadedList.locator('[data-type="virtual-block-ref"]')).toHaveCount(0);
+        await assertValidListDOM(reloadedEditor);
+        await assertValidSyListTree(siyuanAPI, destination.docID, reloadedEditor);
+    });
+
+    test("undoes and redoes a pasted cross-block ordered list", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const testDocument = await createTestDocument(
+            "Cross Block Ordered List Paste Undo E2E",
+            [
+                "* Parent",
+                "  1. 2",
+                "* 3",
+                "",
+                "Paste anchor",
+            ].join("\n"),
+        );
+        await selectNestedListItemToSibling(testDocument.editor);
+        await page.keyboard.press("ControlOrMeta+C");
+
+        const anchor = testDocument.editor.locator(':scope > [data-type="NodeParagraph"]');
+        await focusAtEnd(anchor);
+        await page.keyboard.press("Enter");
+        await focusAtEnd(testDocument.editor.locator(':scope > [data-type="NodeParagraph"]').last());
+        const beforePasteTexts = ["Parent", "2", "3", "Paste anchor", ""];
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(beforePasteTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(beforePasteTexts);
+
+        await pasteBlocks(page);
+        const pastedTexts = ["Parent", "2", "3", "Paste anchor", "2", "3"];
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(pastedTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(pastedTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
+
+        await requestHistoryAction(page, testDocument.editor, UNDO_SHORTCUT, "undo");
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(beforePasteTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(beforePasteTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
+
+        await requestHistoryAction(page, testDocument.editor, REDO_SHORTCUT, "redo");
+        await expect.poll(() => getAllParagraphTexts(testDocument.editor)).toEqual(pastedTexts);
+        await expect.poll(() => getPersistedParagraphTexts(siyuanAPI, testDocument.docID))
+            .toEqual(pastedTexts);
+        await assertValidListDOM(testDocument.editor);
+        await assertValidSyListTree(siyuanAPI, testDocument.docID, testDocument.editor);
     });
 
     test("preserves task-list conversion when replacing a cross-block range", async ({
