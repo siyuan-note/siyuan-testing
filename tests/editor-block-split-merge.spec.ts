@@ -24,6 +24,11 @@ interface IListState {
     paragraphs: string[];
 }
 
+interface IListTreeItem {
+    children: IListTreeItem[];
+    text: string;
+}
+
 const flattenNodes = (node: ISyNode): ISyNode[] => [
     node,
     ...(node.Children || []).flatMap(flattenNodes),
@@ -97,6 +102,62 @@ const expectListState = async (api: SiyuanAPI, docID: string, editor: Locator, s
     await expect.poll(() => getPersistedListState(api, docID)).toEqual(state);
 };
 
+const getDOMListTree = async (editor: Locator): Promise<IListTreeItem[]> => editor.evaluate(element => {
+    const visit = (item: Element): IListTreeItem => {
+        const paragraph = Array.from(item.children).find(child => child.getAttribute("data-type") === "NodeParagraph");
+        const list = Array.from(item.children).find(child => child.getAttribute("data-type") === "NodeList");
+        return {
+            children: list ? Array.from(list.children)
+                .filter(child => child.getAttribute("data-type") === "NodeListItem")
+                .map(visit) : [],
+            text: paragraph?.querySelector('[contenteditable="true"]')?.textContent || "",
+        };
+    };
+    const list = Array.from(element.children).find(child => child.getAttribute("data-type") === "NodeList");
+    return list ? Array.from(list.children)
+        .filter(child => child.getAttribute("data-type") === "NodeListItem")
+        .map(visit) : [];
+});
+
+const getPersistedListTree = async (api: SiyuanAPI, docID: string): Promise<IListTreeItem[]> => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const visit = (item: ISyNode): IListTreeItem => {
+        const paragraph = item.Children?.find(child => child.Type === "NodeParagraph");
+        const list = item.Children?.find(child => child.Type === "NodeList");
+        return {
+            children: list?.Children?.filter(child => child.Type === "NodeListItem").map(visit) || [],
+            text: paragraph ? getNodeText(paragraph) : "",
+        };
+    };
+    const list = document.Children?.find(child => child.Type === "NodeList");
+    return list?.Children?.filter(child => child.Type === "NodeListItem").map(visit) || [];
+};
+
+const expectListTree = async (api: SiyuanAPI, docID: string, editor: Locator, tree: IListTreeItem[]) => {
+    await expect.poll(() => getDOMListTree(editor)).toEqual(tree);
+    await assertValidListDOM(editor);
+    await assertValidSyListTree(api, docID, editor);
+    await expect.poll(() => getPersistedListTree(api, docID)).toEqual(tree);
+};
+
+const getSelectionState = async (editor: Locator) => editor.evaluate(element => {
+    const selection = getSelection();
+    if (!selection || selection.rangeCount === 0) {
+        return {collapsed: true, endID: "", startID: "", text: ""};
+    }
+    const range = selection.getRangeAt(0);
+    const getBlockID = (node: Node) => {
+        const target = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+        return target?.closest("[data-node-id]")?.getAttribute("data-node-id") || "";
+    };
+    return {
+        collapsed: range.collapsed,
+        endID: getBlockID(range.endContainer),
+        startID: getBlockID(range.startContainer),
+        text: selection.toString().replace(/[\s\u200b]/g, ""),
+    };
+});
+
 const setCaretOffset = async (editable: Locator, offset: number) => {
     const result = await editable.evaluate((element, requestedOffset) => {
         element.focus();
@@ -163,6 +224,34 @@ const setCrossBlockRange = async (startEditable: Locator, startOffset: number,
             selection.addRange(range);
             return selection.toString();
         }, {endElement, endOffset, startOffset});
+    } finally {
+        await endElement.dispose();
+    }
+};
+
+const setCrossBlockRangeFromListItem = async (startEditable: Locator, endEditable: Locator, endOffset: number) => {
+    const endElement = await endEditable.elementHandle();
+    if (!endElement) {
+        throw new Error("cross-block range end is unavailable");
+    }
+    try {
+        return await startEditable.evaluate((startElement, options) => {
+            const startListItem = startElement.closest('[data-type="NodeListItem"]');
+            const endText = options.endElement.firstChild;
+            if (!startListItem || !endText) {
+                throw new Error("list-item range boundary is unavailable");
+            }
+            const range = document.createRange();
+            range.setStartBefore(startListItem);
+            range.setEnd(endText, options.endOffset);
+            const selection = getSelection();
+            if (!selection) {
+                throw new Error("selection is unavailable");
+            }
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return selection.toString();
+        }, {endElement, endOffset});
     } finally {
         await endElement.dispose();
     }
@@ -301,5 +390,102 @@ test.describe("paragraph splitting and merging", () => {
 
         await page.reload();
         await expectListState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
+    });
+
+    [
+        {children: ["1", "2", "", "2", "3"], endIndex: 9, key: "Delete", selectedText: "331", startIndex: 7,
+            title: "deletes"},
+        {children: ["1", "2", "1", "2", "3"], endIndex: 9, key: "1", selectedText: "331", startIndex: 7,
+            title: "replaces"},
+        {children: ["1", "3"], endIndex: 10, key: "Delete", selectedText: "23312", startIndex: 6,
+            title: "deletes a range with trailing start items from"},
+        {children: ["1", "3"], endIndex: 10, key: "Backspace", selectedText: "23312", startIndex: 6,
+            title: "backspaces a range with trailing start items from"},
+        {children: ["1", "3"], endIndex: 10, key: "Delete", listItemBoundary: true, selectedText: "23312",
+            startIndex: 6, title: "deletes a list-item-boundary range with trailing start items from"},
+        {children: ["1", "1", "3"], endIndex: 10, key: "1", selectedText: "23312", startIndex: 6,
+            title: "replaces a range with trailing start items in"},
+        {children: ["1", "3"], endIndex: 10, key: "1", mergeIntoFirst: true, selectedText: "2123312",
+            startIndex: 4, title: "replaces a fully selected outer list item in"},
+    ].forEach(({children, endIndex, key, listItemBoundary, mergeIntoFirst, selectedText: expectedSelectedText,
+                  startIndex, title}) => {
+        test(`${title} a cross-block range between sibling nested lists and restores it on undo`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor} = await createTestDocument(
+                `Sibling Nested List Cross Block ${title} E2E`,
+                [
+                    "* 1",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                    "* 2",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                    "* 3",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                ].join("\n"),
+            );
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [child("1"), child("2"), child("3")], text: "1"},
+                {children: [child("1"), child("2"), child("3")], text: "2"},
+                {children: [child("1"), child("2"), child("3")], text: "3"},
+            ];
+            const changedTree: IListTreeItem[] = mergeIntoFirst ? [{
+                children: initialTree[0].children.concat(children.map(child)),
+                text: "1",
+            }] : [initialTree[0], {children: children.map(child), text: "2"}];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(startIndex);
+            const endEditable = editables.nth(endIndex);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = listItemBoundary ?
+                await setCrossBlockRangeFromListItem(startEditable, endEditable, 1) :
+                await setCrossBlockRange(startEditable, 0, endEditable, 1);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe(expectedSelectedText);
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            if (mergeIntoFirst) {
+                await expect.poll(() => editor.evaluate(element => {
+                    const range = getSelection()?.getRangeAt(0);
+                    const container = range?.startContainer;
+                    const target = container?.nodeType === Node.ELEMENT_NODE ? container as Element : container?.parentElement;
+                    return {
+                        collapsed: range?.collapsed || false,
+                        id: target?.closest("[data-node-id]")?.getAttribute("data-node-id"),
+                        offset: range?.startOffset,
+                        text: container?.textContent,
+                        withinEditor: !!container && element.contains(container),
+                    };
+                })).toEqual({
+                    collapsed: true,
+                    id: startID,
+                    offset: 1,
+                    text: "1",
+                    withinEditor: true,
+                });
+            }
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: expectedSelectedText,
+            });
+        });
     });
 });
