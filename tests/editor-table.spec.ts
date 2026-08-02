@@ -761,7 +761,11 @@ test.describe("table editing", () => {
             await expect(control).toHaveCount(1);
             await expect(control).toHaveAttribute("type", "button");
             await expect(control).toHaveAttribute("aria-label", label);
-            await expect(control).toHaveClass(/b3-tooltips/);
+            if (type === "row" || type === "column") {
+                await expect(control).not.toHaveClass(/b3-tooltips/);
+            } else {
+                await expect(control).toHaveClass(/b3-tooltips/);
+            }
         }
 
         let menu = await openTableControlMenu(page, firstCell, "cell");
