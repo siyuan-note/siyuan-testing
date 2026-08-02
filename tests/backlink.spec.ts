@@ -1,5 +1,5 @@
 import {expect, test} from "./fixtures";
-import {PRIMARY_MODIFIER} from "./helpers/keyboard";
+import {dispatchPrimaryClick} from "./helpers/keyboard";
 import {showDock} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
@@ -48,7 +48,7 @@ test("refreshes backlinks, navigates to the referring document, and removes the 
         await expect(sourceNode).toBeVisible({timeout: 15000});
         await expect(panel.locator(".listCount")).toHaveText("1");
 
-        await sourceNode.click({modifiers: [PRIMARY_MODIFIER]});
+        await dispatchPrimaryClick(page, sourceNode);
         await expect((await getDocumentEditor(page, source.docID)).locator(
             `[data-node-id="${sourceBlockID}"]`,
         )).toContainText(sourceMarker);

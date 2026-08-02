@@ -64,6 +64,7 @@ const openDocumentReview = async (page: Page, editor: Locator) => {
 test.describe("flashcards", () => {
     test("adds and removes a block flashcard with reload persistence", {tag: "@smoke"}, async ({
         createTestDocument,
+        fullEntryVisibility,
         page,
         siyuanAPI,
     }) => {
@@ -94,6 +95,7 @@ test.describe("flashcards", () => {
 
     test("reviews a document flashcard and persists its progress", async ({
         createTestDocument,
+        fullEntryVisibility,
         page,
         siyuanAPI,
     }) => {

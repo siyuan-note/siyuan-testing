@@ -7,6 +7,9 @@ declare global {
                 appearance: {
                     mode: number;
                     modeOS: boolean;
+                    entryVisibility: {
+                        active: string;
+                    };
                 };
                 fileTree: Record<string, unknown> & {
                     docCreateTemplatePath: string;

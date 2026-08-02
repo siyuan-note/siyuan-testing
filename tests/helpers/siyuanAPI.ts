@@ -161,7 +161,19 @@ export interface IRiffDueCardsResult {
 export interface IAppearanceSettings {
     mode: number;
     modeOS: boolean;
+    entryVisibility: IEntryVisibilitySettings;
     [key: string]: unknown;
+}
+
+export interface IEntryVisibilitySettings {
+    version: number;
+    active: string;
+    profiles: Array<{
+        id: string;
+        name: string;
+        base: "simple" | "full";
+        entries: Record<string, boolean>;
+    }>;
 }
 
 export interface IFileTreeSettings {
@@ -234,6 +246,10 @@ export class SiyuanAPI {
 
     async setAppearance(appearance: IAppearanceSettings) {
         return this.post<IAppearanceSettings>("/api/setting/setAppearance", appearance);
+    }
+
+    async setEntryVisibility(entryVisibility: IEntryVisibilitySettings) {
+        return this.post<IEntryVisibilitySettings>("/api/setting/setEntryVisibility", entryVisibility);
     }
 
     async setFileTree(fileTree: IFileTreeSettings) {

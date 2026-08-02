@@ -25,6 +25,7 @@ interface ITestFixtures {
     createTestNotebook: TestNotebookFactory;
     trackTestDocument: TestDocumentTracker;
     globalSettings: IGlobalSettings;
+    fullEntryVisibility: void;
     testDocumentCleanup: void;
     testNotebookCleanup: void;
 }
@@ -72,6 +73,21 @@ export const test = base.extend<ITestFixtures & IInternalFixtures>({
                 mode: window.siyuan.config.appearance.mode,
                 modeOS: window.siyuan.config.appearance.modeOS,
             }))).toEqual({mode: appearance.mode, modeOS: appearance.modeOS});
+        }
+    },
+    fullEntryVisibility: async ({page, siyuanAPI}, use) => {
+        const original = (await siyuanAPI.getConf()).conf.appearance.entryVisibility;
+        if (original.active !== "full") {
+            await siyuanAPI.setEntryVisibility({...original, active: "full"});
+        }
+        try {
+            await use();
+        } finally {
+            await siyuanAPI.setEntryVisibility(original);
+            if (!page.isClosed() && await page.locator("#barSearch").count() > 0) {
+                await expect.poll(() => page.evaluate(() =>
+                    window.siyuan.config.appearance.entryVisibility.active)).toBe(original.active);
+            }
         }
     },
     testDocumentCleanup: [async ({page, siyuanAPI, createdTestDocuments}, use, testInfo) => {
