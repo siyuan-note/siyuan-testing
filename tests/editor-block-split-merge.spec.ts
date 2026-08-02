@@ -1,6 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
-import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
+import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
@@ -10,6 +10,8 @@ interface ISyNode {
     Data?: string;
     Type?: string;
     Properties?: Record<string, string>;
+    TextMarkTextContent?: string;
+    TextMarkType?: string;
     Children?: ISyNode[];
 }
 
@@ -24,13 +26,26 @@ interface IListState {
     paragraphs: string[];
 }
 
+interface IListTreeItem {
+    children: IListTreeItem[];
+    text: string;
+}
+
 const flattenNodes = (node: ISyNode): ISyNode[] => [
     node,
     ...(node.Children || []).flatMap(flattenNodes),
 ];
 
 const getNodeText = (node: ISyNode): string =>
-    (node.Data || "") + (node.Children || []).map(getNodeText).join("");
+    (node.Data || node.TextMarkTextContent || "") + (node.Children || []).map(getNodeText).join("");
+
+const getPersistedTextMarks = async (api: SiyuanAPI, docID: string) => {
+    const document = await api.readDocument<ISyNode>(docID);
+    return flattenNodes(document).filter(node => node.Type === "NodeTextMark").map(node => ({
+        text: node.TextMarkTextContent || "",
+        type: node.TextMarkType || "",
+    }));
+};
 
 const getDOMState = async (editor: Locator) => {
     const paragraphs = await editor.locator(':scope > [data-type="NodeParagraph"]').evaluateAll(elements =>
@@ -96,6 +111,70 @@ const expectListState = async (api: SiyuanAPI, docID: string, editor: Locator, s
     await assertValidSyListTree(api, docID, editor);
     await expect.poll(() => getPersistedListState(api, docID)).toEqual(state);
 };
+
+const getDOMListTree = async (editor: Locator): Promise<IListTreeItem[]> => editor.evaluate(element => {
+    const visit = (item: Element): IListTreeItem => {
+        const paragraph = Array.from(item.children).find(child => child.getAttribute("data-type") === "NodeParagraph");
+        const list = Array.from(item.children).find(child => child.getAttribute("data-type") === "NodeList");
+        return {
+            children: list ? Array.from(list.children)
+                .filter(child => child.getAttribute("data-type") === "NodeListItem")
+                .map(visit) : [],
+            text: paragraph?.querySelector('[contenteditable="true"]')?.textContent || "",
+        };
+    };
+    const list = Array.from(element.children).find(child => child.getAttribute("data-type") === "NodeList");
+    return list ? Array.from(list.children)
+        .filter(child => child.getAttribute("data-type") === "NodeListItem")
+        .map(visit) : [];
+});
+
+const getPersistedListTree = async (api: SiyuanAPI, docID: string): Promise<IListTreeItem[]> => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const visit = (item: ISyNode): IListTreeItem => {
+        const paragraph = item.Children?.find(child => child.Type === "NodeParagraph");
+        const list = item.Children?.find(child => child.Type === "NodeList");
+        return {
+            children: list?.Children?.filter(child => child.Type === "NodeListItem").map(visit) || [],
+            text: paragraph ? getNodeText(paragraph) : "",
+        };
+    };
+    const list = document.Children?.find(child => child.Type === "NodeList");
+    return list?.Children?.filter(child => child.Type === "NodeListItem").map(visit) || [];
+};
+
+const expectListTree = async (api: SiyuanAPI, docID: string, editor: Locator, tree: IListTreeItem[]) => {
+    await expect.poll(() => getDOMListTree(editor)).toEqual(tree);
+    await assertValidListDOM(editor);
+    await assertValidSyListTree(api, docID, editor);
+    await expect.poll(() => getPersistedListTree(api, docID)).toEqual(tree);
+};
+
+const getSiblingNestedListMarkdown = (subtype: "t" | "u") => {
+    const marker = () => subtype === "t" ? "* [ ]" : "*";
+    return ["1", "2", "3"].flatMap(outer => [
+        `${marker()} ${outer}`,
+        ...["1", "2", "3"].map(inner => `    ${marker()} ${inner}`),
+    ]).join("\n");
+};
+
+const getSelectionState = async (editor: Locator) => editor.evaluate(element => {
+    const selection = getSelection();
+    if (!selection || selection.rangeCount === 0) {
+        return {collapsed: true, endID: "", startID: "", text: ""};
+    }
+    const range = selection.getRangeAt(0);
+    const getBlockID = (node: Node) => {
+        const target = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+        return target?.closest("[data-node-id]")?.getAttribute("data-node-id") || "";
+    };
+    return {
+        collapsed: range.collapsed,
+        endID: getBlockID(range.endContainer),
+        startID: getBlockID(range.startContainer),
+        text: selection.toString().replace(/[\s\u200b]/g, ""),
+    };
+});
 
 const setCaretOffset = async (editable: Locator, offset: number) => {
     const result = await editable.evaluate((element, requestedOffset) => {
@@ -163,6 +242,34 @@ const setCrossBlockRange = async (startEditable: Locator, startOffset: number,
             selection.addRange(range);
             return selection.toString();
         }, {endElement, endOffset, startOffset});
+    } finally {
+        await endElement.dispose();
+    }
+};
+
+const setCrossBlockRangeFromListItem = async (startEditable: Locator, endEditable: Locator, endOffset: number) => {
+    const endElement = await endEditable.elementHandle();
+    if (!endElement) {
+        throw new Error("cross-block range end is unavailable");
+    }
+    try {
+        return await startEditable.evaluate((startElement, options) => {
+            const startListItem = startElement.closest('[data-type="NodeListItem"]');
+            const endText = options.endElement.firstChild;
+            if (!startListItem || !endText) {
+                throw new Error("list-item range boundary is unavailable");
+            }
+            const range = document.createRange();
+            range.setStartBefore(startListItem);
+            range.setEnd(endText, options.endOffset);
+            const selection = getSelection();
+            if (!selection) {
+                throw new Error("selection is unavailable");
+            }
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return selection.toString();
+        }, {endElement, endOffset});
     } finally {
         await endElement.dispose();
     }
@@ -301,5 +408,259 @@ test.describe("paragraph splitting and merging", () => {
 
         await page.reload();
         await expectListState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
+    });
+
+    test("merges identical inline marks after deleting a cross-block range", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross Block Inline Mark Merge E2E",
+            "**ab**\n\n**cd**",
+        );
+        const initialState = (await getDOMState(editor)).paragraphs;
+        expect(initialState.map(item => item.text)).toEqual(["ab", "cd"]);
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["ab", "cd"]);
+
+        const editables = editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]');
+        const endID = await editables.last().locator("..").getAttribute("data-node-id");
+        const selectedText = await setCrossBlockRange(editables.first(), 1, editables.last(), 1);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("bc");
+
+        await requestTransaction(page, () => page.keyboard.press("Backspace"));
+        await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(1);
+        const mergedState = (await getDOMState(editor)).paragraphs;
+        expect(mergedState.map(item => item.text)).toEqual(["ad"]);
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["ad"]);
+        await expect.poll(() => getPersistedTextMarks(siyuanAPI, docID)).toEqual([{text: "ad", type: "strong"}]);
+        await expectDocumentState(siyuanAPI, docID, editor, mergedState);
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+            UNDO_SHORTCUT, "undo");
+        await expectDocumentState(siyuanAPI, docID, editor, initialState);
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["ab", "cd"]);
+        await expect.poll(() => getSelectionState(editor)).toEqual({
+            collapsed: true,
+            endID,
+            startID: endID,
+            text: "",
+        });
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+            REDO_SHORTCUT, "redo");
+        await expectDocumentState(siyuanAPI, docID, editor, mergedState);
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["ad"]);
+    });
+
+    test("toggles a bold mark across blocks without losing the range", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross Block Bold Toggle E2E",
+            "ab\n\ncd",
+        );
+        const editables = editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]');
+        const startID = await editables.first().locator("..").getAttribute("data-node-id");
+        const endID = await editables.last().locator("..").getAttribute("data-node-id");
+        const selectedText = await setCrossBlockRange(editables.first(), 1, editables.last(), 1);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("bc");
+
+        await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+b`));
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["b", "c"]);
+        await expect.poll(() => getPersistedTextMarks(siyuanAPI, docID)).toEqual([
+            {text: "b", type: "strong"},
+            {text: "c", type: "strong"},
+        ]);
+        await expect.poll(() => getSelectionState(editor)).toEqual({
+            collapsed: false,
+            endID,
+            startID,
+            text: "bc",
+        });
+
+        await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+b`));
+        await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveCount(0);
+        await expect.poll(() => getPersistedTextMarks(siyuanAPI, docID)).toEqual([]);
+        await expect.poll(() => getSelectionState(editor)).toEqual({
+            collapsed: false,
+            endID,
+            startID,
+            text: "bc",
+        });
+    });
+
+    test("keeps a code-block boundary selected while formatting later blocks", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Code Block Cross Block Bold E2E",
+            "```text\ncode\n```\n\ncdef",
+        );
+        const codeBlock = editor.locator(':scope > [data-type="NodeCodeBlock"]');
+        const codeEditable = codeBlock.locator('[contenteditable="true"]').first();
+        const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]');
+        const paragraphEditable = paragraph.locator('[contenteditable="true"]');
+        const startID = await codeBlock.getAttribute("data-node-id");
+        const endID = await paragraph.getAttribute("data-node-id");
+        const selectedText = await setCrossBlockRange(codeEditable, 0, paragraphEditable, 2);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("codecd");
+
+        await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+b`));
+        await expect(codeBlock.locator('[data-type~="strong"]')).toHaveCount(0);
+        await expect(paragraph.locator('[data-type~="strong"]')).toHaveText("cd");
+        await expect.poll(() => getPersistedTextMarks(siyuanAPI, docID)).toEqual([
+            {text: "cd", type: "strong"},
+        ]);
+        await expect.poll(() => getSelectionState(editor)).toEqual({
+            collapsed: false,
+            endID,
+            startID,
+            text: "codecd",
+        });
+    });
+
+    test("formats table content within a surrounding cross-block range", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Cross Block Bold E2E",
+            "ab\n\n| h |\n| --- |\n| t |\n\ncd",
+        );
+        const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
+        const startParagraph = paragraphs.first();
+        const endParagraph = paragraphs.last();
+        const startEditable = startParagraph.locator('[contenteditable="true"]');
+        const endEditable = endParagraph.locator('[contenteditable="true"]');
+        const startID = await startParagraph.getAttribute("data-node-id");
+        const endID = await endParagraph.getAttribute("data-node-id");
+        const selectedText = await setCrossBlockRange(startEditable, 1, endEditable, 1);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toContain("bhtc");
+
+        await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+b`));
+        await expect(startParagraph.locator('[data-type~="strong"]')).toHaveText("b");
+        await expect(endParagraph.locator('[data-type~="strong"]')).toHaveText("c");
+        await expect(editor.locator(':scope > [data-type="NodeTable"] [data-type~="strong"]')).toHaveText(["h", "t"]);
+        await expect.poll(() => getPersistedTextMarks(siyuanAPI, docID)).toEqual([
+            {text: "b", type: "strong"},
+            {text: "h", type: "strong"},
+            {text: "t", type: "strong"},
+            {text: "c", type: "strong"},
+        ]);
+        await expect.poll(() => getSelectionState(editor)).toEqual({
+            collapsed: false,
+            endID,
+            startID,
+            text: selectedText.replace(/[\s\u200b]/g, ""),
+        });
+    });
+
+    [
+        {children: ["1", "2", "", "2", "3"], endIndex: 9, key: "Delete", selectedText: "331", startIndex: 7,
+            title: "deletes"},
+        {children: ["1", "2", "1", "2", "3"], endIndex: 9, key: "1", selectedText: "331", startIndex: 7,
+            title: "replaces"},
+        {children: ["1", "3"], endIndex: 10, key: "Delete", selectedText: "23312", startIndex: 6,
+            title: "deletes a range with trailing start items from"},
+        {children: ["1", "3"], endIndex: 10, key: "Backspace", selectedText: "23312", startIndex: 6,
+            title: "backspaces a range with trailing start items from"},
+        {children: ["1", "3"], endIndex: 10, key: "ControlOrMeta+X", selectedText: "23312", startIndex: 6,
+            title: "cuts a range with trailing start items from"},
+        {children: ["1", "3"], endIndex: 10, key: "Delete", listItemBoundary: true, selectedText: "23312",
+            startIndex: 6, title: "deletes a list-item-boundary range with trailing start items from"},
+        {children: ["1", "1", "3"], endIndex: 10, key: "1", selectedText: "23312", startIndex: 6,
+            title: "replaces a range with trailing start items in"},
+        {children: ["1", "1", "3"], endIndex: 10, key: "1", mergeAcrossOuterItems: true,
+            selectedText: "232123312", startIndex: 2, title: "replaces a range across nonadjacent outer items in"},
+        {children: ["1", "3"], endIndex: 10, key: "1", mergeIntoFirst: true, selectedText: "2123312",
+            startIndex: 4, title: "replaces a fully selected outer list item in"},
+        {children: ["1", "3"], endIndex: 10, key: "Delete", listSubtype: "t" as const,
+            selectedText: "23312", startIndex: 6, title: "deletes a range with trailing start items from task"},
+    ].forEach(({children, endIndex, key, listItemBoundary, mergeIntoFirst, selectedText: expectedSelectedText,
+                  startIndex, title, listSubtype = "u", mergeAcrossOuterItems}) => {
+        test(`${title} a cross-block range between sibling nested lists and restores it with undo and redo`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor} = await createTestDocument(
+                `Sibling Nested List Cross Block ${title} E2E`,
+                getSiblingNestedListMarkdown(listSubtype as "t" | "u"),
+            );
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [child("1"), child("2"), child("3")], text: "1"},
+                {children: [child("1"), child("2"), child("3")], text: "2"},
+                {children: [child("1"), child("2"), child("3")], text: "3"},
+            ];
+            const changedTree: IListTreeItem[] = mergeAcrossOuterItems ? [{
+                children: children.map(child),
+                text: "1",
+            }] : mergeIntoFirst ? [{
+                children: initialTree[0].children.concat(children.map(child)),
+                text: "1",
+            }] : [initialTree[0], {children: children.map(child), text: "2"}];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(startIndex);
+            const endEditable = editables.nth(endIndex);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = listItemBoundary ?
+                await setCrossBlockRangeFromListItem(startEditable, endEditable, 1) :
+                await setCrossBlockRange(startEditable, 0, endEditable, 1);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe(expectedSelectedText);
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            if (mergeIntoFirst) {
+                await expect.poll(() => editor.evaluate(element => {
+                    const range = getSelection()?.getRangeAt(0);
+                    const container = range?.startContainer;
+                    const target = container?.nodeType === Node.ELEMENT_NODE ? container as Element : container?.parentElement;
+                    return {
+                        collapsed: range?.collapsed || false,
+                        id: target?.closest("[data-node-id]")?.getAttribute("data-node-id"),
+                        offset: range?.startOffset,
+                        text: container?.textContent,
+                        withinEditor: !!container && element.contains(container),
+                    };
+                })).toEqual({
+                    collapsed: true,
+                    id: startID,
+                    offset: 1,
+                    text: "1",
+                    withinEditor: true,
+                });
+            }
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: expectedSelectedText,
+            });
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                REDO_SHORTCUT, "redo");
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await page.reload();
+            await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
+        });
     });
 });

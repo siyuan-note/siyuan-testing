@@ -210,6 +210,46 @@ const selectParagraphRange = async (editor: Locator, startIndex: number, endInde
     }, {start: startIndex, end: endIndex});
 };
 
+const selectParagraphTextRange = async (editor: Locator, startIndex: number, startOffset: number,
+                                        endIndex: number, endOffset: number) => {
+    return editor.evaluate((element, options) => {
+        const editables = element.querySelectorAll<HTMLElement>(
+            ":scope > [data-type=\"NodeParagraph\"] > [contenteditable=\"true\"]",
+        );
+        const getTextPoint = (editable: HTMLElement, requestedOffset: number) => {
+            const walker = document.createTreeWalker(editable, NodeFilter.SHOW_TEXT);
+            let remaining = requestedOffset;
+            let textNode = walker.nextNode();
+            while (textNode && remaining > (textNode.textContent || "").length) {
+                remaining -= (textNode.textContent || "").length;
+                textNode = walker.nextNode();
+            }
+            if (!textNode) {
+                throw new Error(`paragraph text offset ${requestedOffset} is unavailable`);
+            }
+            return {node: textNode, offset: remaining};
+        };
+        const startEditable = editables[options.startIndex];
+        const endEditable = editables[options.endIndex];
+        if (!startEditable || !endEditable) {
+            throw new Error(`paragraph range ${options.startIndex}-${options.endIndex} is unavailable`);
+        }
+        const start = getTextPoint(startEditable, options.startOffset);
+        const end = getTextPoint(endEditable, options.endOffset);
+        startEditable.focus();
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset);
+        const selection = getSelection();
+        if (!selection) {
+            throw new Error("selection is unavailable");
+        }
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return selection.toString();
+    }, {endIndex, endOffset, startIndex, startOffset});
+};
+
 const selectTopBlockRange = async (editor: Locator, startIndex: number, endIndex: number) => {
     await editor.evaluate((element, indexes) => {
         const blocks = Array.from(element.querySelectorAll<HTMLElement>(":scope > [data-node-id]"));
@@ -659,6 +699,61 @@ test.describe("block copy, cut, and paste", () => {
 
         await page.reload();
         await expectDocumentState(siyuanAPI, docID, await getDocumentEditor(page, docID), pastedState);
+    });
+
+    test("pastes a partial paragraph range repeatedly at its original endpoint", async ({
+        baseURL,
+        context,
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument(
+            "Repeated Partial Paragraph Paste E2E",
+            "111\n\n222",
+        );
+        const initialState = (await getDOMState(editor)).paragraphs;
+        expect(initialState.map(item => item.text)).toEqual(["111", "222"]);
+
+        await editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]').first()
+            .evaluate(element => {
+                element.innerHTML = '1<span data-type="virtual-block-ref" style="">11</span>';
+            });
+
+        expect((await selectParagraphTextRange(editor, 0, 2, 1, 2)).replace(/[\s\u200b]/g, "")).toBe("122");
+        await page.keyboard.press("ControlOrMeta+C");
+        await expect.poll(async () => (await page.evaluate(() => navigator.clipboard.readText()))
+            .replace(/\u200b/g, "")).toBe("1\n22");
+        await page.keyboard.press("ControlOrMeta+V");
+
+        await expectDocumentState(siyuanAPI, docID, editor, initialState);
+        await expect.poll(() => getCollapsedSelectionPosition(editor)).toEqual({
+            blockID: initialState[1].id,
+            collapsed: true,
+            offset: 2,
+        });
+
+        await pasteBlocks(page);
+        await expect.poll(async () => (await getDOMState(editor)).paragraphs.map(item => item.text))
+            .toEqual(["111", "221", "222"]);
+        const pastedState = (await getDOMState(editor)).paragraphs;
+        expect(pastedState[0].id).toBe(initialState[0].id);
+        expect(pastedState[1].id).toBe(initialState[1].id);
+        expect(pastedState[2].id).not.toBe(initialState[0].id);
+        expect(pastedState[2].id).not.toBe(initialState[1].id);
+        await expectDocumentState(siyuanAPI, docID, editor, pastedState);
+
+        await page.keyboard.press(UNDO_SHORTCUT);
+        await expectDocumentState(siyuanAPI, docID, editor, initialState);
+        await expect.poll(() => getCollapsedSelectionPosition(editor)).toEqual({
+            blockID: initialState[1].id,
+            collapsed: true,
+            offset: 2,
+        });
+
+        await page.keyboard.press(REDO_SHORTCUT);
+        await expectDocumentState(siyuanAPI, docID, editor, pastedState);
     });
 
     test("persists an external plain-text replacement across multiple blocks", async ({
