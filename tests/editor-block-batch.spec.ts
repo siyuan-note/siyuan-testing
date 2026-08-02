@@ -120,6 +120,72 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
 test.describe("multi-block keyboard operations", () => {
     test.describe.configure({mode: "parallel"});
 
+    test("selects container list items from a cross-block text range like shift-click", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Container List Item Range Selection E2E",
+            [
+                "* First item",
+                "    * First child",
+                "* Second item",
+                "    * Second child",
+            ].join("\n"),
+        );
+        const listItems = editor.locator(
+            ':scope > [data-type="NodeList"] > [data-type="NodeListItem"]',
+        );
+        await expect(listItems).toHaveCount(2);
+        const expectedIDs = await listItems.evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id") || ""));
+        const startEditable = listItems.nth(0).locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        );
+        const endEditable = listItems.nth(1).locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        );
+        const endHandle = await endEditable.elementHandle();
+        if (!endHandle) {
+            throw new Error("range end is unavailable");
+        }
+        try {
+            await startEditable.evaluate((startElement, rangeEnd) => {
+                const startText = startElement.firstChild;
+                const endText = rangeEnd.firstChild;
+                if (!startText || !endText) {
+                    throw new Error("range text boundary is unavailable");
+                }
+                startElement.focus();
+                const range = document.createRange();
+                range.setStart(startText, 1);
+                range.setEnd(endText, Math.max(1, (endText.textContent || "").length - 1));
+                const selection = getSelection();
+                if (!selection) {
+                    throw new Error("selection is unavailable");
+                }
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }, endHandle);
+        } finally {
+            await endHandle.dispose();
+        }
+
+        await page.keyboard.press("Escape");
+        const selectedBlocks = editor.locator(".protyle-wysiwyg--select");
+        await expect.poll(() => selectedBlocks.evaluateAll(elements => elements.map(element => ({
+            id: element.getAttribute("data-node-id") || "",
+            type: element.getAttribute("data-type") || "",
+        })))).toEqual(expectedIDs.map(id => ({id, type: "NodeListItem"})));
+
+        await selectedBlocks.evaluateAll(elements => elements.forEach(element =>
+            element.classList.remove("protyle-wysiwyg--select")));
+        await startEditable.click();
+        await endEditable.click({modifiers: ["Shift"]});
+        await expect.poll(() => selectedBlocks.evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id") || ""))).toEqual(expectedIDs);
+    });
+
     test("deletes a contiguous block selection and restores it with undo and redo", async ({
         createTestDocument,
         page,
