@@ -761,34 +761,36 @@ test.describe("table editing", () => {
             await expect(control).toHaveCount(1);
             await expect(control).toHaveAttribute("type", "button");
             await expect(control).toHaveAttribute("aria-label", label);
-            await expect(control).toHaveClass(/b3-tooltips/);
+            if (type === "row" || type === "column") {
+                await expect(control).not.toHaveClass(/b3-tooltips/);
+            } else {
+                await expect(control).toHaveClass(/b3-tooltips/);
+            }
         }
 
         let menu = await openTableControlMenu(page, firstCell, "cell");
         let colorItem = getMenuItemByLabel(page, menu, labels.color);
         let colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
-        let defaultColorItem = getMenuItemByLabel(page, colorSubmenu, labels.default);
-        const firstColorLabel = `${labels.color} 1`;
-        let firstColorItem = getMenuItemByLabel(page, colorSubmenu, firstColorLabel);
-        await expect(defaultColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(1);
-        await expect(firstColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        let colorButtons = colorSubmenu.locator(".color__square");
+        let defaultColorButton = colorSubmenu.locator('.color__square[data-color=""]');
+        let firstColorButton = colorSubmenu.locator('.color__square[data-color="var(--b3-font-background1)"]');
+        await expect(colorButtons).toHaveCount(14);
+        await expect(defaultColorButton).toHaveAttribute("type", "button");
+        await expect(defaultColorButton).toHaveAttribute("aria-label", labels.default);
+        await expect(defaultColorButton).toHaveClass(/color__square--current/);
+        await expect(firstColorButton).not.toHaveClass(/color__square--current/);
         await colorItem.hover();
-        await expect(firstColorItem).toBeVisible();
-        const firstColorItemBox = await firstColorItem.boundingBox();
-        const firstColorPreviewBox = await firstColorItem.locator(".protyle-table-control__color").boundingBox();
-        expect(firstColorItemBox).not.toBeNull();
-        expect(firstColorPreviewBox).not.toBeNull();
-        expect(firstColorPreviewBox!.y + firstColorPreviewBox!.height / 2)
-            .toBeCloseTo(firstColorItemBox!.y + firstColorItemBox!.height / 2, 0);
-        await requestTransaction(page, () => firstColorItem.click());
+        await expect(firstColorButton).toBeVisible();
+        await requestTransaction(page, () => firstColorButton.click());
 
         menu = await openTableControlMenu(page, firstCell, "cell");
         colorItem = getMenuItemByLabel(page, menu, labels.color);
         colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
-        defaultColorItem = getMenuItemByLabel(page, colorSubmenu, labels.default);
-        firstColorItem = getMenuItemByLabel(page, colorSubmenu, firstColorLabel);
-        await expect(defaultColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(0);
-        await expect(firstColorItem.locator(":scope > .b3-menu__checked")).toHaveCount(1);
+        colorButtons = colorSubmenu.locator(".color__square");
+        defaultColorButton = colorSubmenu.locator('.color__square[data-color=""]');
+        firstColorButton = colorSubmenu.locator('.color__square[data-color="var(--b3-font-background1)"]');
+        await expect(defaultColorButton).not.toHaveClass(/color__square--current/);
+        await expect(firstColorButton).toHaveClass(/color__square--current/);
         const alignRightItem = getMenuItemByLabel(page, menu, labels.alignRight);
         await requestTransaction(page, () => alignRightItem.click());
 
@@ -797,7 +799,7 @@ test.describe("table editing", () => {
             .locator(":scope > .b3-menu__checked")).toHaveCount(1);
         await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
             .locator(":scope > .b3-menu__checked")).toHaveCount(0);
-        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
+        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
         await page.keyboard.press("Escape");
         await expect(menu).toBeHidden();
 
@@ -806,7 +808,7 @@ test.describe("table editing", () => {
         menu = await openTableControlMenu(page, secondCell, "cell");
         colorItem = getMenuItemByLabel(page, menu, labels.color);
         colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
-        await expect(colorSubmenu.locator(".b3-menu__checked")).toHaveCount(0);
+        await expect(colorSubmenu.locator(".color__square--current")).toHaveCount(0);
         await expect(getMenuItemByLabel(page, menu, labels.alignRight)
             .locator(":scope > .b3-menu__checked")).toHaveCount(0);
         await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
