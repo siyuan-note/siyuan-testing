@@ -469,10 +469,18 @@ test.describe("paragraph splitting and merging", () => {
             await expectListTree(siyuanAPI, docID, editor, changedTree);
             await expect.poll(() => editor.evaluate(element => {
                 const range = getSelection()?.getRangeAt(0);
+                const target = range?.startContainer.nodeType === Node.ELEMENT_NODE ?
+                    range.startContainer as Element : range?.startContainer.parentElement;
+                const editable = target?.closest('[contenteditable="true"]');
+                const offsetRange = document.createRange();
+                if (range && editable) {
+                    offsetRange.selectNodeContents(editable);
+                    offsetRange.setEnd(range.startContainer, range.startOffset);
+                }
                 return {
                     collapsed: range?.collapsed || false,
-                    offset: range?.startOffset,
-                    text: range?.startContainer.textContent,
+                    offset: offsetRange.toString().replace(/\u200b/g, "").length,
+                    text: editable?.textContent,
                     withinEditor: !!range && element.contains(range.startContainer),
                 };
             })).toEqual({

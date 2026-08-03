@@ -11,6 +11,9 @@ export const getBaseURL = () => process.env.SIYUAN_BASE_URL || DEFAULT_BASE_URL;
 export const getExpectedWorkspace = () =>
     process.env.SIYUAN_EXPECT_WORKSPACE?.trim() || DEFAULT_TEST_WORKSPACE;
 
+const normalizeWorkspace = (value: string) =>
+    value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
+
 export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
     const target = new URL(baseURL);
     const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(target.hostname);
@@ -25,10 +28,14 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
     if (!isLoopback && !configuredWorkspace) {
         throw new Error("SIYUAN_EXPECT_WORKSPACE is required for a remote test target.");
     }
-    const expectedWorkspace = getExpectedWorkspace();
+    const expectedWorkspace = isLoopback ? DEFAULT_TEST_WORKSPACE : getExpectedWorkspace();
     if (isLoopback) {
-        if (!path.isAbsolute(expectedWorkspace)) {
-            throw new Error(`SIYUAN_EXPECT_WORKSPACE must be absolute, received ${expectedWorkspace}.`);
+        if (configuredWorkspace &&
+            normalizeWorkspace(configuredWorkspace) !== normalizeWorkspace(DEFAULT_TEST_WORKSPACE)) {
+            throw new Error(
+                `Local tests only use ${DEFAULT_TEST_WORKSPACE}; remove SIYUAN_EXPECT_WORKSPACE instead of ` +
+                "creating another workspace.",
+            );
         }
         await mkdir(expectedWorkspace, {recursive: true});
     }
@@ -49,8 +56,6 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
     }
 
     // Windows 内核返回反斜杠路径，统一为正斜杠后再比较，避免分隔符差异导致误判
-    const normalizeWorkspace = (value: string) =>
-        value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
     if (normalizeWorkspace(workspaceInfo.workspaceDir) !== normalizeWorkspace(expectedWorkspace)) {
         throw new Error(
             `SiYuan is using workspace ${workspaceInfo.workspaceDir}, expected ${expectedWorkspace}.`,

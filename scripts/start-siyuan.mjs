@@ -6,9 +6,14 @@ import {spawn} from "node:child_process";
 import {createRequire} from "node:module";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const workspace = path.resolve(
-    process.env.SIYUAN_EXPECT_WORKSPACE?.trim() || path.join(homedir(), "SiYuan-Testing"),
-);
+const normalizeWorkspace = value => path.resolve(value).replace(/[\\/]+$/, "").toLocaleLowerCase();
+const workspace = path.resolve(path.join(homedir(), "SiYuan-Testing"));
+const configuredWorkspace = process.env.SIYUAN_EXPECT_WORKSPACE?.trim();
+if (configuredWorkspace && normalizeWorkspace(configuredWorkspace) !== normalizeWorkspace(workspace)) {
+    throw new Error(
+        `Managed local tests only use ${workspace}; remove SIYUAN_EXPECT_WORKSPACE instead of creating another workspace.`,
+    );
+}
 const appDir = path.resolve(
     process.env.SIYUAN_APP_DIR?.trim() || path.join(projectRoot, "..", "siyuan", "app"),
 );
@@ -54,7 +59,6 @@ const readRunningWorkspace = async (timeoutMs = 2000) => {
     }
 };
 
-const normalizeWorkspace = value => path.resolve(value).replace(/[\\/]+$/, "").toLocaleLowerCase();
 const runningWorkspace = await readRunningWorkspace();
 if (runningWorkspace) {
     if (normalizeWorkspace(runningWorkspace) !== normalizeWorkspace(workspace)) {
@@ -76,19 +80,9 @@ const appRequire = createRequire(path.join(appDir, "package.json"));
 const webpackPath = appRequire.resolve("webpack/bin/webpack.js");
 let kernelPath;
 if (!runningWorkspace) {
-    const defaultKernelPaths = {
-        darwin: path.join(process.arch === "arm64" ? "kernel-darwin-arm64" : "kernel-darwin", "SiYuan-Kernel"),
-        linux: path.join("kernel-linux", "SiYuan-Kernel"),
-        win32: path.join(process.arch === "arm64" ? "kernel-arm64" : "kernel", "SiYuan-Kernel.exe"),
-    };
-    const relativeKernelPath = defaultKernelPaths[process.platform];
-    if (!relativeKernelPath && !process.env.SIYUAN_KERNEL_PATH?.trim()) {
-        throw new Error(`Unsupported local kernel platform: ${process.platform}`);
-    }
-    kernelPath = path.resolve(
-        process.env.SIYUAN_KERNEL_PATH?.trim() || path.join(appDir, relativeKernelPath),
-    );
+    kernelPath = path.join(appDir, "kernel", "SiYuan-Kernel");
     await access(kernelPath);
+    console.log(`[siyuan-testing] Kernel ${kernelPath}`);
 }
 const compiler = spawn(process.execPath, [
     webpackPath,

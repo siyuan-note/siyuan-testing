@@ -7,14 +7,14 @@ SiYuan end-to-end testing guide. This repository contains Playwright tests for a
 - Use Node.js with pnpm; preserve `pnpm-lock.yaml` as the dependency source of truth.
 - Install dependencies with `pnpm install`.
 - Run all tests in headless background mode with `pnpm test`; it compiles the desktop bundle, starts the local test kernel, and stops both processes after the run.
-- Run one test file with `pnpm test:focused -- tests/<feature>.spec.ts`; managed test commands create and use `~/SiYuan-Testing` by default.
+- Run one test file with `pnpm test:focused -- tests/<feature>.spec.ts`; managed local test commands only create and use `~/SiYuan-Testing`.
 - Use `pnpm start:siyuan` only when a separately managed long-running instance is useful for interactive debugging.
 - Use `pnpm test:headed` or `pnpm test:ui` only when interactive debugging is useful.
 
 ## 2. Test data
 
 - Run all tests in the notebook named `SiYuan Testing`. The global setup must create it when it does not exist and open it when it is closed.
-- Run the local test instance in `~/SiYuan-Testing`; use `SIYUAN_EXPECT_WORKSPACE` only when an isolated environment requires another absolute path.
+- Run every local test instance in `~/SiYuan-Testing`; do not create workspace variants for different ports, branches, or debugging sessions. `SIYUAN_EXPECT_WORKSPACE` is only for validating an intentionally remote target.
 - Create an independent document for every test. Do not use the user guide, an existing user document, or data created by another test.
 - Use `tests/helpers/testNotebook.ts` for notebook and document setup instead of duplicating API calls.
 - Give generated documents a feature-specific prefix and a unique suffix so failures can be identified after a run.
