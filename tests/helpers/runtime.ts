@@ -63,15 +63,10 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
 };
 
 export const openWorkspace = async (page: Page, path = "/") => {
-    const changelogResponse = page.waitForResponse(response =>
-        new URL(response.url()).pathname === "/api/system/getChangelog", {timeout: 30000});
     await page.goto(path);
     await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
-    const response = await changelogResponse;
-    const result = await response.json() as {data?: {show?: boolean}};
-    if (result.data?.show) {
-        const dialog = page.locator('[data-key="dialog-changelog"]');
-        await expect(dialog).toBeVisible();
+    const dialog = page.locator('[data-key="dialog-changelog"]');
+    if (await dialog.isVisible()) {
         await dialog.locator(".b3-dialog__scrim").click({force: true});
         await expect(dialog).toHaveCount(0);
     }

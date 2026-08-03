@@ -123,10 +123,10 @@ const getDOMListTree = async (editor: Locator): Promise<IListTreeItem[]> => edit
             text: paragraph?.querySelector('[contenteditable="true"]')?.textContent || "",
         };
     };
-    const list = Array.from(element.children).find(child => child.getAttribute("data-type") === "NodeList");
-    return list ? Array.from(list.children)
-        .filter(child => child.getAttribute("data-type") === "NodeListItem")
-        .map(visit) : [];
+    return Array.from(element.children).filter(child => child.getAttribute("data-type") === "NodeList")
+        .flatMap(list => Array.from(list.children)
+            .filter(child => child.getAttribute("data-type") === "NodeListItem")
+            .map(visit));
 });
 
 const getPersistedListTree = async (api: SiyuanAPI, docID: string): Promise<IListTreeItem[]> => {
@@ -139,8 +139,8 @@ const getPersistedListTree = async (api: SiyuanAPI, docID: string): Promise<ILis
             text: paragraph ? getNodeText(paragraph) : "",
         };
     };
-    const list = document.Children?.find(child => child.Type === "NodeList");
-    return list?.Children?.filter(child => child.Type === "NodeListItem").map(visit) || [];
+    return document.Children?.filter(child => child.Type === "NodeList").flatMap(list =>
+        list.Children?.filter(child => child.Type === "NodeListItem").map(visit) || []) || [];
 };
 
 const expectListTree = async (api: SiyuanAPI, docID: string, editor: Locator, tree: IListTreeItem[]) => {
@@ -276,20 +276,36 @@ const setCrossBlockRangeFromListItem = async (startEditable: Locator, endEditabl
 };
 
 const requestTransaction = async (page: Page, action: () => Promise<void>) => {
+    const pageErrors: string[] = [];
+    const pageErrorListener = (error: Error) => pageErrors.push(error.message);
+    page.on("pageerror", pageErrorListener);
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === "/api/transactions", {timeout: 15000});
-    await action();
-    await response;
+    try {
+        await action();
+        await response;
+    } finally {
+        page.off("pageerror", pageErrorListener);
+    }
+    expect(pageErrors).toEqual([]);
 };
 
 const requestHistoryAction = async (page: Page, editable: Locator, shortcut: string,
                                      action: "undo" | "redo") => {
+    const pageErrors: string[] = [];
+    const pageErrorListener = (error: Error) => pageErrors.push(error.message);
+    page.on("pageerror", pageErrorListener);
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 15000});
-    const text = await editable.textContent();
-    await setCaretOffset(editable, text?.length || 0);
-    await page.keyboard.press(shortcut);
-    await response;
+    try {
+        const text = await editable.textContent();
+        await setCaretOffset(editable, text?.length || 0);
+        await page.keyboard.press(shortcut);
+        await response;
+    } finally {
+        page.off("pageerror", pageErrorListener);
+    }
+    expect(pageErrors).toEqual([]);
 };
 
 test.describe("paragraph splitting and merging", () => {
@@ -408,6 +424,81 @@ test.describe("paragraph splitting and merging", () => {
 
         await page.reload();
         await expectListState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
+    });
+
+    [
+        {changedText: "13", focusOffset: 1, key: "Delete", title: "deletes"},
+        {changedText: "103", focusOffset: 2, key: "0", title: "replaces"},
+    ].forEach(({changedText, focusOffset, key, title}) => {
+        test(`${title} a cross-block range between list items while preserving the trailing child list`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID} = await createTestDocument(
+                `Sibling List Item Child Preservation ${title} E2E`,
+                "* 111\n    * 2222",
+            );
+            await siyuanAPI.post<unknown>("/api/block/appendBlock", {
+                data: "* 333\n    * 444",
+                dataType: "markdown",
+                parentID: docID,
+            });
+            await page.reload();
+            const editor = await getDocumentEditor(page, docID);
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [child("2222")], text: "111"},
+                {children: [child("444")], text: "333"},
+            ];
+            const changedTree: IListTreeItem[] = [{
+                children: [child("444")],
+                text: changedText,
+            }];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(0);
+            const endEditable = editables.nth(2);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = await setCrossBlockRange(startEditable, 1, endEditable, 2);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("11222233");
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            await expect.poll(() => editor.evaluate(element => {
+                const range = getSelection()?.getRangeAt(0);
+                return {
+                    collapsed: range?.collapsed || false,
+                    offset: range?.startOffset,
+                    text: range?.startContainer.textContent,
+                    withinEditor: !!range && element.contains(range.startContainer),
+                };
+            })).toEqual({
+                collapsed: true,
+                offset: focusOffset,
+                text: changedText,
+                withinEditor: true,
+            });
+
+            await requestHistoryAction(page, startEditable, UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: "11222233",
+            });
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                REDO_SHORTCUT, "redo");
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await page.reload();
+            await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
+        });
     });
 
     test("merges identical inline marks after deleting a cross-block range", async ({
@@ -652,6 +743,166 @@ test.describe("paragraph splitting and merging", () => {
                 endID,
                 startID,
                 text: expectedSelectedText,
+            });
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                REDO_SHORTCUT, "redo");
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await page.reload();
+            await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
+        });
+    });
+
+    [
+        {children: ["3"], key: "Backspace", title: "backspacing"},
+        {children: ["3"], key: "Delete", title: "deleting"},
+        {children: ["0", "3"], key: "0", title: "replacing"},
+    ].forEach(({children, key, title}) => {
+        test(`merges into a new nested list when ${title} across nested list branches`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor} = await createTestDocument(
+                `Nested List Creation Cross Block ${title} E2E`,
+                [
+                    "* 1",
+                    "* 2",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                    "* 2",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                    "* 3",
+                    "    * 1",
+                    "    * 2",
+                    "    * 3",
+                ].join("\n"),
+            );
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [], text: "1"},
+                {children: [child("1"), child("2"), child("3")], text: "2"},
+                {children: [child("1"), child("2"), child("3")], text: "2"},
+                {children: [child("1"), child("2"), child("3")], text: "3"},
+            ];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(1);
+            const endEditable = editables.nth(11);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = await setCrossBlockRange(startEditable, 0, endEditable, 1);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("21232123312");
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            const changedTree: IListTreeItem[] = [{children: children.map(child), text: "1"}];
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            if (key === "0") {
+                await expect.poll(() => editor.evaluate(element => {
+                    const range = getSelection()?.getRangeAt(0);
+                    const container = range?.startContainer;
+                    const target = container?.nodeType === Node.ELEMENT_NODE ?
+                        container as Element : container?.parentElement;
+                    return {
+                        collapsed: range?.collapsed || false,
+                        id: target?.closest("[data-node-id]")?.getAttribute("data-node-id"),
+                        offset: range?.startOffset,
+                        text: container?.textContent,
+                        withinEditor: !!container && element.contains(container),
+                    };
+                })).toEqual({
+                    collapsed: true,
+                    id: startID,
+                    offset: 1,
+                    text: "0",
+                    withinEditor: true,
+                });
+            }
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: "21232123312",
+            });
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                REDO_SHORTCUT, "redo");
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await page.reload();
+            await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
+        });
+    });
+
+    [
+        {changedText: "1", key: "Backspace", title: "backspacing"},
+        {changedText: "1", key: "Delete", title: "deleting"},
+        {changedText: "10", key: "0", title: "replacing"},
+    ].forEach(({changedText, key, title}) => {
+        test(`removes a nested-list suffix when ${title} and restores the range`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor} = await createTestDocument(
+                `Nested List Suffix Cross Block ${title} E2E`,
+                [
+                    "222",
+                    "",
+                    "* 13",
+                    "    * 444",
+                    "* 13",
+                    "    * 444",
+                    "* 111",
+                    "    * 222",
+                    "* 333",
+                    "    * 444",
+                ].join("\n"),
+            );
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [child("444")], text: "13"},
+                {children: [child("444")], text: "13"},
+                {children: [child("222")], text: "111"},
+                {children: [child("444")], text: "333"},
+            ];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(1);
+            const endEditable = editables.nth(8);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = await setCrossBlockRange(startEditable, 1, endEditable, 3);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("344413444111222333444");
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            const changedTree: IListTreeItem[] = [{children: [], text: changedText}];
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            await expect(editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]'))
+                .toHaveText("222");
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: "344413444111222333444",
             });
 
             await requestHistoryAction(page,
