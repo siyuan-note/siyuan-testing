@@ -922,4 +922,77 @@ test.describe("paragraph splitting and merging", () => {
             await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
         });
     });
+
+    [
+        {
+            changedTree: [{
+                children: [
+                    {children: [], text: "222"},
+                    {children: [], text: "333"},
+                    {children: [], text: "444"},
+                ],
+                text: "111",
+            }, {children: [], text: "555"}],
+            initialMarkdown: "* 111\n* 222\n* 333\n* 444\n* 555",
+            initialTree: ["111", "222", "333", "444", "555"].map(text => ({children: [], text})),
+            key: "Tab",
+            title: "indents",
+        },
+        {
+            changedTree: ["111", "222", "333", "444", "555"].map(text => ({children: [], text})),
+            initialMarkdown: "* 111\n    * 222\n    * 333\n    * 444\n* 555",
+            initialTree: [{
+                children: [
+                    {children: [], text: "222"},
+                    {children: [], text: "333"},
+                    {children: [], text: "444"},
+                ],
+                text: "111",
+            }, {children: [], text: "555"}],
+            key: "Shift+Tab",
+            title: "outdents",
+        },
+    ].forEach(({changedTree, initialMarkdown, initialTree, key, title}) => {
+        test(`${title} every list item in a cross-block text range`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor} = await createTestDocument(
+                `Cross Block List Item ${title} E2E`,
+                initialMarkdown,
+            );
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const editables = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
+            const startEditable = editables.nth(1);
+            const endEditable = editables.nth(3);
+            const startID = await startEditable.locator("..").getAttribute("data-node-id");
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = await setCrossBlockRange(startEditable, 1, endEditable, 2);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("2233344");
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID,
+                text: "2233344",
+            });
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').first(),
+                REDO_SHORTCUT, "redo");
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await page.reload();
+            await expectListTree(siyuanAPI, docID, await getDocumentEditor(page, docID), changedTree);
+        });
+    });
 });
