@@ -59,7 +59,11 @@ export const assertValidListDOM = async (editor: Locator) => {
             if (item.querySelectorAll(":scope > .protyle-attr").length !== 1) {
                 result.push(`NodeListItem ${item.dataset.nodeId} does not have exactly one attribute element`);
             }
-            Array.from(item.children).filter(child => child.hasAttribute("data-node-id")).forEach(child => {
+            const blocks = Array.from(item.children).filter(child => child.hasAttribute("data-node-id"));
+            if (blocks[0]?.getAttribute("data-type") === "NodeList") {
+                result.push(`NodeListItem ${item.dataset.nodeId} starts with NodeList`);
+            }
+            blocks.forEach(child => {
                 if (child.getAttribute("data-type") === "NodeListItem") {
                     result.push(`NodeListItem ${item.dataset.nodeId} directly contains NodeListItem`);
                 }
@@ -114,6 +118,9 @@ const validateSyListTree = (root: ISyNode) => {
             }
             if (children.some(child => child.Type === "NodeListItem")) {
                 errors.push(`NodeListItem ${node.ID} directly contains NodeListItem`);
+            }
+            if (children.find(child => child.ID)?.Type === "NodeList") {
+                errors.push(`NodeListItem ${node.ID} starts with NodeList`);
             }
             const type = node.ListData?.Typ || parent?.ListData?.Typ || 0;
             if (![0, 1, 3].includes(type)) {

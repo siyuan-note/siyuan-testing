@@ -3,6 +3,7 @@ import {expect, test} from "./fixtures";
 import {openBlockMenu} from "./helpers/blockMenu";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
+import {getTextRangeState, selectTextRange} from "./helpers/selection";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -183,6 +184,59 @@ test.describe("block transformations and indentation", () => {
         await expect.poll(() => getTopDOMState(reloadedEditor)).toEqual(initialState);
     });
 
+    test("converts every block covered by a cross-block text range to headings", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross-block Text Range Heading Transform E2E",
+            "Before\n\nHeading first\n\nHeading middle\n\nHeading last\n\nAfter",
+        );
+        const initialState = await getTopDOMState(editor);
+        const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
+        await selectTextRange(
+            paragraphs.nth(1).locator('[contenteditable="true"]'),
+            paragraphs.nth(3).locator('[contenteditable="true"]'),
+            2,
+            7,
+        );
+
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Alt+2"));
+        const headingState = await getTopDOMState(editor);
+        expect(headingState.map(item => ({id: item.id, subtype: item.subtype, type: item.type}))).toEqual([
+            {id: initialState[0].id, subtype: "", type: "NodeParagraph"},
+            {id: initialState[1].id, subtype: "h2", type: "NodeHeading"},
+            {id: initialState[2].id, subtype: "h2", type: "NodeHeading"},
+            {id: initialState[3].id, subtype: "h2", type: "NodeHeading"},
+            {id: initialState[4].id, subtype: "", type: "NodeParagraph"},
+        ]);
+        await expect.poll(() => getTextRangeState(editor)).toEqual({
+            collapsed: false,
+            endBlockID: initialState[3].id,
+            endOffset: 7,
+            startBlockID: initialState[1].id,
+            startOffset: 2,
+        });
+        await expect.poll(async () => (await readValidDocument(siyuanAPI, docID)).Children?.map(node => ({
+            id: node.ID || "",
+            level: node.HeadingLevel || 0,
+            type: node.Type || "",
+        }))).toEqual([
+            {id: initialState[0].id, level: 0, type: "NodeParagraph"},
+            {id: initialState[1].id, level: 2, type: "NodeHeading"},
+            {id: initialState[2].id, level: 2, type: "NodeHeading"},
+            {id: initialState[3].id, level: 2, type: "NodeHeading"},
+            {id: initialState[4].id, level: 0, type: "NodeParagraph"},
+        ]);
+
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
+        await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
+
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
+        await expect.poll(() => getTopDOMState(editor)).toEqual(headingState);
+    });
+
     test("converts paragraphs through unordered, ordered, and task lists and back", async ({
         createTestDocument,
         page,
@@ -322,6 +376,62 @@ test.describe("block transformations and indentation", () => {
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, docID);
         await expect(reloadedEditor.locator(':scope > [data-type="NodeBlockquote"]')).toHaveCount(1);
+    });
+
+    test("wraps every block covered by a cross-block text range in a blockquote", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross-block Text Range Blockquote Transform E2E",
+            "Before\n\nQuote first\n\nQuote middle\n\nQuote last\n\nAfter",
+        );
+        const initialState = await getTopDOMState(editor);
+        const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
+        await selectTextRange(
+            paragraphs.nth(1).locator('[contenteditable="true"]'),
+            paragraphs.nth(3).locator('[contenteditable="true"]'),
+            2,
+            6,
+        );
+        await page.evaluate(() => {
+            Reflect.get(window.siyuan.config, "keymap").editor.insert.quote.custom = "⌥⇧⌘.";
+        });
+
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+Alt+Shift+Period"));
+        const quote = editor.locator(':scope > [data-type="NodeBlockquote"]');
+        await expect(quote).toHaveCount(1);
+        await expect(quote.locator(':scope > [data-node-id]').evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id") || ""))).resolves.toEqual([
+            initialState[1].id,
+            initialState[2].id,
+            initialState[3].id,
+        ]);
+        await expect.poll(() => getTextRangeState(editor)).toEqual({
+            collapsed: false,
+            endBlockID: initialState[3].id,
+            endOffset: 6,
+            startBlockID: initialState[1].id,
+            startOffset: 2,
+        });
+        await expect.poll(async () => {
+            const document = await readValidDocument(siyuanAPI, docID);
+            const top = document.Children || [];
+            return {
+                childIDs: (top[1].Children || []).filter(node => node.ID).map(node => node.ID),
+                topTypes: top.map(node => node.Type),
+            };
+        }).toEqual({
+            childIDs: [initialState[1].id, initialState[2].id, initialState[3].id],
+            topTypes: ["NodeParagraph", "NodeBlockquote", "NodeParagraph"],
+        });
+
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
+        await expect.poll(() => getTopDOMState(editor)).toEqual(initialState);
+
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
+        await expect(quote).toHaveCount(1);
     });
 
     test("converts non-contiguous paragraphs into independent lists and restores the transaction", async ({

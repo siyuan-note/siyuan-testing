@@ -1,6 +1,7 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
+import {selectTextRange} from "./helpers/selection";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -120,6 +121,48 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
 test.describe("multi-block keyboard operations", () => {
     test.describe.configure({mode: "parallel"});
 
+    test("selects container list items from a cross-block text range like shift-click", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Container List Item Range Selection E2E",
+            [
+                "* First item",
+                "    * First child",
+                "* Second item",
+                "    * Second child",
+            ].join("\n"),
+        );
+        const listItems = editor.locator(
+            ':scope > [data-type="NodeList"] > [data-type="NodeListItem"]',
+        );
+        await expect(listItems).toHaveCount(2);
+        const expectedIDs = await listItems.evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id") || ""));
+        const startEditable = listItems.nth(0).locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        );
+        const endEditable = listItems.nth(1).locator(
+            ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+        );
+        await selectTextRange(startEditable, endEditable, 1, Math.max(1, (await endEditable.textContent() || "").length - 1));
+
+        await page.keyboard.press("Escape");
+        const selectedBlocks = editor.locator(".protyle-wysiwyg--select");
+        await expect.poll(() => selectedBlocks.evaluateAll(elements => elements.map(element => ({
+            id: element.getAttribute("data-node-id") || "",
+            type: element.getAttribute("data-type") || "",
+        })))).toEqual(expectedIDs.map(id => ({id, type: "NodeListItem"})));
+
+        await selectedBlocks.evaluateAll(elements => elements.forEach(element =>
+            element.classList.remove("protyle-wysiwyg--select")));
+        await startEditable.click();
+        await endEditable.click({modifiers: ["Shift"]});
+        await expect.poll(() => selectedBlocks.evaluateAll(elements =>
+            elements.map(element => element.getAttribute("data-node-id") || ""))).toEqual(expectedIDs);
+    });
+
     test("deletes a contiguous block selection and restores it with undo and redo", async ({
         createTestDocument,
         page,
@@ -227,6 +270,47 @@ test.describe("multi-block keyboard operations", () => {
 
         await page.reload();
         await expectDocumentState(siyuanAPI, docID, await getDocumentEditor(page, docID), duplicatedState);
+    });
+
+    test("duplicates every block covered by a cross-block text range", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross-block Text Range Duplicate E2E",
+            "Before\n\nDuplicate first\n\nDuplicate second\n\nAfter",
+        );
+        const initialState = (await getDOMState(editor)).paragraphs;
+        const blocks = editor.locator(':scope > [data-type="NodeParagraph"]');
+        await selectTextRange(
+            blocks.nth(1).locator('[contenteditable="true"]'),
+            blocks.nth(2).locator('[contenteditable="true"]'),
+            3,
+            6,
+        );
+
+        await requestTransaction(page, () => page.keyboard.press("ControlOrMeta+D"));
+        await expect(blocks).toHaveCount(6);
+        const duplicatedState = (await getDOMState(editor)).paragraphs;
+        expect(duplicatedState.map(item => item.text)).toEqual([
+            "Before",
+            "Duplicate first",
+            "Duplicate second",
+            "Duplicate first",
+            "Duplicate second",
+            "After",
+        ]);
+        expect(duplicatedState.slice(3, 5).map(item => item.id)).not.toEqual(
+            initialState.slice(1, 3).map(item => item.id),
+        );
+        await expectDocumentState(siyuanAPI, docID, editor, duplicatedState);
+
+        await requestHistoryAction(page, editor, UNDO_SHORTCUT, "undo");
+        await expectDocumentState(siyuanAPI, docID, editor, initialState);
+
+        await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
+        await expectDocumentState(siyuanAPI, docID, editor, duplicatedState);
     });
 
     test("moves selected blocks down and up while preserving their order and IDs", async ({

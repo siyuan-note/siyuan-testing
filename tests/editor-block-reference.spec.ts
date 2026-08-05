@@ -1,6 +1,7 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
+import {selectTextRange} from "./helpers/selection";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -85,8 +86,8 @@ const waitForPersistedBlockText = async (api: SiyuanAPI, docID: string, blockID:
 };
 
 const insertDynamicReference = async (page: Page, api: SiyuanAPI, docID: string, editor: Locator,
-                                      sourceID: string, query: string) => {
-    const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
+                                      sourceID: string, query: string, paragraphIndex = 0) => {
+    const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').nth(paragraphIndex);
     const paragraphID = await paragraph.getAttribute("data-node-id");
     expect(paragraphID).toBeTruthy();
     const initialText = await paragraph.locator('[contenteditable="true"]').textContent() || "";
@@ -231,6 +232,62 @@ test.describe("block references", () => {
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, target.docID);
         await expect(reloadedEditor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`)).toHaveText(updatedText);
+    });
+
+    test("turns a partially deleted dynamic reference into a static reference", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const query = `Editable dynamic reference ${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const source = await createTestDocument("Editable Dynamic Reference Source E2E", query);
+        const sourceID = await source.editor.locator(':scope > [data-type="NodeParagraph"]').first()
+            .getAttribute("data-node-id");
+        expect(sourceID).toBeTruthy();
+        await waitForIndexedBlock(siyuanAPI, query, sourceID!);
+
+        const leadingText = "333333333333333333";
+        const target = await createTestDocument(
+            "Editable Dynamic Reference Target E2E",
+            `${leadingText}\n\nAnchor: `,
+        );
+        let reference = await insertDynamicReference(
+            page, siyuanAPI, target.docID, target.editor, sourceID!, query, 1);
+        const paragraphs = target.editor.locator(':scope > [data-type="NodeParagraph"]');
+        await expect(paragraphs).toHaveCount(2);
+        const startOffset = 9;
+        const remainingText = query.slice(-2);
+        await selectTextRange(
+            paragraphs.nth(0).locator('[contenteditable="true"]'),
+            reference,
+            startOffset,
+            query.length - remainingText.length,
+        );
+
+        await requestTransaction(page, () => page.keyboard.press("Backspace"));
+        await expect(paragraphs).toHaveCount(1);
+        reference = target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
+        await expect(reference).toHaveAttribute("data-subtype", "s");
+        await expect(reference).toHaveText(remainingText);
+        await expect(paragraphs.first().locator('[contenteditable="true"]'))
+            .toHaveText(leadingText.slice(0, startOffset) + remainingText);
+        await expect.poll(() => getPersistedReferenceState(siyuanAPI, target.docID, sourceID!)).toEqual([{
+            id: sourceID,
+            subtype: "s",
+            text: remainingText,
+            type: "NodeTextMark",
+        }]);
+
+        await requestHistoryAction(page, target.editor, UNDO_SHORTCUT, "undo");
+        await expect(paragraphs).toHaveCount(2);
+        reference = target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`);
+        await expect(reference).toHaveAttribute("data-subtype", "d");
+        await expect(reference).toHaveText(query);
+
+        await requestHistoryAction(page, target.editor, REDO_SHORTCUT, "redo");
+        await expect(paragraphs).toHaveCount(1);
+        await expect(target.editor.locator(`[data-type~="block-ref"][data-id="${sourceID}"]`))
+            .toHaveAttribute("data-subtype", "s");
     });
 
     test("shows a caret and inserts a reference when a block is dropped into an empty paragraph", async ({
