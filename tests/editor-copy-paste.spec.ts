@@ -1190,7 +1190,15 @@ test.describe("block copy, cut, and paste", () => {
         await expect.poll(() => editor.locator(
             ":scope > [data-type=\"NodeList\"] > [data-type=\"NodeListItem\"]",
         ).getAttribute("data-subtype")).toBe("t");
-        await assertValidListDOM(editor);
+        // 粘贴后列表骨架先出现、内部段落属性元素随后渲染完成，轮询等待结构稳定
+        await expect.poll(async () => {
+            try {
+                await assertValidListDOM(editor);
+                return true;
+            } catch {
+                return false;
+            }
+        }, {timeout: 30000}).toBe(true);
         await assertValidSyListTree(siyuanAPI, docID, editor);
 
         await page.keyboard.press(UNDO_SHORTCUT);
@@ -1199,6 +1207,14 @@ test.describe("block copy, cut, and paste", () => {
         await page.keyboard.press(REDO_SHORTCUT);
         await expect.poll(() => getTopBlockIdentity(editor).then(items => items.map(item => item.type)))
             .toEqual(["NodeList"]);
+        await expect.poll(async () => {
+            try {
+                await assertValidListDOM(editor);
+                return true;
+            } catch {
+                return false;
+            }
+        }, {timeout: 30000}).toBe(true);
         await assertValidSyListTree(siyuanAPI, docID, editor);
     });
 
