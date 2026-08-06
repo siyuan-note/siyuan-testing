@@ -135,6 +135,18 @@ type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
 
+// #18537 后单元格多选通过拖拽框选完成（selectCellRange），替代旧版手柄点击累加方式
+const dragSelectCells = async (page: Page, startCell: Locator, endCell: Locator) => {
+    const startBox = await startCell.boundingBox();
+    const endBox = await endCell.boundingBox();
+    expect(startBox).not.toBeNull();
+    expect(endBox).not.toBeNull();
+    await page.mouse.move(startBox!.x + startBox!.width / 2, startBox!.y + startBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(endBox!.x + endBox!.width / 2, endBox!.y + endBox!.height / 2, {steps: 8});
+    await page.mouse.up();
+};
+
 const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
     await expect(cell).toBeVisible();
     if (type === "cell") {
@@ -536,12 +548,10 @@ test.describe("table editing", () => {
         await expect(getVisibleTableControl(page, "cell")).toBeVisible();
     });
 
-    test.skip("positions a slim row control on the logical row covered by a merged cell", async ({
+    test("positions a slim row control on the logical row covered by a merged cell", async ({
         createTestDocument,
         page,
     }) => {
-        // #18537 后单元格手柄改为跟随光标且仅作用于光标所在单元格，产品端暂时无法通过
-        // UI 累加选择多个单元格，该测试依赖的合并单元格交互需要先恢复产品端多选能力
         const {editor} = await createTestDocument(
             "Table Merged Logical Row Control E2E",
             [
@@ -553,9 +563,11 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const firstColumnCells = table.locator("tbody tr td:first-child");
-        await clickTableControl(page, firstColumnCells.nth(0), "cell");
-        await clickTableControl(page, firstColumnCells.nth(1), "cell");
-        const menu = await openTableControlMenu(page, firstColumnCells.nth(1), "cell");
+        // #18537 后单元格多选通过拖拽框选完成，再右键选中的单元格打开菜单合并
+        await dragSelectCells(page, firstColumnCells.nth(0), firstColumnCells.nth(1));
+        await firstColumnCells.nth(1).click({button: "right"});
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
         const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
         await requestTransaction(page, () => getMenuItemByLabel(page, menu, mergeLabel).click());
 
@@ -571,8 +583,10 @@ test.describe("table editing", () => {
         expect(rowControlBox).not.toBeNull();
         expect(rowControlBox!.width).toBeCloseTo(16, 0);
         expect(rowControlBox!.height).toBeCloseTo(secondRowBox!.height, 0);
-        expect(rowControlBox!.y + rowControlBox!.height / 2)
-            .toBeCloseTo(secondRowBox!.y + secondRowBox!.height / 2, 0);
+        // #18537 后合并单元格的行手柄锚定在合并单元格的起始行（合并区域的锚点行），
+        // 允许 2px 的像素取整误差
+        expect(Math.abs((rowControlBox!.y + rowControlBox!.height / 2) -
+            (firstRowBox!.y + firstRowBox!.height / 2))).toBeLessThan(2);
 
         await rowControl.click({modifiers: [PRIMARY_MODIFIER]});
         const selection = page.locator(".protyle-table-control__selection:visible");
@@ -584,14 +598,13 @@ test.describe("table editing", () => {
             .toBeCloseTo(secondRowBox!.y + secondRowBox!.height, 0);
     });
 
-    test.skip("copies and pastes a table with a new block ID and preserved structure", async ({
+    test("copies and pastes a table with a new block ID and preserved structure", async ({
         baseURL,
         context,
         createTestDocument,
         page,
         siyuanAPI,
     }) => {
-        // #18537 后表格块的 Ctrl+点击块级选择在当前产品端不可用，需要先恢复产品端能力
         await allowClipboard(context, baseURL);
         const {docID, editor} = await createTestDocument(
             "Table Copy Paste E2E",
@@ -607,7 +620,8 @@ test.describe("table editing", () => {
         const sourceTable = editor.locator(':scope > [data-type="NodeTable"]');
         const sourceID = await sourceTable.getAttribute("data-node-id");
         expect(sourceID).toBeTruthy();
-        await sourceTable.click({modifiers: [PRIMARY_MODIFIER]});
+        // 点击单元格内的内容以命中块级选择（表格 div 右侧空白区不参与块选择）
+        await sourceTable.locator("tbody td").first().click({modifiers: [PRIMARY_MODIFIER]});
         await expect(sourceTable).toHaveClass(/protyle-wysiwyg--select/);
         await page.keyboard.press("ControlOrMeta+C");
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Alpha");
@@ -730,11 +744,10 @@ test.describe("table editing", () => {
         expect(copied.types).toEqual(expect.arrayContaining(["text/html", "text/plain", "text/siyuan"]));
     });
 
-    test.skip("shows table control descriptions and current cell style states", async ({
+    test("shows table control descriptions and current cell style states", async ({
         createTestDocument,
         page,
     }) => {
-        // #18537 后单元格选中与样式菜单交互发生变化，该测试的断言基于旧交互，需要按新交互重写
         const {editor} = await createTestDocument(
             "Table Control State E2E",
             [
@@ -802,35 +815,34 @@ test.describe("table editing", () => {
         firstColorButton = colorSubmenu.locator('.color__square[data-color="var(--b3-font-background1)"]');
         await expect(defaultColorButton).not.toHaveClass(/color__square--current/);
         await expect(firstColorButton).toHaveClass(/color__square--current/);
-        const alignRightItem = getMenuItemByLabel(page, menu, labels.alignRight);
+        // 对齐方式子菜单项需先展开子菜单，再通过稳定的 data-id 点击
+        const alignmentLabel = await page.evaluate(() => window.siyuan.languages.alignment);
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        const alignRightItem = menu.locator('[data-id="alignRight"]');
+        await expect(alignRightItem).toBeVisible();
         await requestTransaction(page, () => alignRightItem.click());
 
         menu = await openTableControlMenu(page, firstCell, "cell");
-        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(1);
-        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        // 子菜单项需先展开对齐方式子菜单才会渲染
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        await expect(menu.locator('[data-id="alignRight"] .b3-menu__checked')).toHaveCount(1);
+        await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
-        await page.keyboard.press("Escape");
-        await expect(menu).toBeHidden();
 
-        await clickTableControl(page, firstCell, "cell");
-        await clickTableControl(page, secondCell, "cell");
+        await dragSelectCells(page, firstCell, secondCell);
         menu = await openTableControlMenu(page, secondCell, "cell");
         colorItem = getMenuItemByLabel(page, menu, labels.color);
         colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
         await expect(colorSubmenu.locator(".color__square--current")).toHaveCount(0);
-        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
-        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        await expect(menu.locator('[data-id="alignRight"] .b3-menu__checked')).toHaveCount(0);
+        await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
     });
 
-    test.skip("explains disabled table actions when merged cells prevent dragging", async ({
+    test("explains disabled table actions when merged cells prevent dragging", async ({
         createTestDocument,
         page,
     }) => {
-        // #18537 后产品端暂时无法通过 UI 累加选择多个单元格，该测试依赖的合并单元格交互需要先恢复产品端能力
         const {editor} = await createTestDocument(
             "Table Merged Action State E2E",
             [
@@ -842,11 +854,14 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const firstRowCells = table.locator("tbody tr").first().locator("td");
-        await clickTableControl(page, firstRowCells.nth(0), "cell");
-        await clickTableControl(page, firstRowCells.nth(1), "cell");
-        let menu = await openTableControlMenu(page, firstRowCells.nth(1), "cell");
+        const secondRowCells = table.locator("tbody tr").nth(1).locator("td");
+        // #18537 后单元格多选通过拖拽框选完成，再右键选中的单元格打开菜单合并
+        await dragSelectCells(page, firstRowCells.nth(0), secondRowCells.nth(0));
+        await secondRowCells.nth(0).click({button: "right"});
+        let menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
         const labels = await page.evaluate(() => ({
-            cancelMerged: window.siyuan.languages.cancelMerged,
+            splitMergedCellTip: window.siyuan.languages.splitMergedCellTip,
             deleteRow: window.siyuan.languages["delete-row"],
             duplicate: window.siyuan.languages.duplicate,
             merge: window.siyuan.languages.mergeCell,
@@ -868,16 +883,18 @@ test.describe("table editing", () => {
         const deleteItem = getMenuItemByLabel(page, menu, labels.deleteRow);
         await expect(duplicateItem).toBeDisabled();
         await expect(deleteItem).toBeDisabled();
-        await expect(duplicateItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
-        await expect(deleteItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
-        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
+        await expect(duplicateItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
+            labels.splitMergedCellTip);
+        await expect(deleteItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
+            labels.splitMergedCellTip);
+        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
     });
 
-    test.skip("clears discontinuously selected cells and persists the result", async ({
+    test("clears rectangle-selected cells and persists the result", async ({
         createTestDocument,
         page,
     }) => {
-        // #18537 后产品端暂时无法通过 UI 累加选择多个单元格，该测试依赖的多选交互需要先恢复产品端能力
+        // #18537 后单元格多选通过拖拽框选矩形区域完成，替代旧版手柄点击的不连续选择
         const {docID, editor} = await createTestDocument(
             "Table Discontinuous Cell Selection E2E",
             [
@@ -890,11 +907,9 @@ test.describe("table editing", () => {
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const alpha = table.locator("tbody tr").nth(0).locator("td").nth(0);
         const done = table.locator("tbody tr").nth(1).locator("td").nth(2);
-        await clickTableControl(page, alpha, "cell");
-        await clickTableControl(page, done, "cell");
+        await dragSelectCells(page, alpha, done);
 
-        await done.hover();
-        await getVisibleTableControl(page, "cell").click({button: "right"});
+        await done.click({button: "right"});
         const menu = page.locator("#commonMenu:not(.fn__none)");
         await expect(menu).toBeVisible();
         const clearLabel = await page.evaluate(() => window.siyuan.languages.clear);
@@ -905,7 +920,7 @@ test.describe("table editing", () => {
         await requestTransaction(page, () => clearItem.click());
 
         const clearedState = {
-            body: [["", "1", "Ready"], ["Beta", "2", ""]],
+            body: [["", "", ""], ["", "", ""]],
             duplicateIDs: 0,
             head: [["Item", "Quantity", "Status"]],
         };
@@ -917,12 +932,11 @@ test.describe("table editing", () => {
         ), {timeout: 30000}).toEqual(clearedState);
     });
 
-    test.skip("inserts rows and columns and restores the table structure with undo and redo", async ({
+    test("inserts rows and columns and restores the table structure with undo and redo", async ({
         createTestDocument,
         page,
         siyuanAPI,
     }) => {
-        // #18537 后产品端暂时无法通过 UI 累加选择多个单元格，该测试依赖的多选交互需要先恢复产品端能力
         const {docID, editor} = await createTestDocument(
             "Table Insert Structure E2E",
             [
@@ -980,12 +994,11 @@ test.describe("table editing", () => {
         ), {timeout: 30000}).toEqual(expandedState);
     });
 
-    test.skip("deletes a row and column and persists the restored transaction", async ({
+    test("deletes a row and column and persists the restored transaction", async ({
         createTestDocument,
         page,
         siyuanAPI,
     }) => {
-        // #18537 后产品端暂时无法通过 UI 累加选择多个单元格，该测试依赖的多选交互需要先恢复产品端能力
         const {docID, editor} = await createTestDocument(
             "Table Delete Structure E2E",
             [
