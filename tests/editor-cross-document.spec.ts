@@ -2,7 +2,7 @@ import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
-import {openWorkspace} from "./helpers/runtime";
+import {openWorkspace, showFileTree} from "./helpers/runtime";
 
 interface ISyNode {
     ID?: string;
@@ -40,15 +40,11 @@ const finishBlockMoveAfter = async (session: Awaited<ReturnType<typeof startBloc
 
 const revealDocument = async (page: Page, notebookID: string, docID: string) => {
     const fileTree = page.locator(".sy__file");
+    // 文档树面板可能是隐藏停靠栏状态（hideDock 或面板未激活），复用 showFileTree
+    // 统一处理停靠栏显示与面板切换，避免依赖持久化布局状态
     const fileTreeInitiallyVisible = await fileTree.locator(".block__logo:visible").isVisible();
-    const fileDockItem = page.locator('.dock__item[data-type="file"]').first();
-    if (!fileTreeInitiallyVisible) {
-        if (await fileDockItem.evaluate(element => element.classList.contains("dock__item--active"))) {
-            await fileDockItem.click();
-        }
-        await fileDockItem.click();
-        await expect(fileTree.locator(".block__logo:visible")).toBeVisible();
-    }
+    const restoreFileTree = fileTreeInitiallyVisible ? async () => {
+    } : await showFileTree(page);
     const documentItem = page.locator(`li.b3-list-item[data-type="navigation-file"][data-node-id="${docID}"]`);
     if (!await documentItem.isVisible()) {
         const notebookRoot = page.locator(
@@ -62,12 +58,7 @@ const revealDocument = async (page: Page, notebookID: string, docID: string) => 
     await expect(documentItem).toBeVisible({timeout: 10000});
     return {
         documentItem,
-        restoreFileTree: async () => {
-            if (!fileTreeInitiallyVisible &&
-                await fileDockItem.evaluate(element => element.classList.contains("dock__item--active"))) {
-                await fileDockItem.click();
-            }
-        },
+        restoreFileTree,
     };
 };
 
