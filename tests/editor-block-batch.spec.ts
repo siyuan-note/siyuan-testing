@@ -1,7 +1,7 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
-import {selectTextRange} from "./helpers/selection";
+import {getTextRangeState, selectTextRange} from "./helpers/selection";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -311,6 +311,43 @@ test.describe("multi-block keyboard operations", () => {
 
         await requestHistoryAction(page, editor, REDO_SHORTCUT, "redo");
         await expectDocumentState(siyuanAPI, docID, editor, duplicatedState);
+    });
+
+    test("aligns every block covered by a cross-block text range", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross-block Text Range Alignment E2E",
+            "Before\n\nAlign first\n\nAlign second\n\nAfter",
+        );
+        const blocks = editor.locator(':scope > [data-type="NodeParagraph"]');
+        const startEditable = blocks.nth(1).locator('[contenteditable="true"]');
+        const endEditable = blocks.nth(2).locator('[contenteditable="true"]');
+        await selectTextRange(startEditable, endEditable, 2, 6);
+        const selectedRange = await getTextRangeState(editor);
+
+        await requestTransaction(page, () => page.keyboard.press("Alt+R"));
+        await expect.poll(() => blocks.evaluateAll(elements =>
+            elements.map(element => (element as HTMLElement).style.textAlign))).toEqual([
+            "",
+            "right",
+            "right",
+            "",
+        ]);
+        expect(await getTextRangeState(editor)).toEqual(selectedRange);
+
+        await page.reload();
+        const reloadedBlocks = (await getDocumentEditor(page, docID)).locator(
+            ':scope > [data-type="NodeParagraph"]',
+        );
+        await expect.poll(() => reloadedBlocks.evaluateAll(elements =>
+            elements.map(element => (element as HTMLElement).style.textAlign))).toEqual([
+            "",
+            "right",
+            "right",
+            "",
+        ]);
     });
 
     test("moves selected blocks down and up while preserving their order and IDs", async ({
