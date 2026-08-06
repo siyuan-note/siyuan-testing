@@ -85,6 +85,7 @@ interface IAttributeView {
     id: string;
     keyValues: IAttributeViewKeyValue[];
     name: string;
+    viewID: string;
     views: Array<{
         filters?: Array<{
             column?: string;
@@ -222,6 +223,15 @@ const requestHistoryAction = async (page: Page, block: Locator, shortcut: string
 const getAttributeView = async (api: SiyuanAPI, avID: string) => {
     const data = await api.post<{av: IAttributeView}>("/api/av/getAttributeView", {id: avID});
     return data.av;
+};
+
+// 内核的 /api/av/getAttributeView 响应带兼容字段 viewID（首个视图 ID），不参与持久化
+// （https://github.com/siyuan-note/siyuan/issues/18539），与存储文件比较前补齐该字段
+const expectApiAttributeView = (apiAttributeView: IAttributeView, stored: IAttributeView) => {
+    expect(apiAttributeView).toEqual({
+        ...stored,
+        viewID: stored.views[0]?.id || "",
+    });
 };
 
 const getCurrentViewID = async (api: SiyuanAPI, docID: string, blockID: string) => {
@@ -1059,7 +1069,7 @@ test.describe("attribute views", () => {
             siyuanAPI, document.docID, inserted.blockID, inserted.avID,
         );
         const apiAttributeView = await getAttributeView(siyuanAPI, inserted.avID);
-        expect(apiAttributeView).toEqual(stored);
+        expectApiAttributeView(apiAttributeView, stored);
         await expectRenderedAttributeView(block, stored);
 
         await page.reload();
@@ -1068,7 +1078,7 @@ test.describe("attribute views", () => {
         await expect(block).toHaveAttribute("data-type", "NodeAttributeView");
         await expect(block).toHaveAttribute("data-av-id", inserted.avID);
         await expectRenderedAttributeView(block, stored);
-        expect(await getAttributeView(siyuanAPI, inserted.avID)).toEqual(stored);
+        expectApiAttributeView(await getAttributeView(siyuanAPI, inserted.avID), stored);
     });
 
     test("creates, renames, duplicates, switches, and deletes views", async ({
@@ -1081,7 +1091,12 @@ test.describe("attribute views", () => {
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const initial = await getAttributeView(siyuanAPI, avID);
-        const initialViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID);
+        // 新建数据库后 custom-sy-av-view 由内核异步写入块属性，需要轮询等待
+        let initialViewID = "";
+        await expect.poll(async () => {
+            initialViewID = await getCurrentViewID(siyuanAPI, document.docID, blockID) || "";
+            return initialViewID;
+        }, {timeout: 30000}).toBeTruthy();
         expect(initial.views).toHaveLength(1);
         expect(initial.views[0].type).toBe("table");
         const switchView = async (viewID: string, layout: "gallery" | "table") => {
@@ -4094,7 +4109,8 @@ test.describe("attribute views", () => {
         await expect(pageSizeButton).toBeVisible({timeout: 15000});
         await pageSizeButton.click();
         const pageSizeMenu = page.locator('#commonMenu[data-name="av-page-size"]:not(.fn__none)');
-        await expect(pageSizeMenu).toBeVisible();
+        // 分页菜单需要等待 AV 渲染响应，高负载下可能超过默认的 5 秒超时
+        await expect(pageSizeMenu).toBeVisible({timeout: 15000});
         await requestTransaction(page, () => pageSizeMenu.locator(".b3-menu__item").last().click());
 
         await expect(reloadedBlock).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
