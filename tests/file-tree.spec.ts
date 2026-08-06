@@ -288,14 +288,39 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
         clientX: targetBox!.x + targetBox!.width / 2,
         clientY: targetBox!.y + targetBox!.height / 2,
     };
-    const initialPoint = {
-        clientX: point.clientX,
-        clientY: point.clientY - 1,
-    };
-    await target.dispatchEvent("dragenter", {dataTransfer, ...initialPoint});
-    await target.dispatchEvent("dragover", {dataTransfer, ...initialPoint});
+    // 在页面内同步测量并派发事件，避免测量与事件处理之间的布局漂移；文件树
+    // 只在目标相同且纵坐标变化时重新判定插入位置，因此第二次 dragover 需与
+    // 首次坐标不同（中心下方 4px，仍在目标的中间插入区内）
+    await target.evaluate((element, dataTransfer) => {
+        const rect = element.getBoundingClientRect();
+        const center = {
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+        };
+        element.dispatchEvent(new DragEvent("dragenter", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer,
+            ...center,
+        }));
+        element.dispatchEvent(new DragEvent("dragover", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer,
+            ...center,
+        }));
+    }, dataTransfer);
     await nextAnimationFrame(page);
-    await target.dispatchEvent("dragover", {dataTransfer, ...point});
+    await target.evaluate((element, dataTransfer) => {
+        const rect = element.getBoundingClientRect();
+        element.dispatchEvent(new DragEvent("dragover", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2 + 4,
+        }));
+    }, dataTransfer);
     await nextAnimationFrame(page);
     await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
     const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
