@@ -270,6 +270,16 @@ const expectFileTreeOrder = async (page: import("@playwright/test").Page, notebo
 const dragDocumentInto = async (page: Page, source: Locator, target: Locator) => {
     await expect(source).toBeVisible({timeout: 15000});
     await expect(target).toBeVisible({timeout: 15000});
+    // 长文件树加载后会平滑滚动恢复位置，拖拽期间的两次坐标测量会因此漂移，
+    // 这里先滚动到可视区中央并等待滚动动画结束
+    await target.evaluate(element => element.scrollIntoView({block: "center"}));
+    const fileTree = page.locator(".sy__file");
+    await expect.poll(async () => {
+        const first = await fileTree.evaluate(element => element.scrollTop);
+        await page.waitForTimeout(50);
+        const second = await fileTree.evaluate(element => element.scrollTop);
+        return first === second;
+    }, {timeout: 5000}).toBe(true);
     const sourcePath = await source.getAttribute("data-path");
     const targetPath = await target.getAttribute("data-path");
     const sourceTitle = await source.locator(":scope > .b3-list-item__text").textContent();

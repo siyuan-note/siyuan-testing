@@ -80,8 +80,22 @@ const appRequire = createRequire(path.join(appDir, "package.json"));
 const webpackPath = appRequire.resolve("webpack/bin/webpack.js");
 let kernelPath;
 if (!runningWorkspace) {
-    kernelPath = path.join(appDir, "kernel", "SiYuan-Kernel");
-    await access(kernelPath);
+    const kernelNames = process.platform === "win32" ?
+        ["SiYuan-Kernel.exe", "SiYuan-Kernel"] : ["SiYuan-Kernel"];
+    kernelPath = undefined;
+    for (const kernelName of kernelNames) {
+        const candidate = path.join(appDir, "kernel", kernelName);
+        try {
+            await access(candidate);
+            kernelPath = candidate;
+            break;
+        } catch {
+            // 当前候选不存在，继续尝试下一个。
+        }
+    }
+    if (!kernelPath) {
+        await access(path.join(appDir, "kernel", kernelNames[0]));
+    }
     console.log(`[siyuan-testing] Kernel ${kernelPath}`);
 }
 const compiler = spawn(process.execPath, [

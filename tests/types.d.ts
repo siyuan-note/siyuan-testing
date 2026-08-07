@@ -22,6 +22,8 @@ declare global {
                 dragTipListItemAfter: string;
                 dragTipListItemBefore: string;
                 dragTipListItemChild: string;
+                dragTipMoveTargetBack: string;
+                dragTipMoveTargetFront: string;
                 move: string;
             };
             storage: Record<string, unknown>;

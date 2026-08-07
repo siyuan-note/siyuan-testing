@@ -102,6 +102,15 @@ test.describe("document import", () => {
                 `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
             );
             await expect(notebookRoot).toBeVisible();
+            // 长文件树加载后会平滑滚动恢复位置，滚动动画期间坐标会漂移导致点击落空，
+            // 这里等待滚动稳定后再交互
+            const fileTree = page.locator(".sy__file");
+            await expect.poll(async () => {
+                const first = await fileTree.evaluate(element => element.scrollTop);
+                await page.waitForTimeout(50);
+                const second = await fileTree.evaluate(element => element.scrollTop);
+                return first === second;
+            }, {timeout: 5000}).toBe(true);
             await notebookRoot.hover({force: true});
             await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
 

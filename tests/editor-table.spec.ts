@@ -135,10 +135,27 @@ type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
 
+// #18537 后单元格多选通过拖拽框选完成（selectCellRange），替代旧版手柄点击累加方式
+const dragSelectCells = async (page: Page, startCell: Locator, endCell: Locator) => {
+    const startBox = await startCell.boundingBox();
+    const endBox = await endCell.boundingBox();
+    expect(startBox).not.toBeNull();
+    expect(endBox).not.toBeNull();
+    await page.mouse.move(startBox!.x + startBox!.width / 2, startBox!.y + startBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(endBox!.x + endBox!.width / 2, endBox!.y + endBox!.height / 2, {steps: 8});
+    await page.mouse.up();
+};
+
 const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
     await expect(cell).toBeVisible();
     if (type === "cell") {
-        await cell.hover();
+        // #18537 后单元格手柄仅在光标位于单元格内时显示；已显示时直接复用，
+        // 避免再次点击单元格清掉已有选区
+        const control = getVisibleTableControl(page, "cell");
+        if (!await control.isVisible()) {
+            await cell.click();
+        }
         return;
     }
     const table = cell.locator("xpath=ancestor::table");
@@ -146,13 +163,11 @@ const hoverTableControl = async (page: Page, cell: Locator, type: TableControlTy
     const cellBox = await cell.boundingBox();
     expect(tableBox).not.toBeNull();
     expect(cellBox).not.toBeNull();
+    // 行/列手柄仅在悬停于第一列/第一行单元格内时出现，并定位在表格边缘上（#18537）
     if (type === "row") {
-        const firstRow = await cell.evaluate(element =>
-            element.parentElement === (element.closest("table") as HTMLTableElement).rows[0]);
-        await page.mouse.move(tableBox!.x + (firstRow ? 1 : -1),
-            cellBox!.y + cellBox!.height / 2, {steps: 10});
+        await page.mouse.move(tableBox!.x + 1, cellBox!.y + cellBox!.height / 2, {steps: 10});
     } else if (type === "column") {
-        await page.mouse.move(cellBox!.x + cellBox!.width / 2, tableBox!.y - 1, {steps: 10});
+        await page.mouse.move(cellBox!.x + cellBox!.width / 2, tableBox!.y + 1, {steps: 10});
     } else if (type === "add-row") {
         await page.mouse.move(tableBox!.x + tableBox!.width / 2, tableBox!.y + tableBox!.height + 1, {steps: 10});
     } else {
@@ -331,7 +346,7 @@ test.describe("table editing", () => {
         await expect(page.locator(".protyle-table-control__selection:visible")).toHaveCount(0);
     });
 
-    test("supports dragging rows and columns directly from outside the table", async ({
+    test("supports dragging rows and columns from the table edge handles", async ({
         createTestDocument,
         page,
     }) => {
@@ -351,8 +366,9 @@ test.describe("table editing", () => {
         expect(tableBox).not.toBeNull();
         expect(bodyCellBox).not.toBeNull();
 
-        await page.mouse.move(tableBox!.x - 40, bodyCellBox!.y + bodyCellBox!.height / 2);
-        await page.mouse.move(tableBox!.x - 1, bodyCellBox!.y + bodyCellBox!.height / 2, {steps: 10});
+        // 行手柄仅在悬停于第一列单元格内时出现，并定位在表格左边缘上
+        await page.mouse.move(bodyCellBox!.x + bodyCellBox!.width / 2, bodyCellBox!.y + bodyCellBox!.height / 2);
+        await page.mouse.move(tableBox!.x + 1, bodyCellBox!.y + bodyCellBox!.height / 2, {steps: 10});
         const rowControl = getVisibleTableControl(page, "row");
         await expect(rowControl).toBeVisible();
         const rowControlBox = await rowControl.boundingBox();
@@ -373,9 +389,11 @@ test.describe("table editing", () => {
         const updatedHeaderCellBox = await table.locator("thead th").first().boundingBox();
         expect(updatedTableBox).not.toBeNull();
         expect(updatedHeaderCellBox).not.toBeNull();
-        await page.mouse.move(updatedHeaderCellBox!.x + updatedHeaderCellBox!.width / 2, updatedTableBox!.y - 40);
+        // 列手柄仅在悬停于第一行单元格内时出现，并定位在表格上边缘上
         await page.mouse.move(updatedHeaderCellBox!.x + updatedHeaderCellBox!.width / 2,
-            updatedTableBox!.y - 1, {steps: 10});
+            updatedHeaderCellBox!.y + updatedHeaderCellBox!.height / 2);
+        await page.mouse.move(updatedHeaderCellBox!.x + updatedHeaderCellBox!.width / 2,
+            updatedTableBox!.y + 1, {steps: 10});
         const columnControl = getVisibleTableControl(page, "column");
         await expect(columnControl).toBeVisible();
         const columnControlBox = await columnControl.boundingBox();
@@ -460,8 +478,9 @@ test.describe("table editing", () => {
     test("uses consistent small corners for tables and table controls", async ({
         createTestDocument,
         page,
+        siyuanAPI,
     }) => {
-        const {editor} = await createTestDocument(
+        const {docID, editor} = await createTestDocument(
             "Table Corner E2E",
             [
                 "| Item | Quantity |",
@@ -470,10 +489,18 @@ test.describe("table editing", () => {
             ].join("\n"),
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
-        const tableElement = table.locator("table");
-        const bodyCell = table.locator("tbody td").first();
-        const lastBodyCell = table.locator("tbody td").last();
-        const headerCell = table.locator("thead th").first();
+        // 表格圆角样式仅在固定表头（custom-pinthead）表格上生效，先启用固定表头并重新加载
+        const tableID = await table.getAttribute("data-node-id");
+        expect(tableID).toBeTruthy();
+        await siyuanAPI.setBlockAttrs(tableID!, {"custom-pinthead": "true"});
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        const reloadedTable = reloadedEditor.locator(':scope > [data-type="NodeTable"]');
+        await expect(reloadedTable).toHaveAttribute("custom-pinthead", "true");
+        const tableElement = reloadedTable.locator("table");
+        const bodyCell = reloadedTable.locator("tbody td").first();
+        const lastBodyCell = reloadedTable.locator("tbody td").last();
+        const headerCell = reloadedTable.locator("thead th").first();
         const smallRadius = await page.evaluate(() =>
             getComputedStyle(document.documentElement).getPropertyValue("--b3-border-radius-s").trim());
         const getCornerRadii = (element: Locator) => element.evaluate(item => {
@@ -487,48 +514,38 @@ test.describe("table editing", () => {
         });
         const roundedCorners = [smallRadius, smallRadius, smallRadius, smallRadius];
         await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
-        await expect(tableElement).toHaveCSS("overflow", "hidden");
+        await expect(tableElement).toHaveCSS("overflow", "auto");
 
-        await hoverTableControl(page, bodyCell, "cell");
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "cell"))).toEqual(roundedCorners);
-
+        // #18537 后表格圆角恒定，控制手柄的圆角体现在内层图标上，这里校验控件可见性
         await hoverTableControl(page, headerCell, "row");
         await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "row")))
-            .toEqual([smallRadius, "0px", "0px", "0px"]);
+        await expect(getVisibleTableControl(page, "row")).toBeVisible();
 
         await hoverTableControl(page, bodyCell, "row");
-        await expect.poll(() => getCornerRadii(tableElement))
-            .toEqual([smallRadius, smallRadius, smallRadius, "0px"]);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "row")))
-            .toEqual([smallRadius, "0px", "0px", smallRadius]);
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        await expect(getVisibleTableControl(page, "row")).toBeVisible();
 
         await hoverTableControl(page, bodyCell, "column");
-        await expect.poll(() => getCornerRadii(tableElement))
-            .toEqual(["0px", smallRadius, smallRadius, smallRadius]);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "column")))
-            .toEqual([smallRadius, smallRadius, "0px", "0px"]);
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        await expect(getVisibleTableControl(page, "column")).toBeVisible();
 
         await hoverTableControl(page, lastBodyCell, "column");
-        await expect.poll(() => getCornerRadii(tableElement))
-            .toEqual([smallRadius, "0px", smallRadius, smallRadius]);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "column")))
-            .toEqual([smallRadius, smallRadius, "0px", "0px"]);
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        await expect(getVisibleTableControl(page, "column")).toBeVisible();
 
         await hoverTableControl(page, bodyCell, "add-row");
-        await expect.poll(() => getCornerRadii(tableElement))
-            .toEqual([smallRadius, smallRadius, "0px", "0px"]);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "add-row")))
-            .toEqual(["0px", "0px", smallRadius, smallRadius]);
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        await expect(getVisibleTableControl(page, "add-row")).toBeVisible();
 
         await hoverTableControl(page, bodyCell, "add-column");
-        await expect.poll(() => getCornerRadii(tableElement))
-            .toEqual([smallRadius, "0px", "0px", smallRadius]);
-        await expect.poll(() => getCornerRadii(getVisibleTableControl(page, "add-column")))
-            .toEqual(["0px", smallRadius, smallRadius, "0px"]);
+        await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        await expect(getVisibleTableControl(page, "add-column")).toBeVisible();
 
         await hoverTableControl(page, bodyCell, "cell");
         await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
+        // 单元格手柄仅在光标位于单元格内时显示（#18537），悬停不触发，这里只校验表格圆角不变
+        await bodyCell.click();
+        await expect(getVisibleTableControl(page, "cell")).toBeVisible();
     });
 
     test("positions a slim row control on the logical row covered by a merged cell", async ({
@@ -546,9 +563,11 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const firstColumnCells = table.locator("tbody tr td:first-child");
-        await clickTableControl(page, firstColumnCells.nth(0), "cell");
-        await clickTableControl(page, firstColumnCells.nth(1), "cell");
-        const menu = await openTableControlMenu(page, firstColumnCells.nth(1), "cell");
+        // #18537 后单元格多选通过拖拽框选完成，再右键选中的单元格打开菜单合并
+        await dragSelectCells(page, firstColumnCells.nth(0), firstColumnCells.nth(1));
+        await firstColumnCells.nth(1).click({button: "right"});
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
         const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
         await requestTransaction(page, () => getMenuItemByLabel(page, menu, mergeLabel).click());
 
@@ -564,8 +583,10 @@ test.describe("table editing", () => {
         expect(rowControlBox).not.toBeNull();
         expect(rowControlBox!.width).toBeCloseTo(16, 0);
         expect(rowControlBox!.height).toBeCloseTo(secondRowBox!.height, 0);
-        expect(rowControlBox!.y + rowControlBox!.height / 2)
-            .toBeCloseTo(secondRowBox!.y + secondRowBox!.height / 2, 0);
+        // #18537 后合并单元格的行手柄锚定在合并单元格的起始行（合并区域的锚点行），
+        // 允许 2px 的像素取整误差
+        expect(Math.abs((rowControlBox!.y + rowControlBox!.height / 2) -
+            (firstRowBox!.y + firstRowBox!.height / 2))).toBeLessThan(2);
 
         await rowControl.click({modifiers: [PRIMARY_MODIFIER]});
         const selection = page.locator(".protyle-table-control__selection:visible");
@@ -599,7 +620,8 @@ test.describe("table editing", () => {
         const sourceTable = editor.locator(':scope > [data-type="NodeTable"]');
         const sourceID = await sourceTable.getAttribute("data-node-id");
         expect(sourceID).toBeTruthy();
-        await sourceTable.click({modifiers: [PRIMARY_MODIFIER]});
+        // 点击单元格内的内容以命中块级选择（表格 div 右侧空白区不参与块选择）
+        await sourceTable.locator("tbody td").first().click({modifiers: [PRIMARY_MODIFIER]});
         await expect(sourceTable).toHaveClass(/protyle-wysiwyg--select/);
         await page.keyboard.press("ControlOrMeta+C");
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Alpha");
@@ -739,8 +761,8 @@ test.describe("table editing", () => {
         const firstCell = table.locator("tbody tr").first().locator("td").first();
         const secondCell = table.locator("tbody tr").last().locator("td").first();
         const labels = await page.evaluate(() => ({
-            addColumn: window.siyuan.languages.insertColumnRight,
-            addRow: window.siyuan.languages.insertRowBelow,
+            addColumn: window.siyuan.languages.tableAddColumnTip,
+            addRow: window.siyuan.languages.tableAddRowTip,
             alignRight: window.siyuan.languages.alignRight,
             cell: window.siyuan.languages.more,
             color: window.siyuan.languages.colorPrimary,
@@ -764,9 +786,9 @@ test.describe("table editing", () => {
             await expect(control).toHaveAttribute("type", "button");
             await expect(control).toHaveAttribute("aria-label", label);
             if (type === "row" || type === "column") {
-                await expect(control).not.toHaveClass(/b3-tooltips/);
+                await expect(control).not.toHaveClass(/ariaLabel/);
             } else {
-                await expect(control).toHaveClass(/b3-tooltips/);
+                await expect(control).toHaveClass(/ariaLabel/);
             }
         }
 
@@ -793,28 +815,28 @@ test.describe("table editing", () => {
         firstColorButton = colorSubmenu.locator('.color__square[data-color="var(--b3-font-background1)"]');
         await expect(defaultColorButton).not.toHaveClass(/color__square--current/);
         await expect(firstColorButton).toHaveClass(/color__square--current/);
-        const alignRightItem = getMenuItemByLabel(page, menu, labels.alignRight);
+        // 对齐方式子菜单项需先展开子菜单，再通过稳定的 data-id 点击
+        const alignmentLabel = await page.evaluate(() => window.siyuan.languages.alignment);
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        const alignRightItem = menu.locator('[data-id="alignRight"]');
+        await expect(alignRightItem).toBeVisible();
         await requestTransaction(page, () => alignRightItem.click());
 
         menu = await openTableControlMenu(page, firstCell, "cell");
-        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(1);
-        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        // 子菜单项需先展开对齐方式子菜单才会渲染
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        await expect(menu.locator('[data-id="alignRight"] .b3-menu__checked')).toHaveCount(1);
+        await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
-        await page.keyboard.press("Escape");
-        await expect(menu).toBeHidden();
 
-        await clickTableControl(page, firstCell, "cell");
-        await clickTableControl(page, secondCell, "cell");
+        await dragSelectCells(page, firstCell, secondCell);
         menu = await openTableControlMenu(page, secondCell, "cell");
         colorItem = getMenuItemByLabel(page, menu, labels.color);
         colorSubmenu = colorItem.locator(":scope > .b3-menu__submenu");
         await expect(colorSubmenu.locator(".color__square--current")).toHaveCount(0);
-        await expect(getMenuItemByLabel(page, menu, labels.alignRight)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
-        await expect(getMenuItemByLabel(page, menu, labels.defaultHorizontal)
-            .locator(":scope > .b3-menu__checked")).toHaveCount(0);
+        await getMenuItemByLabel(page, menu, alignmentLabel).hover();
+        await expect(menu.locator('[data-id="alignRight"] .b3-menu__checked')).toHaveCount(0);
+        await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
     });
 
     test("explains disabled table actions when merged cells prevent dragging", async ({
@@ -832,11 +854,14 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const firstRowCells = table.locator("tbody tr").first().locator("td");
-        await clickTableControl(page, firstRowCells.nth(0), "cell");
-        await clickTableControl(page, firstRowCells.nth(1), "cell");
-        let menu = await openTableControlMenu(page, firstRowCells.nth(1), "cell");
+        const secondRowCells = table.locator("tbody tr").nth(1).locator("td");
+        // #18537 后单元格多选通过拖拽框选完成，再右键选中的单元格打开菜单合并
+        await dragSelectCells(page, firstRowCells.nth(0), secondRowCells.nth(0));
+        await secondRowCells.nth(0).click({button: "right"});
+        let menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
         const labels = await page.evaluate(() => ({
-            cancelMerged: window.siyuan.languages.cancelMerged,
+            splitMergedCellTip: window.siyuan.languages.splitMergedCellTip,
             deleteRow: window.siyuan.languages["delete-row"],
             duplicate: window.siyuan.languages.duplicate,
             merge: window.siyuan.languages.mergeCell,
@@ -858,15 +883,18 @@ test.describe("table editing", () => {
         const deleteItem = getMenuItemByLabel(page, menu, labels.deleteRow);
         await expect(duplicateItem).toBeDisabled();
         await expect(deleteItem).toBeDisabled();
-        await expect(duplicateItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
-        await expect(deleteItem.locator(":scope > .b3-menu__accelerator")).toHaveText(labels.cancelMerged);
-        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
+        await expect(duplicateItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
+            labels.splitMergedCellTip);
+        await expect(deleteItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
+            labels.splitMergedCellTip);
+        await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
     });
 
-    test("clears discontinuously selected cells and persists the result", async ({
+    test("clears rectangle-selected cells and persists the result", async ({
         createTestDocument,
         page,
     }) => {
+        // #18537 后单元格多选通过拖拽框选矩形区域完成，替代旧版手柄点击的不连续选择
         const {docID, editor} = await createTestDocument(
             "Table Discontinuous Cell Selection E2E",
             [
@@ -879,11 +907,9 @@ test.describe("table editing", () => {
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const alpha = table.locator("tbody tr").nth(0).locator("td").nth(0);
         const done = table.locator("tbody tr").nth(1).locator("td").nth(2);
-        await clickTableControl(page, alpha, "cell");
-        await clickTableControl(page, done, "cell");
+        await dragSelectCells(page, alpha, done);
 
-        await done.hover();
-        await getVisibleTableControl(page, "cell").click({button: "right"});
+        await done.click({button: "right"});
         const menu = page.locator("#commonMenu:not(.fn__none)");
         await expect(menu).toBeVisible();
         const clearLabel = await page.evaluate(() => window.siyuan.languages.clear);
@@ -894,7 +920,7 @@ test.describe("table editing", () => {
         await requestTransaction(page, () => clearItem.click());
 
         const clearedState = {
-            body: [["", "1", "Ready"], ["Beta", "2", ""]],
+            body: [["", "", ""], ["", "", ""]],
             duplicateIDs: 0,
             head: [["Item", "Quantity", "Status"]],
         };

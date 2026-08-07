@@ -106,7 +106,8 @@ const insertEmbedBlock = async (page: Page, api: SiyuanAPI, docID: string, edito
     await page.keyboard.type(`{{${query}`, {delay: 10});
     const protyle = editor.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]");
     const hint = protyle.locator(".protyle-hint:not(.fn__none)");
-    await expect(hint).toBeVisible();
+    // 嵌入块提示需要等待内核搜索返回，高负载下可能超过默认的 5 秒超时
+    await expect(hint).toBeVisible({timeout: 15000});
     const sourceOption = hint.locator(`button:has([data-node-id="${sourceID}"])`).first();
     await expect(sourceOption).toBeVisible({timeout: 15000});
     await waitForPersistedBlockText(api, docID, paragraphID!, `{{${query}`);
