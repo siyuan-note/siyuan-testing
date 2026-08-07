@@ -35,6 +35,41 @@ test.describe("file tree", () => {
         }
     });
 
+    test("moves a document through the touch drag bridge", async ({page, createTestDocument, siyuanAPI}) => {
+        const targetDocument = await createTestDocument("Tree Touch Drag Target");
+        const sourceDocument = await createTestDocument("Tree Touch Drag Source");
+        await openWorkspace(page, `/?id=${sourceDocument.docID}`);
+        const restoreFileTree = await showFileTree(page);
+        try {
+            const notebookRoot = page.locator(
+                `ul.b3-list[data-url="${sourceDocument.notebookID}"] > li[data-type="navigation-root"]`,
+            );
+            await expect(notebookRoot).toBeVisible({timeout: 15000});
+            await expandTreeItem(notebookRoot);
+            const source = page.locator(
+                `li[data-type="navigation-file"][data-node-id="${sourceDocument.docID}"]`,
+            );
+            const target = page.locator(
+                `li[data-type="navigation-file"][data-node-id="${targetDocument.docID}"]`,
+            );
+
+            await dragDocumentIntoWithTouch(page, source, target);
+
+            await expect.poll(async () => (await siyuanAPI.getDocumentPath(sourceDocument.docID)).path, {
+                timeout: 30000,
+            }).toBe(`/${targetDocument.docID}/${sourceDocument.docID}.sy`);
+            await expandTreeItem(target);
+            const nestedSource = target.locator(
+                `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and ` +
+                `@data-node-id="${sourceDocument.docID}"]`,
+            );
+            await expect(nestedSource).toBeVisible({timeout: 15000});
+            await expect(nestedSource).toHaveAttribute("draggable", "true");
+        } finally {
+            await restoreFileTree();
+        }
+    });
+
     test("moves a nested document subtree and restores its hierarchy after reload", async ({
         createTestDocument,
         page,
@@ -353,6 +388,87 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
     await target.dispatchEvent("drop", {dataTransfer, ...point});
     await endTarget.dispatchEvent("dragend", {dataTransfer});
     await dataTransfer.dispose();
+    expect((await moveResponse).ok()).toBe(true);
+};
+
+const dispatchTouchEvent = (target: Locator, type: "touchstart" | "touchmove" | "touchend", point: {
+    clientX: number,
+    clientY: number,
+}) => target.evaluate((element, eventInit) => {
+    const touch = new Touch({
+        identifier: 1,
+        target: element,
+        clientX: eventInit.clientX,
+        clientY: eventInit.clientY,
+        screenX: eventInit.clientX,
+        screenY: eventInit.clientY,
+        radiusX: 5,
+        radiusY: 5,
+        force: 1,
+    });
+    const activeTouches = eventInit.type === "touchend" ? [] : [touch];
+    element.dispatchEvent(new TouchEvent(eventInit.type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        touches: activeTouches,
+        targetTouches: activeTouches,
+        changedTouches: [touch],
+    }));
+}, {...point, type});
+
+const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Locator) => {
+    await expect(source).toBeVisible({timeout: 15000});
+    await expect(target).toBeVisible({timeout: 15000});
+    await target.evaluate(element => element.scrollIntoView({block: "center"}));
+    const sourceBox = await source.boundingBox();
+    const targetBox = await target.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    const startPoint = {
+        clientX: sourceBox!.x + sourceBox!.width / 2,
+        clientY: sourceBox!.y + sourceBox!.height / 2,
+    };
+    const targetPoint = {
+        clientX: targetBox!.x + targetBox!.width / 2,
+        clientY: targetBox!.y + targetBox!.height / 2,
+    };
+    const sourcePath = await source.getAttribute("data-path");
+    const targetPath = await target.getAttribute("data-path");
+    const sourceTitle = await source.locator(":scope > .b3-list-item__text").textContent();
+    const targetTitle = await target.locator(":scope > .b3-list-item__text").textContent();
+    expect(sourcePath).toBeTruthy();
+    expect(targetPath).toBeTruthy();
+
+    await dispatchTouchEvent(source, "touchstart", startPoint);
+    await expect(source).toHaveAttribute("draggable", "false");
+    // 等待应用的长按门槛，确保后续移动进入触摸拖拽而不是滚动。
+    await page.waitForTimeout(500);
+    await dispatchTouchEvent(source, "touchmove", targetPoint);
+    await dispatchTouchEvent(source, "touchmove", targetPoint);
+    await nextAnimationFrame(page);
+    const adjustedTargetPoint = {...targetPoint, clientY: targetPoint.clientY + 4};
+    await dispatchTouchEvent(source, "touchmove", adjustedTargetPoint);
+    await nextAnimationFrame(page);
+    await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
+    const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
+        action: window.siyuan.languages.dragTipMoveChild.replace("${x}", targetName),
+        title: sourceName,
+    }), {
+        sourceName: sourceTitle?.trim() || "",
+        targetName: targetTitle?.trim() || "",
+    });
+    await expect(page.locator(".drag-tip__title")).toHaveText(expectedTip.title);
+    await expect(page.locator(".drag-tip__action")).toHaveText(expectedTip.action);
+
+    const moveResponse = page.waitForResponse(response => {
+        if (!response.url().endsWith("/api/filetree/moveDocs") || response.request().method() !== "POST") {
+            return false;
+        }
+        const payload = response.request().postDataJSON() as {fromPaths?: string[]; toPath?: string};
+        return payload.fromPaths?.includes(sourcePath!) === true && payload.toPath === targetPath;
+    }, {timeout: 30000});
+    await dispatchTouchEvent(source, "touchend", adjustedTargetPoint);
     expect((await moveResponse).ok()).toBe(true);
 };
 
