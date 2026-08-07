@@ -3,10 +3,18 @@ import {expect, test} from "./fixtures";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {assertValidListDOM, assertValidSyListTree} from "./helpers/listAssertions";
 import {getDocumentEditor} from "./helpers/testNotebook";
+import {SiyuanAPI} from "./helpers/siyuanAPI";
 
 interface IDragSession {
     dataTransfer: JSHandle<DataTransfer>;
     endTarget: ElementHandle<HTMLElement>;
+}
+
+interface ISyNode {
+    ID?: string;
+    Data?: string;
+    Type?: string;
+    Children?: ISyNode[];
 }
 
 const getDirectListItemTexts = (list: Locator) => list.evaluate((element) =>
@@ -23,7 +31,10 @@ const getDirectContentTexts = (listItem: Locator) => listItem.evaluate((element)
 const startGutterBlockDrag = async (page: Page, source: Locator, expectedType: string) => {
     const id = await source.getAttribute("data-node-id");
     await page.mouse.move(0, 0);
-    await source.hover();
+    const hoverTarget = await source.getAttribute("data-type") === "NodeList"
+        ? source.locator('[contenteditable="true"]').first()
+        : source;
+    await hoverTarget.hover();
     const handle = page.locator(`.protyle-gutters button[data-node-id="${id}"] > span[draggable="true"]`);
     await expect(handle).toBeVisible();
     const endTarget = await handle.locator("xpath=../..").elementHandle() as ElementHandle<HTMLElement>;
@@ -36,6 +47,8 @@ const startGutterBlockDrag = async (page: Page, source: Locator, expectedType: s
 };
 
 const startContentBlockDrag = (page: Page, source: Locator) => startGutterBlockDrag(page, source, "nodeparagraph");
+
+const startListBlockDrag = (page: Page, source: Locator) => startGutterBlockDrag(page, source, "nodelist");
 
 const startListItemDrag = async (page: Page, source: Locator) => {
     const action = source.locator(":scope > .protyle-action").first();
@@ -99,6 +112,144 @@ const dragOverWithoutListTarget = async (session: IDragSession, eventTarget: Loc
     expect(state.indicators).toEqual([]);
     expect([initialTip, moveTip]).toContain(state.tip);
 };
+
+const dragOverHorizontalEdge = async (session: IDragSession, editor: Locator, eventTarget: Locator,
+                                      boundaryTarget: Locator, position: "left" | "right") => {
+    const boundaryBox = await boundaryTarget.boundingBox();
+    const content = eventTarget.locator('[contenteditable="true"]').first();
+    const contentBox = await content.boundingBox();
+    if (!boundaryBox || !contentBox) {
+        throw new Error("horizontal drop target is not visible");
+    }
+    const clientX = position === "left" ? boundaryBox.x + 2 : boundaryBox.x + boundaryBox.width - 2;
+    const clientY = contentBox.y + contentBox.height / 2;
+    await content.dispatchEvent("dragover", {dataTransfer: session.dataTransfer, clientX, clientY});
+    await content.dispatchEvent("dragover", {dataTransfer: session.dataTransfer, clientX, clientY});
+    const indicator = editor.locator(`.dragover__${position}`);
+    await expect(indicator).toHaveCount(1);
+    return indicator;
+};
+
+const getListSuperBlockDOMState = async (editor: Locator) => editor.evaluate(element => {
+    const superBlock = element.querySelector<HTMLElement>(":scope > [data-type=\"NodeSuperBlock\"]");
+    return {
+        childIDs: superBlock ? Array.from(superBlock.children)
+            .filter(child => child.hasAttribute("data-node-id"))
+            .map(child => child.getAttribute("data-node-id") || "") : [],
+        childTypes: superBlock ? Array.from(superBlock.children)
+            .filter(child => child.hasAttribute("data-node-id"))
+            .map(child => child.getAttribute("data-type") || "") : [],
+        layout: superBlock?.getAttribute("data-sb-layout") || "",
+        nestedSuperBlocks: superBlock?.querySelectorAll('[data-type="NodeSuperBlock"]').length || 0,
+        superBlocks: element.querySelectorAll('[data-type="NodeSuperBlock"]').length,
+        topTypes: Array.from(element.children)
+            .filter(child => child.hasAttribute("data-node-id"))
+            .map(child => child.getAttribute("data-type") || ""),
+    };
+});
+
+const getPersistedListSuperBlockState = async (api: SiyuanAPI, docID: string) => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const superBlock = (document.Children || []).find(node => node.Type === "NodeSuperBlock");
+    const contentChildren = (superBlock?.Children || []).filter(node => node.ID);
+    const nestedSuperBlocks = (node: ISyNode): number => (node.Children || []).reduce((count, child) =>
+        count + (child.Type === "NodeSuperBlock" ? 1 : 0) + nestedSuperBlocks(child), 0);
+    return {
+        childIDs: contentChildren.map(node => node.ID || ""),
+        childTypes: contentChildren.map(node => node.Type || ""),
+        layout: (superBlock?.Children || []).find(node => node.Type === "NodeSuperBlockLayoutMarker")?.Data || "",
+        nestedSuperBlocks: superBlock ? nestedSuperBlocks(superBlock) : 0,
+        topTypes: (document.Children || []).map(node => node.Type || ""),
+    };
+};
+
+const expectListSuperBlock = async (editor: Locator, api: SiyuanAPI, docID: string, childIDs: string[]) => {
+    const expected = {
+        childIDs,
+        childTypes: childIDs.map(() => "NodeList"),
+        layout: "col",
+        nestedSuperBlocks: 0,
+        topTypes: ["NodeSuperBlock"],
+    };
+    await expect.poll(() => getListSuperBlockDOMState(editor)).toEqual({...expected, superBlocks: 1});
+    await expect.poll(() => getPersistedListSuperBlockState(api, docID)).toEqual(expected);
+    await assertValidListDOM(editor);
+    await assertValidSyListTree(api, docID, editor);
+};
+
+test.describe("list block and super block dragging", () => {
+    test.describe.configure({mode: "parallel"});
+
+    test("forms a horizontal super block from two complete lists", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "List Horizontal Super Block E2E",
+            "1. Target 1\n2. Target 2\n\n* Source A\n* Source B",
+        );
+        const lists = editor.locator(":scope > [data-type=\"NodeList\"]");
+        await expect(lists).toHaveCount(2);
+        const target = lists.nth(0);
+        const source = lists.nth(1);
+        const targetID = await target.getAttribute("data-node-id");
+        const sourceID = await source.getAttribute("data-node-id");
+        expect(targetID).toBeTruthy();
+        expect(sourceID).toBeTruthy();
+        const session = await startListBlockDrag(page, source);
+        const dropTarget = await dragOverHorizontalEdge(session, editor, target, target, "right");
+        await expect(dropTarget).toHaveAttribute("data-type", "NodeList");
+        const expectedTip = await page.evaluate(() =>
+            window.siyuan.languages.dragTipMoveTargetBack.replace("${x}", "Target 1"));
+        await expect(page.locator(".drag-tip__action")).toHaveText(expectedTip);
+
+        await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+
+        await expectListSuperBlock(editor, siyuanAPI, docID, [targetID!, sourceID!]);
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expectListSuperBlock(reloadedEditor, siyuanAPI, docID, [targetID!, sourceID!]);
+    });
+
+    test("moves the middle list to the first column without nesting the super block", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "List Super Block Reorder E2E",
+            "{{{col\n\n* U1\n* U2\n\n1. O1\n2. O2\n\n* [ ] T1\n* [ ] T2\n\n}}}",
+        );
+        const superBlock = editor.locator(":scope > [data-type=\"NodeSuperBlock\"]");
+        await expect(superBlock).toHaveCount(1);
+        const superBlockID = await superBlock.getAttribute("data-node-id");
+        const lists = superBlock.locator(":scope > [data-type=\"NodeList\"]");
+        await expect(lists).toHaveCount(3);
+        const listIDs = await lists.evaluateAll(elements => elements.map(element =>
+            element.getAttribute("data-node-id") || ""));
+        const session = await startListBlockDrag(page, lists.nth(1));
+        const dropTarget = await dragOverHorizontalEdge(session, editor, lists.nth(0), superBlock, "left");
+        await expect(dropTarget).toHaveAttribute("data-type", "NodeSuperBlock");
+        const expectedTip = await page.evaluate(() =>
+            window.siyuan.languages.dragTipMoveTargetFront.replace("${x}", "U1"));
+        await expect(page.locator(".drag-tip__action")).toHaveText(expectedTip);
+
+        await dropTarget.dispatchEvent("drop", {dataTransfer: session.dataTransfer});
+        await finishDrag(session);
+
+        const reorderedIDs = [listIDs[1], listIDs[0], listIDs[2]];
+        await expect(editor.locator(":scope > [data-type=\"NodeSuperBlock\"]"))
+            .toHaveAttribute("data-node-id", superBlockID!);
+        await expectListSuperBlock(editor, siyuanAPI, docID, reorderedIDs);
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect(reloadedEditor.locator(":scope > [data-type=\"NodeSuperBlock\"]"))
+            .toHaveAttribute("data-node-id", superBlockID!);
+        await expectListSuperBlock(reloadedEditor, siyuanAPI, docID, reorderedIDs);
+    });
+});
 
 test.describe("content block dragging around list items", () => {
     test.describe.configure({mode: "parallel"});
