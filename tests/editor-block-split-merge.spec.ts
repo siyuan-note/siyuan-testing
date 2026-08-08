@@ -223,6 +223,9 @@ const setCrossBlockRange = async (startEditable: Locator, startOffset: number,
                     remaining -= (textNode.textContent || "").length;
                     textNode = walker.nextNode();
                 }
+                if (!textNode && requestedOffset === 0 && element.textContent === "") {
+                    return {node: element, offset: element.childNodes.length};
+                }
                 if (!textNode) {
                     throw new Error(`cannot place selection at offset ${requestedOffset}`);
                 }
@@ -424,6 +427,69 @@ test.describe("paragraph splitting and merging", () => {
 
         await page.reload();
         await expectListState(siyuanAPI, docID, await getDocumentEditor(page, docID), mergedState);
+    });
+
+    [
+        {key: "Delete", title: "deletes"},
+        {key: "ControlOrMeta+X", title: "cuts"},
+    ].forEach(({key, title}) => {
+        test(`${title} a nested-list range starting at the end of a preceding empty block`, async ({
+            page,
+            createTestDocument,
+            siyuanAPI,
+        }) => {
+            const {docID, editor: initialEditor} = await createTestDocument(
+                `Empty Block Boundary Nested List ${title} E2E`, "placeholder");
+            const emptyParagraph = initialEditor.locator(':scope > [data-type="NodeParagraph"]');
+            const emptyParagraphID = await emptyParagraph.getAttribute("data-node-id");
+            await siyuanAPI.updateBlock(emptyParagraphID!, "");
+            await siyuanAPI.post<unknown>("/api/block/appendBlock", {
+                data: "* 1111\n    * 2222\n* 33333\n* 44444",
+                dataType: "markdown",
+                parentID: docID,
+            });
+            await page.reload();
+            const editor = await getDocumentEditor(page, docID);
+            const child = (text: string): IListTreeItem => ({children: [], text});
+            const initialTree: IListTreeItem[] = [
+                {children: [child("2222")], text: "1111"},
+                {children: [], text: "33333"},
+                {children: [], text: "44444"},
+            ];
+            const changedTree: IListTreeItem[] = [
+                {children: [], text: ""},
+                {children: [], text: "33333"},
+                {children: [], text: "44444"},
+            ];
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+
+            const startEditable = editor.locator(
+                ':scope > [data-type="NodeParagraph"] > [contenteditable="true"]',
+            );
+            const listEditables = editor.locator(
+                '[data-type="NodeListItem"] > [data-type="NodeParagraph"] > [contenteditable="true"]',
+            );
+            await expect(startEditable).toHaveText("");
+            const endEditable = listEditables.nth(1);
+            const endID = await endEditable.locator("..").getAttribute("data-node-id");
+            const selectedText = await setCrossBlockRange(startEditable, 0, endEditable, 4);
+            expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("11112222");
+
+            await requestTransaction(page, () => page.keyboard.press(key));
+            await expectListTree(siyuanAPI, docID, editor, changedTree);
+
+            await requestHistoryAction(page,
+                editor.locator('[data-type="NodeListItem"] > [data-type="NodeParagraph"] ' +
+                    '> [contenteditable="true"]').filter({hasText: "33333"}),
+                UNDO_SHORTCUT, "undo");
+            await expectListTree(siyuanAPI, docID, editor, initialTree);
+            await expect.poll(() => getSelectionState(editor)).toEqual({
+                collapsed: false,
+                endID,
+                startID: emptyParagraphID,
+                text: "11112222",
+            });
+        });
     });
 
     [
