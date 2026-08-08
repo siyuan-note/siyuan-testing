@@ -1,4 +1,4 @@
-import {Locator, Page} from "@playwright/test";
+import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {openBlockMenu} from "./helpers/blockMenu";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
@@ -11,6 +11,11 @@ interface ISyNode {
     Properties?: Record<string, string>;
     Type?: string;
     Children?: ISyNode[];
+}
+
+interface IDragSession {
+    dataTransfer: JSHandle<DataTransfer>;
+    endTarget: ElementHandle<HTMLElement>;
 }
 
 const flattenNodes = (node: ISyNode): ISyNode[] => [
@@ -47,6 +52,26 @@ const requestTransaction = async (page: Page, action: () => Promise<void>) => {
         new URL(item.url()).pathname === "/api/transactions", {timeout: 15000});
     await action();
     await response;
+};
+
+const startSuperBlockDrag = async (page: Page, source: Locator) => {
+    const id = await source.getAttribute("data-node-id");
+    await page.mouse.move(0, 0);
+    await source.locator(":scope > [data-node-id]").first().hover();
+    const handle = page.locator(`.protyle-gutters button[data-node-id="${id}"] > span[draggable="true"]`);
+    await expect(handle).toBeVisible();
+    const endTarget = await handle.locator("xpath=../..").elementHandle() as ElementHandle<HTMLElement>;
+    expect(endTarget).not.toBeNull();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
+    await handle.dispatchEvent("dragstart", {dataTransfer});
+    await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
+        .toContain("nodesuperblock");
+    return {dataTransfer, endTarget} as IDragSession;
+};
+
+const finishDrag = async (session: IDragSession) => {
+    await session.endTarget.dispatchEvent("dragend", {dataTransfer: session.dataTransfer});
+    await session.dataTransfer.dispose();
 };
 
 const requestHistoryAction = async (page: Page, editor: Locator, shortcut: string,
@@ -234,6 +259,75 @@ test.describe("super block editing", () => {
             duplicateIDCount: 0,
             invalidChildren: 0,
             layout: "row",
+        });
+    });
+
+    test("reorders nested super block columns at a resize handle", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Nested Super Block Reorder E2E",
+            "{{{col\n\n{{{row\n\nA1\n\nA2\n\n}}}\n\n{{{row\n\nB1\n\nB2\n\n}}}\n\n{{{row\n\nC1\n\nC2\n\n}}}\n\n}}}",
+        );
+        const outerSuperBlock = editor.locator(':scope > [data-type="NodeSuperBlock"]');
+        await expect(outerSuperBlock).toHaveCount(1);
+        const outerSuperBlockID = await outerSuperBlock.getAttribute("data-node-id");
+        const columns = outerSuperBlock.locator(':scope > [data-type="NodeSuperBlock"]');
+        await expect(columns).toHaveCount(3);
+        expect(await columns.evaluateAll(elements => elements.map(element =>
+            element.getAttribute("data-sb-layout")))).toEqual(["row", "row", "row"]);
+        const columnIDs = await columns.evaluateAll(elements => elements.map(element =>
+            element.getAttribute("data-node-id") || ""));
+        const resizeHandles = outerSuperBlock.locator(":scope > .sb__resize");
+        await expect(resizeHandles).toHaveCount(2);
+
+        const session = await startSuperBlockDrag(page, columns.nth(0));
+        const resizeHandle = resizeHandles.nth(1);
+        const resizeBox = await resizeHandle.boundingBox();
+        if (!resizeBox) {
+            throw new Error("super block resize handle is not visible");
+        }
+        await resizeHandle.dispatchEvent("dragover", {
+            dataTransfer: session.dataTransfer,
+            clientX: resizeBox.x + resizeBox.width / 2,
+            clientY: resizeBox.y + resizeBox.height / 2,
+        });
+        await resizeHandle.dispatchEvent("dragover", {
+            dataTransfer: session.dataTransfer,
+            clientX: resizeBox.x + resizeBox.width / 2,
+            clientY: resizeBox.y + resizeBox.height / 2,
+        });
+        await expect(columns.nth(1)).toHaveClass(/(^|\s)dragover__right(\s|$)/);
+        await expect(outerSuperBlock).not.toHaveClass(/(^|\s)dragover(\s|$)/);
+
+        await requestTransaction(page, () => resizeHandle.dispatchEvent("drop", {dataTransfer: session.dataTransfer}));
+        await finishDrag(session);
+
+        const reorderedIDs = [columnIDs[1], columnIDs[0], columnIDs[2]];
+        await expect(outerSuperBlock).toHaveAttribute("data-node-id", outerSuperBlockID!);
+        await expect.poll(() => getSuperBlockDOMState(outerSuperBlock)).toEqual({
+            childIDs: reorderedIDs,
+            duplicateIDCount: 0,
+            invalidChildren: 0,
+            layout: "col",
+        });
+        await expect.poll(() => getPersistedSuperBlockState(siyuanAPI, docID)).toEqual({
+            childIDs: reorderedIDs,
+            id: outerSuperBlockID,
+            layout: "col",
+            topTypes: ["NodeSuperBlock"],
+        });
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        await expect.poll(() => getSuperBlockDOMState(
+            reloadedEditor.locator(':scope > [data-type="NodeSuperBlock"]'))).toEqual({
+            childIDs: reorderedIDs,
+            duplicateIDCount: 0,
+            invalidChildren: 0,
+            layout: "col",
         });
     });
 });
