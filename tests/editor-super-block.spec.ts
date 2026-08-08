@@ -82,7 +82,9 @@ const mergeSelectedBlocks = async (page: Page, block: Locator, layout: "hLayout"
 
 const useSuperBlockMenu = async (page: Page, superBlock: Locator, optionID: string) => {
     const menu = await openMenuForBlock(page, superBlock);
-    const option = menu.locator(`[data-id="${optionID}"]`).first();
+    const superBlockMenu = menu.locator('[data-id="superBlock"]').first();
+    await superBlockMenu.hover();
+    const option = superBlockMenu.locator(`.b3-menu__submenu [data-id="${optionID}"]`).first();
     await expect(option).toBeVisible();
     await requestTransaction(page, () => option.click());
 };

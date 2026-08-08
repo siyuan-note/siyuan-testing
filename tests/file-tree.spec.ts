@@ -46,10 +46,11 @@ test.describe("file tree", () => {
             );
             await expect(notebookRoot).toBeVisible({timeout: 15000});
             await expandTreeItem(notebookRoot);
-            const source = page.locator(
+            const fileTree = page.locator(".sy__file");
+            const source = fileTree.locator(
                 `li[data-type="navigation-file"][data-node-id="${sourceDocument.docID}"]`,
             );
-            const target = page.locator(
+            const target = fileTree.locator(
                 `li[data-type="navigation-file"][data-node-id="${targetDocument.docID}"]`,
             );
 
