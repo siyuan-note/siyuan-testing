@@ -24,10 +24,10 @@ test.describe("file tree", () => {
                 }
             }
             await expect(docItem).toBeVisible({timeout: 10000});
-            await docItem.click({force: true});
+            await docItem.locator(":scope > .b3-list-item__text").click();
 
-            await expect(page.locator(`.protyle-title[data-node-id="${firstDocument.docID}"]`)).toBeVisible();
-            await expect(await getDocumentEditor(page, firstDocument.docID)).toBeVisible();
+            const editor = await getDocumentEditor(page, firstDocument.docID);
+            await expect(editor).toBeVisible();
             await expect(page.locator(`.protyle-breadcrumb__item[data-node-id="${firstDocument.docID}"]`).last())
                 .toBeVisible();
         } finally {
