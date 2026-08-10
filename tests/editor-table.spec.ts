@@ -145,6 +145,23 @@ const dragSelectCells = async (page: Page, startCell: Locator, endCell: Locator)
     await page.mouse.down();
     await page.mouse.move(endBox!.x + endBox!.width / 2, endBox!.y + endBox!.height / 2, {steps: 8});
     await page.mouse.up();
+    const selection = page.locator(".protyle-table-control__selection:visible");
+    await expect(selection).toHaveCount(1);
+    await expect.poll(async () => {
+        const selectionBox = await selection.boundingBox();
+        if (!selectionBox) {
+            return false;
+        }
+        const left = Math.min(startBox!.x, endBox!.x);
+        const top = Math.min(startBox!.y, endBox!.y);
+        const right = Math.max(startBox!.x + startBox!.width, endBox!.x + endBox!.width);
+        const bottom = Math.max(startBox!.y + startBox!.height, endBox!.y + endBox!.height);
+        const tolerance = 2;
+        return selectionBox.x <= left + tolerance &&
+            selectionBox.y <= top + tolerance &&
+            selectionBox.x + selectionBox.width >= right - tolerance &&
+            selectionBox.y + selectionBox.height >= bottom - tolerance;
+    }).toBe(true);
 };
 
 const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
@@ -829,6 +846,9 @@ test.describe("table editing", () => {
         await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(3);
 
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Escape");
+        await expect(page.locator("#commonMenu:not(.fn__none)")).toHaveCount(0);
         await dragSelectCells(page, firstCell, secondCell);
         menu = await openTableControlMenu(page, secondCell, "cell");
         colorItem = getMenuItemByLabel(page, menu, labels.color);
