@@ -13,6 +13,8 @@ const encryptedNotebookTests = [
     "**/encrypted-notebook.spec.ts",
 ];
 
+const getWorkerCount = () => ["main", "editor"].includes(process.env.SIYUAN_E2E_SHARD || "") ? 2 : 1;
+
 const getFocusedProject = () => {
     switch (process.env.SIYUAN_E2E_SHARD) {
         case undefined:
@@ -30,7 +32,6 @@ const getFocusedProject = () => {
                 ],
                 // main shard 的测试互相独立（独立文档 + teardown），并行提速；
                 // retries 兜底并行下偶发的拖拽时序 flake
-                workers: 2,
                 retries: 1,
             };
         case "editor":
@@ -40,7 +41,6 @@ const getFocusedProject = () => {
                 testIgnore: attributeViewTests,
                 // editor 是多文件 shard，按文件并行提速（测试互相独立：独立文档 + teardown）；
                 // retries 兜底并行下偶发的粘贴/控件时序 flake
-                workers: 2,
                 retries: 1,
             };
         case "attribute-view":
@@ -58,13 +58,14 @@ export default defineConfig({
     testDir: "./tests",
     timeout: 60000,
     retries: 0,
-    workers: 1,
+    workers: getWorkerCount(),
     use: {
         baseURL: getBaseURL(),
         headless: true,
         viewport: {width: 1440, height: 900},
         actionTimeout: 10000,
         channel: "chrome",
+        trace: "on-first-retry",
     },
     projects: [
         {
