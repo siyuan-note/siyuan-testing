@@ -620,6 +620,40 @@ test.describe("paragraph splitting and merging", () => {
         await expect(editor.locator('[data-type="NodeParagraph"] [data-type~="strong"]')).toHaveText(["ad"]);
     });
 
+    test("persists text typed over a cross-block range after reloading", async ({
+        page,
+        createTestDocument,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Cross Block Typed Replacement E2E",
+            "ab\n\ncd\n\nef",
+        );
+        const initialState = (await getDOMState(editor)).paragraphs;
+        const editables = editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]');
+        const selectedText = await setCrossBlockRange(editables.first(), 1, editables.last(), 1);
+        expect(selectedText.replace(/[\s\u200b]/g, "")).toBe("bcde");
+
+        await requestTransaction(page, () => page.keyboard.insertText("X"));
+        await expect(editor.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(1);
+        const replacedState = (await getDOMState(editor)).paragraphs;
+        expect(replacedState).toEqual([{id: initialState[0].id, text: "aXf"}]);
+        await expectDocumentState(siyuanAPI, docID, editor, replacedState);
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]'),
+            UNDO_SHORTCUT, "undo");
+        await expectDocumentState(siyuanAPI, docID, editor, initialState);
+
+        await requestHistoryAction(page,
+            editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]').last(),
+            REDO_SHORTCUT, "redo");
+        await expectDocumentState(siyuanAPI, docID, editor, replacedState);
+
+        await page.reload();
+        await expectDocumentState(siyuanAPI, docID, await getDocumentEditor(page, docID), replacedState);
+    });
+
     test("toggles a bold mark across blocks without losing the range", async ({
         page,
         createTestDocument,
