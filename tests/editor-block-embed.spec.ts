@@ -383,10 +383,19 @@ test.describe("block query embeds", () => {
         await expect(embeddedTable).toBeVisible({timeout: 15000});
         await expect(sourceTable).toBeAttached();
 
-        await sourceTable.evaluate(element => element.scrollIntoView({block: "center"}));
         const content = editor.locator(
             "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle-content ')][1]",
         );
+        await sourceTable.evaluate(element => {
+            const contentElement = element.closest<HTMLElement>(".protyle-content");
+            if (!contentElement) {
+                throw new Error("editor content container is unavailable");
+            }
+            const contentRect = contentElement.getBoundingClientRect();
+            const tableRect = element.getBoundingClientRect();
+            contentElement.scrollTop += tableRect.top - contentRect.top -
+                (contentElement.clientHeight - tableRect.height) / 2;
+        });
         await waitForScrollSettled(content);
         await expect(sourceTable).toBeInViewport();
         await expect(embeddedTable).not.toBeInViewport();
