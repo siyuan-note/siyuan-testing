@@ -82,6 +82,7 @@ const requestHistoryAction = async (page: Page, table: Locator, action: "undo" |
 };
 
 const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
+    await cell.click();
     await selectCellContents(cell, true);
     await cell.click({button: "right"});
     const menu = page.locator("#commonMenu:not(.fn__none)");
@@ -110,15 +111,17 @@ const getDOMTableState = async (table: Locator) => ({
         Array.from(row.querySelectorAll("th")).map(cell => cell.textContent?.replace(/\u200b/g, "").trim() || ""))),
 });
 
+const getTableRows = (table: ISyNode | undefined) => [
+    ...(table?.Children?.find(node => node.Type === "NodeTableHead")?.Children || []),
+    ...(table?.Children?.filter(node => node.Type === "NodeTableRow") || []),
+];
+
 const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
     const document = await api.readDocument<ISyNode>(docID);
     const nodes = flattenNodes(document);
     const ids = nodes.flatMap(node => node.ID ? [node.ID] : []);
     const table = nodes.find(node => node.Type === "NodeTable");
-    const tableRows = [
-        ...(table?.Children?.find(node => node.Type === "NodeTableHead")?.Children || []),
-        ...(table?.Children?.filter(node => node.Type === "NodeTableRow") || []),
-    ];
+    const tableRows = getTableRows(table);
     return {
         aligns: table?.TableAligns?.length || 0,
         columns: tableRows.map(row => row.Children?.filter(node => node.Type === "NodeTableCell").length || 0),
@@ -128,6 +131,18 @@ const getPersistedTableState = async (api: SiyuanAPI, docID: string) => {
         tableCount: nodes.filter(node => node.Type === "NodeTable").length,
         text: table ? getNodeText(table) : "",
     };
+};
+
+const getPersistedMergedCells = async (api: SiyuanAPI, docID: string) => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const table = flattenNodes(document).find(node => node.Type === "NodeTable");
+    return getTableRows(table).flatMap((row, rowIndex) =>
+        (row.Children || []).filter(node => node.Type === "NodeTableCell").map((cell, columnIndex) => ({
+            colspan: Number(cell.Properties?.colspan || 1),
+            column: columnIndex,
+            row: rowIndex,
+            rowspan: Number(cell.Properties?.rowspan || 1),
+        }))).filter(cell => cell.colspan > 1 || cell.rowspan > 1);
 };
 
 type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
@@ -206,6 +221,16 @@ const getMenuItemByLabel = (page: Page, scope: Locator, label: string) =>
     scope.locator(".b3-menu__item", {
         has: page.locator(".b3-menu__label", {hasText: label}),
     }).first();
+
+const mergeTableCells = async (page: Page, startCell: Locator, endCell: Locator) => {
+    await dragSelectCells(page, startCell, endCell);
+    await endCell.click({button: "right"});
+    const menu = page.locator("#commonMenu:not(.fn__none)");
+    await expect(menu).toBeVisible();
+    const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
+    await requestTransaction(page, () => getMenuItemByLabel(page, menu, mergeLabel).click());
+    await expect(menu).toBeHidden();
+};
 
 const clickTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
     await hoverTableControl(page, cell, type);
@@ -859,7 +884,7 @@ test.describe("table editing", () => {
         await expect(menu.locator('[data-id="useDefaultHorizontalAlign"] .b3-menu__checked')).toHaveCount(0);
     });
 
-    test("explains disabled table actions when merged cells prevent dragging", async ({
+    test("keeps merged-cell drag and duplicate actions disabled while allowing deletion", async ({
         createTestDocument,
         page,
     }) => {
@@ -902,11 +927,10 @@ test.describe("table editing", () => {
         const duplicateItem = getMenuItemByLabel(page, menu, labels.duplicate);
         const deleteItem = getMenuItemByLabel(page, menu, labels.deleteRow);
         await expect(duplicateItem).toBeDisabled();
-        await expect(deleteItem).toBeDisabled();
+        await expect(deleteItem).toBeEnabled();
         await expect(duplicateItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
             labels.splitMergedCellTip);
-        await expect(deleteItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label",
-            labels.splitMergedCellTip);
+        await expect(deleteItem.locator(":scope > .b3-menu__action")).toHaveCount(0);
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
     });
 
@@ -1070,5 +1094,124 @@ test.describe("table editing", () => {
         await expect.poll(() => getDOMTableState(
             reloadedEditor.locator(':scope > [data-type="NodeTable"]'),
         ), {timeout: 30000}).toEqual(reducedState);
+    });
+
+    test("deletes a column through a horizontally merged cell and persists the shrunken span", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Delete Column Through Merged Cell E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Horizontal | Covered | Ready |",
+                "| Alpha | 1 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const firstBodyRow = table.locator("tbody tr").first();
+        await mergeTableCells(page, firstBodyRow.locator("td").nth(0), firstBodyRow.locator("td").nth(1));
+
+        const mergedState = {
+            body: [["HorizontalCovered", "", "Ready"], ["Alpha", "1", "Done"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(mergedState);
+        await expect(firstBodyRow.locator("td").first()).toHaveAttribute("colspan", "2");
+        await expect.poll(() => getPersistedMergedCells(siyuanAPI, docID), {timeout: 30000}).toEqual([
+            {colspan: 2, column: 0, row: 1, rowspan: 1},
+        ]);
+
+        await chooseTableCellAction(page, table.locator("tbody tr").nth(1).locator("td").first(), "deleteColumn");
+        const reducedState = {
+            body: [["HorizontalCovered", "Ready"], ["1", "Done"]],
+            duplicateIDs: 0,
+            head: [["Quantity", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+        await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            aligns: 2,
+            columns: [2, 2, 2],
+            duplicateIDs: 0,
+            mismatchedPropertyIDs: 0,
+            tableCount: 1,
+        });
+        await expect.poll(() => getPersistedMergedCells(siyuanAPI, docID), {timeout: 30000}).toEqual([]);
+
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(mergedState);
+        await expect(table.locator("tbody tr").first().locator("td").first()).toHaveAttribute("colspan", "2");
+
+        await requestHistoryAction(page, table, "redo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        const reloadedTable = reloadedEditor.locator(':scope > [data-type="NodeTable"]');
+        await expect.poll(() => getDOMTableState(reloadedTable), {timeout: 30000}).toEqual(reducedState);
+        await expect(reloadedTable.locator("[colspan], [rowspan]")).toHaveCount(0);
+    });
+
+    test("deletes a row through a vertically merged cell and persists the migrated content", async ({
+        createTestDocument,
+        page,
+        siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument(
+            "Table Delete Row Through Merged Cell E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+                "| Gamma | 3 | Waiting |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const bodyRows = table.locator("tbody tr");
+        await mergeTableCells(page, bodyRows.nth(0).locator("td").nth(2), bodyRows.nth(1).locator("td").nth(2));
+
+        const mergedState = {
+            body: [["Alpha", "1", "ReadyDone"], ["Beta", "2", ""], ["Gamma", "3", "Waiting"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(mergedState);
+        await expect(bodyRows.first().locator("td").nth(2)).toHaveAttribute("rowspan", "2");
+        await expect.poll(() => getPersistedMergedCells(siyuanAPI, docID), {timeout: 30000}).toEqual([
+            {colspan: 1, column: 2, row: 1, rowspan: 2},
+        ]);
+
+        await chooseTableCellAction(page, bodyRows.first().locator("td").first(), "deleteRow");
+        const reducedState = {
+            body: [["Beta", "2", "ReadyDone"], ["Gamma", "3", "Waiting"]],
+            duplicateIDs: 0,
+            head: [["Item", "Quantity", "Status"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+        await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            aligns: 3,
+            columns: [3, 3, 3],
+            duplicateIDs: 0,
+            mismatchedPropertyIDs: 0,
+            tableCount: 1,
+        });
+        await expect.poll(() => getPersistedMergedCells(siyuanAPI, docID), {timeout: 30000}).toEqual([]);
+
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(mergedState);
+        await expect(table.locator("tbody tr").first().locator("td").nth(2)).toHaveAttribute("rowspan", "2");
+
+        await requestHistoryAction(page, table, "redo");
+        await expect.poll(() => getDOMTableState(table)).toEqual(reducedState);
+
+        await page.reload();
+        const reloadedEditor = await getDocumentEditor(page, docID);
+        const reloadedTable = reloadedEditor.locator(':scope > [data-type="NodeTable"]');
+        await expect.poll(() => getDOMTableState(reloadedTable), {timeout: 30000}).toEqual(reducedState);
+        await expect(reloadedTable.locator("[colspan], [rowspan]")).toHaveCount(0);
     });
 });
