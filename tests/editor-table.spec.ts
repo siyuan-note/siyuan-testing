@@ -908,7 +908,7 @@ test.describe("table editing", () => {
         const labels = await page.evaluate(() => ({
             splitMergedCellTip: window.siyuan.languages.splitMergedCellTip,
             deleteRow: window.siyuan.languages["delete-row"],
-            duplicate: window.siyuan.languages.duplicate,
+            duplicate: window.siyuan.languages.duplicateCopy,
             merge: window.siyuan.languages.mergeCell,
         }));
         await requestTransaction(page, () => getMenuItemByLabel(page, menu, labels.merge).click());
@@ -932,6 +932,36 @@ test.describe("table editing", () => {
             labels.splitMergedCellTip);
         await expect(deleteItem.locator(":scope > .b3-menu__action")).toHaveCount(0);
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
+    });
+
+    test("explains why table header and body cells cannot be merged", async ({
+        createTestDocument,
+        page,
+    }) => {
+        const {editor} = await createTestDocument(
+            "Table Header Body Merge State E2E",
+            [
+                "| Item | Quantity | Status |",
+                "| --- | ---: | --- |",
+                "| Alpha | 1 | Ready |",
+                "| Beta | 2 | Done |",
+            ].join("\n"),
+        );
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const headerCell = table.locator("thead th").first();
+        const bodyCell = table.locator("tbody td").first();
+        await dragSelectCells(page, headerCell, bodyCell);
+        await bodyCell.click({button: "right"});
+
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
+        const labels = await page.evaluate(() => ({
+            merge: window.siyuan.languages.mergeCell,
+            reason: window.siyuan.languages.tableHeaderBodyMergeUnsupported,
+        }));
+        const mergeItem = getMenuItemByLabel(page, menu, labels.merge);
+        await expect(mergeItem).toBeDisabled();
+        await expect(mergeItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label", labels.reason);
     });
 
     test("clears rectangle-selected cells and persists the result", async ({
