@@ -11,6 +11,7 @@ import {
     TestDocumentFactory,
     TestDocumentTracker,
     TestNotebookFactory,
+    TestNotebookTracker,
 } from "./helpers/testNotebook";
 import {IAppearanceSettings, SiyuanAPI} from "./helpers/siyuanAPI";
 import {openWorkspace} from "./helpers/runtime";
@@ -24,6 +25,7 @@ interface ITestFixtures {
     createTestDocument: TestDocumentFactory;
     createTestNotebook: TestNotebookFactory;
     trackTestDocument: TestDocumentTracker;
+    trackTestNotebook: TestNotebookTracker;
     globalSettings: IGlobalSettings;
     fullEntryVisibility: void;
     testDocumentCleanup: void;
@@ -54,6 +56,13 @@ export const test = base.extend<ITestFixtures & IInternalFixtures>({
     },
     createTestNotebook: async ({siyuanAPI, createdTestNotebooks}, use) => {
         await use(namePrefix => createTestNotebook(siyuanAPI, createdTestNotebooks, namePrefix));
+    },
+    trackTestNotebook: async ({createdTestNotebooks}, use) => {
+        await use((notebook) => {
+            if (!createdTestNotebooks.some(item => item.id === notebook.id)) {
+                createdTestNotebooks.push(notebook);
+            }
+        });
     },
     trackTestDocument: async ({createdTestDocuments}, use) => {
         await use((document) => {

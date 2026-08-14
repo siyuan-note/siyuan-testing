@@ -266,4 +266,90 @@ test.describe("document import", () => {
 
         await siyuanAPI.removeWorkspaceFile(`/data/${assetPath}`);
     });
+
+    test("round-trips multiple notebooks while preserving cross-notebook references", async ({
+        createTestNotebook,
+        page,
+        siyuanAPI,
+        trackTestNotebook,
+    }) => {
+        test.slow();
+        const sourceNotebook = await createTestNotebook("Bundle Source");
+        const targetNotebook = await createTestNotebook("Bundle Target");
+        const sourceMarker = `Notebook bundle source ${Date.now()}`;
+        const targetMarker = `Notebook bundle target ${Date.now()}`;
+        const sourceTitle = `Notebook Bundle Source Document ${Date.now()}`;
+        const targetTitle = `Notebook Bundle Target Document ${Date.now()}`;
+        const sourceDocID = await siyuanAPI.createDocument(sourceNotebook.id, sourceTitle, sourceMarker);
+        const targetDocID = await siyuanAPI.createDocument(targetNotebook.id, targetTitle, targetMarker);
+
+        let sourceBlockID = "";
+        let targetBlockID = "";
+        await expect.poll(async () => {
+            sourceBlockID = (await siyuanAPI.searchBlocks(sourceMarker, sourceNotebook.id)).blocks.find(
+                block => block.rootID === sourceDocID && block.type === "NodeParagraph",
+            )?.id || "";
+            targetBlockID = (await siyuanAPI.searchBlocks(targetMarker, targetNotebook.id)).blocks.find(
+                block => block.rootID === targetDocID && block.type === "NodeParagraph",
+            )?.id || "";
+            return {sourceBlockID, targetBlockID};
+        }, {timeout: 30000}).toEqual({
+            sourceBlockID: expect.stringMatching(/^\d{14}-[a-z0-9]{7}$/),
+            targetBlockID: expect.stringMatching(/^\d{14}-[a-z0-9]{7}$/),
+        });
+        await siyuanAPI.updateBlock(sourceBlockID, `${sourceMarker} ((${targetBlockID} "Imported target"))`);
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument<unknown>(sourceDocID)), {
+            timeout: 30000,
+        }).toContain(targetBlockID);
+
+        const exported = await siyuanAPI.post<{zip: string}>("/api/export/exportNotebooksSY", {
+            notebooks: [sourceNotebook.id, targetNotebook.id],
+        }, 60000);
+        const archive = await siyuanAPI.downloadFile(exported.zip);
+        expect(archive.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+        const imported = await siyuanAPI.importNotebookArchive(archive, "notebook-bundle.sy.zip");
+        const importedNotebooks = imported.notebooks || (imported.notebook ? [imported.notebook] : []);
+        importedNotebooks.forEach(notebook => trackTestNotebook({id: notebook.id, name: notebook.name}));
+        expect(importedNotebooks).toHaveLength(2);
+        const importedSourceNotebook = importedNotebooks.find(notebook => notebook.name === sourceNotebook.name);
+        const importedTargetNotebook = importedNotebooks.find(notebook => notebook.name === targetNotebook.name);
+        expect(importedSourceNotebook?.id).toBeTruthy();
+        expect(importedTargetNotebook?.id).toBeTruthy();
+        expect(importedSourceNotebook!.id).not.toBe(sourceNotebook.id);
+        expect(importedTargetNotebook!.id).not.toBe(targetNotebook.id);
+
+        let importedSourceDocID = "";
+        let importedTargetDocID = "";
+        await expect.poll(async () => {
+            importedSourceDocID = (await siyuanAPI.listAllDocuments(importedSourceNotebook!.id)).find(
+                document => document.name === sourceTitle,
+            )?.id || "";
+            importedTargetDocID = (await siyuanAPI.listAllDocuments(importedTargetNotebook!.id)).find(
+                document => document.name === targetTitle,
+            )?.id || "";
+            return {importedSourceDocID, importedTargetDocID};
+        }, {timeout: 30000}).toEqual({
+            importedSourceDocID: expect.stringMatching(/^\d{14}-[a-z0-9]{7}$/),
+            importedTargetDocID: expect.stringMatching(/^\d{14}-[a-z0-9]{7}$/),
+        });
+        expect((await siyuanAPI.getDocumentPath(importedSourceDocID)).notebook).toBe(importedSourceNotebook!.id);
+        expect((await siyuanAPI.getDocumentPath(importedTargetDocID)).notebook).toBe(importedTargetNotebook!.id);
+
+        const importedSource = await siyuanAPI.readDocument<ISyNode>(importedSourceDocID);
+        const importedTarget = await siyuanAPI.readDocument<ISyNode>(importedTargetDocID);
+        const importedTargetBlock = flattenNodes(importedTarget).find(node => node.Type === "NodeParagraph");
+        const importedReference = flattenNodes(importedSource).find(node => node.Type === "NodeTextMark" &&
+            node.TextMarkBlockRefID);
+        expect(importedTargetBlock?.ID).toBeTruthy();
+        expect(importedTargetBlock?.ID).not.toBe(targetBlockID);
+        expect(importedReference?.TextMarkBlockRefID).toBe(importedTargetBlock!.ID);
+
+        await openWorkspace(page, `/?id=${importedSourceDocID}`);
+        const editor = await getDocumentEditor(page, importedSourceDocID);
+        await expect(editor).toContainText(sourceMarker);
+        await expect(editor.locator(
+            `[data-type~="block-ref"][data-id="${importedTargetBlock!.ID}"]`,
+        )).toBeVisible();
+    });
 });

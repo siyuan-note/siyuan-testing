@@ -14,6 +14,11 @@ export interface INotebook {
     unlocked: boolean;
 }
 
+export interface INotebookImportResult {
+    notebook?: INotebook;
+    notebooks?: INotebook[];
+}
+
 export interface IEncryptedNotebookStatus {
     enabled: boolean;
     count: number;
@@ -665,6 +670,24 @@ export class SiyuanAPI {
         if (result.code !== 0) {
             throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
         }
+    }
+
+    async importNotebookArchive(archive: Buffer, name: string) {
+        const path = "/api/import/importSYNotebook";
+        const response = await this.request.post(this.resolve(path), {
+            multipart: {
+                file: {buffer: archive, mimeType: "application/zip", name},
+            },
+            timeout: 60000,
+        });
+        if (!response.ok()) {
+            throw new Error(`${path} returned HTTP ${response.status()}: ${await response.text()}`);
+        }
+        const result = await response.json() as ISiyuanResponse<INotebookImportResult>;
+        if (result.code !== 0) {
+            throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
+        }
+        return result.data;
     }
 
     async readDocument<T>(id: string): Promise<T> {

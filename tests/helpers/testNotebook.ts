@@ -26,6 +26,7 @@ export interface ICreatedTestNotebook {
 export type TestDocumentFactory = (titlePrefix: string, markdown?: string) => Promise<ITestDocument>;
 export type TestDocumentTracker = (document: ICreatedTestDocument) => void;
 export type TestNotebookFactory = (namePrefix: string) => Promise<ICreatedTestNotebook>;
+export type TestNotebookTracker = (notebook: ICreatedTestNotebook) => void;
 
 export const ensureTestNotebook = async (api: SiyuanAPI) => {
     const notebooks = await api.listNotebooks();
