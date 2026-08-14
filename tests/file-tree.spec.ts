@@ -392,17 +392,30 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
     expect((await moveResponse).ok()).toBe(true);
 };
 
-const dispatchTouchEvent = (target: Locator, type: "touchstart" | "touchmove" | "touchend", point: {
-    clientX: number,
-    clientY: number,
-}) => target.evaluate((element, eventInit) => {
+const dispatchTouchEvent = (source: Locator, type: "touchstart" | "touchmove" | "touchend", options: {
+    targetNodeID?: string,
+    offsetY?: number,
+} = {}) => source.evaluate((element, eventInit) => {
+    // 在页面内同步定位目标并派发事件，避免并行用例更新文件树后继续使用旧坐标。
+    let pointElement: Element | null = element;
+    if (eventInit.targetNodeID) {
+        pointElement = element.closest(".sy__file")?.querySelector(
+            `li[data-type="navigation-file"][data-node-id="${eventInit.targetNodeID}"]`,
+        ) || null;
+    }
+    if (!pointElement) {
+        throw new Error(`Unable to find touch target [${eventInit.targetNodeID}]`);
+    }
+    const rect = pointElement.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2 + (eventInit.offsetY || 0);
     const touch = new Touch({
         identifier: 1,
         target: element,
-        clientX: eventInit.clientX,
-        clientY: eventInit.clientY,
-        screenX: eventInit.clientX,
-        screenY: eventInit.clientY,
+        clientX,
+        clientY,
+        screenX: clientX,
+        screenY: clientY,
         radiusX: 5,
         radiusY: 5,
         force: 1,
@@ -416,40 +429,29 @@ const dispatchTouchEvent = (target: Locator, type: "touchstart" | "touchmove" | 
         targetTouches: activeTouches,
         changedTouches: [touch],
     }));
-}, {...point, type});
+}, {...options, type});
 
 const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Locator) => {
     await expect(source).toBeVisible({timeout: 15000});
     await expect(target).toBeVisible({timeout: 15000});
     await target.evaluate(element => element.scrollIntoView({block: "center"}));
-    const sourceBox = await source.boundingBox();
-    const targetBox = await target.boundingBox();
-    expect(sourceBox).not.toBeNull();
-    expect(targetBox).not.toBeNull();
-    const startPoint = {
-        clientX: sourceBox!.x + sourceBox!.width / 2,
-        clientY: sourceBox!.y + sourceBox!.height / 2,
-    };
-    const targetPoint = {
-        clientX: targetBox!.x + targetBox!.width / 2,
-        clientY: targetBox!.y + targetBox!.height / 2,
-    };
     const sourcePath = await source.getAttribute("data-path");
     const targetPath = await target.getAttribute("data-path");
+    const targetNodeID = await target.getAttribute("data-node-id");
     const sourceTitle = await source.locator(":scope > .b3-list-item__text").textContent();
     const targetTitle = await target.locator(":scope > .b3-list-item__text").textContent();
     expect(sourcePath).toBeTruthy();
     expect(targetPath).toBeTruthy();
+    expect(targetNodeID).toBeTruthy();
 
-    await dispatchTouchEvent(source, "touchstart", startPoint);
+    await dispatchTouchEvent(source, "touchstart");
     await expect(source).toHaveAttribute("draggable", "false");
     // 等待应用的长按门槛，确保后续移动进入触摸拖拽而不是滚动。
     await page.waitForTimeout(500);
-    await dispatchTouchEvent(source, "touchmove", targetPoint);
-    await dispatchTouchEvent(source, "touchmove", targetPoint);
+    await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!});
+    await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!});
     await nextAnimationFrame(page);
-    const adjustedTargetPoint = {...targetPoint, clientY: targetPoint.clientY + 4};
-    await dispatchTouchEvent(source, "touchmove", adjustedTargetPoint);
+    await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!, offsetY: 4});
     await nextAnimationFrame(page);
     await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
     const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
@@ -469,7 +471,7 @@ const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Lo
         const payload = response.request().postDataJSON() as {fromPaths?: string[]; toPath?: string};
         return payload.fromPaths?.includes(sourcePath!) === true && payload.toPath === targetPath;
     }, {timeout: 30000});
-    await dispatchTouchEvent(source, "touchend", adjustedTargetPoint);
+    await dispatchTouchEvent(source, "touchend", {targetNodeID: targetNodeID!, offsetY: 4});
     expect((await moveResponse).ok()).toBe(true);
 };
 
