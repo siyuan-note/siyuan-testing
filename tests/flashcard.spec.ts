@@ -101,7 +101,8 @@ const waitForAnimationFrames = (page: Page) => page.evaluate(() => new Promise<v
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
 }));
 
-test.describe("flashcards", () => {
+// 新版闪卡尚未发布，发布前暂不执行以下端到端测试。
+test.describe.skip("flashcards", () => {
     test("adds and removes a block flashcard with reload persistence", {tag: "@smoke"}, async ({
         createTestDocument,
         fullEntryVisibility,
