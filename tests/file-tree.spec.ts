@@ -106,11 +106,11 @@ test.describe("file tree", () => {
         await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
         const restoreFileTree = await showFileTree(page);
         try {
-            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
+            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID, child.notebookID);
 
             await page.reload();
             await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
-            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID);
+            await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID, child.notebookID);
         } finally {
             await restoreFileTree();
         }
@@ -449,11 +449,14 @@ const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Lo
     // 等待应用的长按门槛，确保后续移动进入触摸拖拽而不是滚动。
     await page.waitForTimeout(500);
     await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!});
-    await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!});
-    await nextAnimationFrame(page);
-    await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!, offsetY: 4});
-    await nextAnimationFrame(page);
-    await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
+    await expect.poll(() => page.evaluate(() => window.siyuan.touchDragActive), {timeout: 5000}).toBe(true);
+    let offsetY = 4;
+    await expect.poll(async () => {
+        await dispatchTouchEvent(source, "touchmove", {targetNodeID: targetNodeID!, offsetY});
+        await nextAnimationFrame(page);
+        offsetY = offsetY === 4 ? 5 : 4;
+        return target.evaluate(element => element.classList.contains("dragover"));
+    }, {timeout: 5000}).toBe(true);
     const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
         action: window.siyuan.languages.dragTipMoveChild.replace("${x}", targetName),
         title: sourceName,

@@ -27,6 +27,7 @@ declare global {
                 move: string;
             };
             storage: Record<string, unknown>;
+            touchDragActive: boolean;
         };
     }
 }
