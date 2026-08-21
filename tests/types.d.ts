@@ -11,6 +11,16 @@ declare global {
                         active: string;
                     };
                 };
+                editor: {
+                    fontFamily: string;
+                    fontWeight: number;
+                    fontFamilyDisplay: string;
+                    fontFamilies: Array<{
+                        family: string;
+                        weight: number;
+                        displayName: string;
+                    }>;
+                };
                 fileTree: Record<string, unknown> & {
                     docCreateTemplatePath: string;
                 };

@@ -186,6 +186,20 @@ export interface IFileTreeSettings {
     [key: string]: unknown;
 }
 
+export interface IEditorFontSettings {
+    family: string;
+    weight: number;
+    displayName: string;
+}
+
+export interface IEditorSettings {
+    fontFamily: string;
+    fontWeight: number;
+    fontFamilyDisplay: string;
+    fontFamilies: IEditorFontSettings[];
+    [key: string]: unknown;
+}
+
 export interface IWorkspaceInfo {
     workspaceDir: string;
     siyuanVer: string;
@@ -245,6 +259,7 @@ export class SiyuanAPI {
     async getConf() {
         return this.post<{conf: {
             appearance: IAppearanceSettings;
+            editor: IEditorSettings;
             fileTree: IFileTreeSettings;
         }}>("/api/system/getConf", {});
     }
@@ -259,6 +274,10 @@ export class SiyuanAPI {
 
     async setFileTree(fileTree: IFileTreeSettings) {
         return this.post<IFileTreeSettings>("/api/setting/setFiletree", fileTree);
+    }
+
+    async setEditor(editor: IEditorSettings) {
+        return this.post<IEditorSettings>("/api/setting/setEditor", editor);
     }
 
     async listNotebooks() {
