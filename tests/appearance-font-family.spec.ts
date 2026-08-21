@@ -27,7 +27,7 @@ test.describe("editor font families", () => {
             const settingsDialog = page.locator('[data-key="dialog-setting"].b3-dialog--open');
             await expect(settingsDialog.locator(".b3-dialog__container")).toBeVisible();
             await settingsDialog.locator('.config__side .b3-list-item[data-name="appearance"]').click();
-            const fontInput = settingsDialog.locator('[id="editor.fontFamily"]');
+            const fontInput = settingsDialog.locator('[id="editor.fontFamilies"]');
             await expect(fontInput).toBeVisible();
             await expect(fontInput).toHaveValue(await page.evaluate(() => window.siyuan.languages.default));
             await fontInput.click();
