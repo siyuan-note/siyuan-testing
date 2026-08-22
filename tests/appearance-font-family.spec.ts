@@ -28,8 +28,9 @@ test.describe("editor font families", () => {
             await expect(settingsDialog.locator(".b3-dialog__container")).toBeVisible();
             await settingsDialog.locator('.config__side .b3-list-item[data-name="appearance"]').click();
             const fontInput = settingsDialog.locator('[id="editor.fontFamilies"]');
+            const defaultFontName = await page.evaluate(() => window.siyuan.languages.default);
             await expect(fontInput).toBeVisible();
-            await expect(fontInput).toHaveValue(await page.evaluate(() => window.siyuan.languages.default));
+            await expect(fontInput).toHaveValue(defaultFontName);
             await fontInput.click();
 
             const fontMenu = page.locator(".b3-menu:not(.fn__none)", {
@@ -74,7 +75,8 @@ test.describe("editor font families", () => {
             const selectedList = settingsDialog.locator('[data-type="selected-fonts"]');
             await expect(selectedList).toBeVisible();
             expect(await selectedList.evaluate((element) =>
-                element.previousElementSibling?.classList.contains("b3-label__text"))).toBe(true);
+                element.previousElementSibling?.classList.contains("fn__hr--small") &&
+                element.previousElementSibling.previousElementSibling?.classList.contains("b3-label__text"))).toBe(true);
             const selectedChips = selectedList.locator(".b3-chip");
             await expect(selectedChips).toHaveCount(2);
             expect(await selectedChips.evaluateAll((chips) => chips.every((chip) => {
@@ -103,12 +105,24 @@ test.describe("editor font families", () => {
                 .toBe(await page.evaluate((fonts) => fonts.map((font) => CSS.escape(font.family)).join(", "), sortedFonts));
             await expect.poll(() => page.locator("#siyuanStyle").evaluate((style) => style.textContent))
                 .toContain("var(--b3-font-family-editor)");
+            expect((await siyuanAPI.getConf()).conf.editor.fontFamilies).toEqual(sortedFonts);
+
+            await selectedChips.nth(0).locator('[data-type="font-remove"]').click();
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies))
+                .toEqual([sortedFonts[1]]);
+            await expect(fontInput).toHaveValue(sortedFonts[1].displayName);
+            await selectedChips.nth(0).locator('[data-type="font-remove"]').click();
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies)).toEqual([]);
+            await expect(fontInput).toHaveValue(defaultFontName);
+            await expect(selectedList).toBeHidden();
+            await expect.poll(() => page.evaluate(() =>
+                getComputedStyle(document.documentElement).getPropertyValue("--b3-font-family-editor").trim()))
+                .toBe("var(--b3-font-family-protyle)");
 
             await page.reload();
             await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
-            await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies))
-                .toEqual(sortedFonts);
-            expect((await siyuanAPI.getConf()).conf.editor.fontFamilies).toEqual(sortedFonts);
+            await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies)).toEqual([]);
+            expect((await siyuanAPI.getConf()).conf.editor.fontFamilies).toEqual([]);
         } finally {
             await siyuanAPI.setEditor(originalEditor);
             if (!page.isClosed()) {
