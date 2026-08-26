@@ -27,7 +27,8 @@ test.describe("editor font families", () => {
             const settingsDialog = page.locator('[data-key="dialog-setting"].b3-dialog--open');
             await expect(settingsDialog.locator(".b3-dialog__container")).toBeVisible();
             await settingsDialog.locator('.config__side .b3-list-item[data-name="appearance"]').click();
-            const fontInput = settingsDialog.locator('[id="editor.fontFamilies"]');
+            const fontConfig = settingsDialog.locator('[data-font-config-key="fontFamilies"]');
+            const fontInput = fontConfig.locator('[id="editor.fontFamilies"]');
             const defaultFontName = await page.evaluate(() => window.siyuan.languages.default);
             await expect(fontInput).toBeVisible();
             await expect(fontInput).toHaveValue(defaultFontName);
@@ -72,7 +73,7 @@ test.describe("editor font families", () => {
                 .toEqual(selectedFonts);
             await expect(fontInput).toHaveValue(selectedFonts.map((font) => font.displayName).join(", "));
 
-            const selectedList = settingsDialog.locator('[data-type="selected-fonts"]');
+            const selectedList = fontConfig.locator('[data-type="selected-fonts"]');
             await expect(selectedList).toBeVisible();
             expect(await selectedList.evaluate((element) =>
                 element.previousElementSibling?.classList.contains("fn__hr--small") &&

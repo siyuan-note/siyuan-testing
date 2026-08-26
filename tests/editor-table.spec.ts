@@ -539,6 +539,7 @@ test.describe("table editing", () => {
         const reloadedEditor = await getDocumentEditor(page, docID);
         const reloadedTable = reloadedEditor.locator(':scope > [data-type="NodeTable"]');
         await expect(reloadedTable).toHaveAttribute("custom-pinthead", "true");
+        const tableViewport = reloadedTable.locator(":scope > div").first();
         const tableElement = reloadedTable.locator("table");
         const bodyCell = reloadedTable.locator("tbody td").first();
         const lastBodyCell = reloadedTable.locator("tbody td").last();
@@ -556,7 +557,7 @@ test.describe("table editing", () => {
         });
         const roundedCorners = [smallRadius, smallRadius, smallRadius, smallRadius];
         await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
-        await expect(tableElement).toHaveCSS("overflow", "auto");
+        await expect(tableViewport).toHaveCSS("overflow", "auto");
 
         // #18537 后表格圆角恒定，控制手柄的圆角体现在内层图标上，这里校验控件可见性
         await hoverTableControl(page, headerCell, "row");

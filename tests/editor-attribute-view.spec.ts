@@ -82,6 +82,17 @@ interface IAttributeViewValue {
 }
 
 interface IAttributeView {
+    customColors?: Array<{
+        dark: {
+            backgroundColor: string;
+            color: string;
+        };
+        index: number;
+        light: {
+            backgroundColor: string;
+            color: string;
+        };
+    }>;
     id: string;
     keyValues: IAttributeViewKeyValue[];
     name: string;
@@ -225,11 +236,13 @@ const getAttributeView = async (api: SiyuanAPI, avID: string) => {
     return data.av;
 };
 
-// 内核的 /api/av/getAttributeView 响应带兼容字段 viewID（首个视图 ID），不参与持久化
-// （https://github.com/siyuan-note/siyuan/issues/18539），与存储文件比较前补齐该字段
+// /api/av/getAttributeView 响应带兼容字段 viewID（首个视图 ID），不参与持久化
+// customColors 的空数组会保留在 API 响应中，但持久化时因 omitempty 省略
+// 与存储文件比较前补齐这些字段，viewID 兼容背景见 https://github.com/siyuan-note/siyuan/issues/18539
 const expectApiAttributeView = (apiAttributeView: IAttributeView, stored: IAttributeView) => {
     expect(apiAttributeView).toEqual({
         ...stored,
+        customColors: stored.customColors || [],
         viewID: stored.views[0]?.id || "",
     });
 };
