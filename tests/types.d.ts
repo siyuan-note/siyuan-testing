@@ -12,6 +12,7 @@ declare global {
                     };
                 };
                 editor: {
+                    fontSize: number;
                     fontFamily: string;
                     fontWeight: number;
                     fontFamilyDisplay: string;

@@ -193,6 +193,7 @@ export interface IEditorFontSettings {
 }
 
 export interface IEditorSettings {
+    fontSize: number;
     fontFamily: string;
     fontWeight: number;
     fontFamilyDisplay: string;
