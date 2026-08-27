@@ -34,15 +34,19 @@ const startGutterBlockDrag = async (page: Page, source: Locator, expectedType: s
     const hoverTarget = await source.getAttribute("data-type") === "NodeList"
         ? source.locator('[contenteditable="true"]').first()
         : source;
-    await hoverTarget.hover();
     const handle = page.locator(`.protyle-gutters button[data-node-id="${id}"] > span[draggable="true"]`);
-    await expect(handle).toBeVisible();
-    const endTarget = await handle.locator("xpath=../..").elementHandle() as ElementHandle<HTMLElement>;
+    const endTarget = await source.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle-wysiwyg ')][1]",
+    ).elementHandle() as ElementHandle<HTMLElement>;
     expect(endTarget).not.toBeNull();
     const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
-    await handle.dispatchEvent("dragstart", {dataTransfer});
-    await expect.poll(() => dataTransfer.evaluate(transfer => Array.from(transfer.types).join(",")))
-        .toContain(expectedType);
+    await expect(async () => {
+        await page.mouse.move(0, 0);
+        await hoverTarget.hover();
+        await expect(handle).toBeVisible({timeout: 2000});
+        await handle.dispatchEvent("dragstart", {dataTransfer});
+        expect(await dataTransfer.evaluate(transfer => Array.from(transfer.types).join(","))).toContain(expectedType);
+    }).toPass({timeout: 15000});
     return {dataTransfer, endTarget} as IDragSession;
 };
 

@@ -245,13 +245,14 @@ const insertEmbedBlock = async (page: Page, api: SiyuanAPI, docID: string, edito
     }
     await focusAtEnd(paragraph);
     await page.keyboard.type(`{{${query}`, {delay: 10});
+    await expect(editable).toHaveText(`{{${query}`);
+    await waitForPersistedBlockText(api, docID, paragraphID!, `{{${query}`);
     const protyle = editor.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]");
     const hint = protyle.locator(".protyle-hint:not(.fn__none)");
     // 嵌入块提示需要等待内核搜索返回，高负载下可能超过默认的 5 秒超时
     await expect(hint).toBeVisible({timeout: 15000});
     const sourceOption = hint.locator(`button:has([data-node-id="${sourceID}"])`).first();
     await expect(sourceOption).toBeVisible({timeout: 15000});
-    await waitForPersistedBlockText(api, docID, paragraphID!, `{{${query}`);
     await requestTransaction(page, () => sourceOption.click());
     const embed = editor.locator(':scope > [data-type="NodeBlockQueryEmbed"]');
     await expect(embed).toHaveCount(1);
