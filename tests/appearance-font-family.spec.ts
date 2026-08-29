@@ -1,9 +1,10 @@
 import {expect, test} from "./fixtures";
 import {openWorkspace} from "./helpers/runtime";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 test.describe("editor font families", () => {
     test("selects, sorts, and persists multiple editor fonts", async ({page, siyuanAPI, createTestDocument}) => {
-        await createTestDocument("Editor Font Families E2E", "Font fallback test");
+        const {docID} = await createTestDocument("Editor Font Families E2E", "Font fallback test");
         const originalEditor = (await siyuanAPI.getConf()).conf.editor;
         const clearedEditor = await siyuanAPI.setEditor({
             ...originalEditor,
@@ -16,6 +17,7 @@ test.describe("editor font families", () => {
         try {
             await page.reload();
             await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
+            await getDocumentEditor(page, docID);
             await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies))
                 .toEqual(clearedEditor.fontFamilies);
 
@@ -116,9 +118,11 @@ test.describe("editor font families", () => {
             await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies)).toEqual([]);
             await expect(fontInput).toHaveValue(defaultFontName);
             await expect(selectedList).toBeHidden();
-            await expect.poll(() => page.evaluate(() =>
-                getComputedStyle(document.documentElement).getPropertyValue("--b3-font-family-editor").trim()))
-                .toBe("var(--b3-font-family-protyle)");
+            await expect.poll(() => page.evaluate(() => {
+                const style = getComputedStyle(document.documentElement);
+                return style.getPropertyValue("--b3-font-family-editor").trim() ===
+                    style.getPropertyValue("--b3-font-family-protyle").trim();
+            })).toBe(true);
 
             await page.reload();
             await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
