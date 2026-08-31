@@ -25,6 +25,9 @@ declare global {
                 fileTree: Record<string, unknown> & {
                     docCreateTemplatePath: string;
                 };
+                bazaar: {
+                    petalDisabled: boolean;
+                };
                 uiLayout: {
                     hideDock: boolean;
                 };
