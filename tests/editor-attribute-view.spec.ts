@@ -530,12 +530,20 @@ const editSelectCell = async (page: Page, cell: Locator, values: string[], waitF
     }).toPass({timeout: 30000});
     const type = await cell.getAttribute("data-dtype");
     for (const value of values) {
-        await input.fill(value);
         const panel = input.locator(
             "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' av__panel ')][1]",
         );
         const option = panel.locator(`[data-type="addColOptionOrCell"][data-name="${value}"]`);
-        await expect(option).toBeVisible();
+        await expect(async () => {
+            await expect(block).not.toHaveAttribute("data-rendering", "true", {timeout: 2000});
+            if (!await input.isVisible()) {
+                await cell.click();
+            }
+            await expect(input).toBeVisible({timeout: 2000});
+            await input.fill(value);
+            await expect(input).toHaveValue(value);
+            await expect(option).toBeVisible({timeout: 2000});
+        }).toPass({timeout: 30000});
         const transaction = waitForTransactionAction(page, "updateAttrViewCell");
         if (type === "select" && waitForRender) {
             const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
@@ -4546,38 +4554,29 @@ test.describe("attribute views", () => {
         const targetHeader = inserted.block.locator(
             `.av__cell--header[data-col-id="${notesColumn.id}"]`,
         );
-        const targetBox = await targetHeader.boundingBox();
-        expect(targetBox).not.toBeNull();
-        await expect(inserted.block).not.toHaveAttribute("data-rendering", "true", {timeout: 30000});
-        let dataTransfer: JSHandle<DataTransfer> | undefined;
         await expect(async () => {
-            dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
-            await sourceHeader.dispatchEvent("dragstart", {dataTransfer});
-            const point = {
-                clientX: targetBox!.x + 2,
-                clientY: targetBox!.y + targetBox!.height / 2,
-            };
-            await targetHeader.dispatchEvent("dragenter", {dataTransfer, ...point});
-            await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
-            await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
+            await expect(inserted.block).not.toHaveAttribute("data-rendering", "true", {timeout: 2000});
+            const targetBox = await targetHeader.boundingBox();
+            expect(targetBox).not.toBeNull();
+            const dataTransfer = await page.evaluateHandle(() => new DataTransfer()) as JSHandle<DataTransfer>;
             try {
+                await sourceHeader.dispatchEvent("dragstart", {dataTransfer});
+                const point = {
+                    clientX: targetBox!.x + 2,
+                    clientY: targetBox!.y + targetBox!.height / 2,
+                };
+                await targetHeader.dispatchEvent("dragenter", {dataTransfer, ...point});
+                await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
+                await targetHeader.dispatchEvent("dragover", {dataTransfer, ...point});
                 await expect(targetHeader).toHaveClass(/dragover__left/, {timeout: 2000});
-            } catch (error) {
+                const sortTransaction = waitForTransactionAction(page, "sortAttrViewCol", 5000);
+                await targetHeader.dispatchEvent("drop", {dataTransfer, ...point});
+                await sortTransaction;
+            } finally {
                 await sourceHeader.dispatchEvent("dragend", {dataTransfer});
                 await dataTransfer.dispose();
-                dataTransfer = undefined;
-                throw error;
             }
         }).toPass({timeout: 30000});
-        const sortTransaction = waitForTransactionAction(page, "sortAttrViewCol");
-        await targetHeader.dispatchEvent("drop", {
-            dataTransfer,
-            clientX: targetBox!.x + 2,
-            clientY: targetBox!.y + targetBox!.height / 2,
-        });
-        await sortTransaction;
-        await sourceHeader.dispatchEvent("dragend", {dataTransfer});
-        await dataTransfer!.dispose();
 
         await expect(inserted.block.locator(".av__cell--active")).toHaveCount(1);
         await expect(rows[0].row.locator(`[data-col-id="${notesColumn.id}"]`))

@@ -41,18 +41,7 @@ export const ensureTestNotebook = async (api: SiyuanAPI) => {
 
 export const getDocumentEditor = async (page: Page, docID: string) => {
     const titleSelector = `.protyle-title[data-node-id="${docID}"]`;
-    const titleElements = page.locator(titleSelector);
-    await expect(page.locator(`${titleSelector}:visible`).last()).toBeVisible({timeout: 15000});
-    const visibleTitleIndex = await titleElements.evaluateAll(elements => {
-        let index = -1;
-        elements.forEach((element, currentIndex) => {
-            if (element.getClientRects().length > 0) {
-                index = currentIndex;
-            }
-        });
-        return index;
-    });
-    const titleElement = titleElements.nth(visibleTitleIndex);
+    const titleElement = page.locator(`${titleSelector}:visible`).last();
     await expect(titleElement).toBeVisible({timeout: 15000});
     const protyle = titleElement.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",

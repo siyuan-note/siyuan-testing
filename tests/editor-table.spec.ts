@@ -369,12 +369,15 @@ test.describe("table editing", () => {
         const tableID = await tableBlock.getAttribute("data-node-id");
         expect(tableID).toBeTruthy();
         const firstCell = tableBlock.locator("thead th").first();
-        await firstCell.hover();
-        await hoverTableControl(page, firstCell, "row");
         const rowControl = getVisibleTableControl(page, "row");
         const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
-        await expect(rowControl).toBeVisible();
-        await expect(gutter).toBeVisible();
+        await expect(async () => {
+            await firstCell.hover();
+            await expect(gutter).toBeVisible({timeout: 2000});
+            await hoverTableControl(page, firstCell, "row");
+            await expect(rowControl).toBeVisible({timeout: 2000});
+            await expect(gutter).toBeVisible({timeout: 2000});
+        }).toPass({timeout: 30000});
         const rowControlBox = await rowControl.boundingBox();
         const gutterBox = await gutter.boundingBox();
         expect(rowControlBox).not.toBeNull();

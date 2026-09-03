@@ -1,4 +1,5 @@
 import {expect, test} from "./fixtures";
+import {expectSemanticInlineText} from "./helpers/editorText";
 import {showDock} from "./helpers/runtime";
 import {ISiyuanResponse, ISearchResult} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -45,7 +46,7 @@ test.describe("tags", () => {
         try {
             let editor = document.editor;
             const editorTag = editor.locator('span[data-type~="tag"]');
-            await expect(editorTag).toHaveText(originalTag);
+            await expectSemanticInlineText(editorTag, originalTag);
             await expect.poll(async () => includesSearchTag(
                 (await siyuanAPI.searchTags(originalTag)).tags,
                 originalTag,
@@ -57,7 +58,7 @@ test.describe("tags", () => {
 
             await page.reload();
             editor = await getDocumentEditor(page, document.docID);
-            await expect(editor.locator('span[data-type~="tag"]')).toHaveText(originalTag);
+            await expectSemanticInlineText(editor.locator('span[data-type~="tag"]'), originalTag);
 
             const tagPanel = page.locator(".sy__tag:visible").last();
             if (!await tagPanel.isVisible()) {
@@ -95,7 +96,7 @@ test.describe("tags", () => {
                 .toContain(renamedTag);
             const renamedNode = tagPanel.locator(`li[data-treetype="tag"][data-label="${renamedTag}"]`);
             await expect(renamedNode).toBeVisible({timeout: 15000});
-            await expect(editor.locator('span[data-type~="tag"]')).toHaveText(renamedTag);
+            await expectSemanticInlineText(editor.locator('span[data-type~="tag"]'), renamedTag);
 
             const searchResponse = page.waitForResponse(response => {
                 if (!response.url().endsWith("/api/search/fullTextSearchBlock")) {

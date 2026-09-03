@@ -1,5 +1,6 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {expectSemanticInlineText} from "./helpers/editorText";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {expectSearchIndex, submitSearch, withKeywordSearch} from "./helpers/search";
 import {IBacklinkPath} from "./helpers/siyuanAPI";
@@ -11,11 +12,11 @@ test.describe("file tree", () => {
         await createTestDocument("Tree Navigate Origin");
         const restoreFileTree = await showFileTree(page);
         try {
-            const docItem = page.locator(
+            const docItem = getVisibleFileTree(page).locator(
                 `li.b3-list-item[data-type="navigation-file"][data-node-id="${firstDocument.docID}"]`,
             );
             if (!await docItem.isVisible()) {
-                const notebookRoot = page.locator(
+                const notebookRoot = getVisibleFileTree(page).locator(
                     `ul.b3-list[data-url="${firstDocument.notebookID}"] > li[data-type="navigation-root"]`,
                 );
                 await expect(notebookRoot).toBeVisible();
@@ -41,12 +42,12 @@ test.describe("file tree", () => {
         await openWorkspace(page, `/?id=${sourceDocument.docID}`);
         const restoreFileTree = await showFileTree(page);
         try {
-            const notebookRoot = page.locator(
+            const notebookRoot = getVisibleFileTree(page).locator(
                 `ul.b3-list[data-url="${sourceDocument.notebookID}"] > li[data-type="navigation-root"]`,
             );
             await expect(notebookRoot).toBeVisible({timeout: 15000});
             await expandTreeItem(notebookRoot);
-            const fileTree = page.locator(".sy__file");
+            const fileTree = getVisibleFileTree(page);
             const source = fileTree.locator(
                 `li[data-type="navigation-file"][data-node-id="${sourceDocument.docID}"]`,
             );
@@ -195,10 +196,10 @@ test.describe("file tree", () => {
         const restoreFileTree = await showFileTree(page);
         try {
             await assertNestedTree(page, firstParent.docID, child.docID, grandchild.docID, child.notebookID);
-            const source = page.locator(
+            const source = getVisibleFileTree(page).locator(
                 `li[data-type="navigation-file"][data-node-id="${child.docID}"]`,
             );
-            const target = page.locator(
+            const target = getVisibleFileTree(page).locator(
                 `li[data-type="navigation-file"][data-node-id="${secondParent.docID}"]`,
             );
             await dragDocumentInto(page, source, target);
@@ -242,7 +243,10 @@ test.describe("file tree", () => {
             await expect(search.dialog).toHaveCount(0);
             const editor = await getDocumentEditor(page, child.docID);
             await expect(editor.locator(`[data-node-id="${childBlockID}"]`)).toContainText(marker);
-            await expect(editor.locator(`[data-node-id="${childBlockID}"] [data-type~="tag"]`)).toHaveText(tag);
+            await expectSemanticInlineText(
+                editor.locator(`[data-node-id="${childBlockID}"] [data-type~="tag"]`),
+                tag,
+            );
             await expect(editor.locator(
                 `[data-type~="block-ref"][data-id="${referenceTarget.docID}"]`,
             )).toBeVisible();
@@ -257,14 +261,15 @@ test.describe("file tree", () => {
 
 const assertNestedTree = async (page: import("@playwright/test").Page, parentID: string, childID: string,
                                 grandchildID: string, notebookID?: string) => {
+    const fileTree = getVisibleFileTree(page);
     if (notebookID) {
-        const notebookRoot = page.locator(
+        const notebookRoot = fileTree.locator(
             `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
         );
         await expect(notebookRoot).toBeVisible({timeout: 15000});
         await expandTreeItem(notebookRoot);
     }
-    const parent = page.locator(`li[data-type="navigation-file"][data-node-id="${parentID}"]`);
+    const parent = fileTree.locator(`li[data-type="navigation-file"][data-node-id="${parentID}"]`);
     await expect(parent).toBeVisible({timeout: 15000});
     await expandTreeItem(parent);
     const child = parent.locator(
@@ -291,7 +296,7 @@ const expandTreeItem = async (item: import("@playwright/test").Locator) => {
 
 const expectFileTreeOrder = async (page: import("@playwright/test").Page, notebookID: string,
                                   expectedOrder: string[]) => {
-    const notebookRoot = page.locator(
+    const notebookRoot = getVisibleFileTree(page).locator(
         `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
     );
     await expect(notebookRoot).toBeVisible({timeout: 15000});
@@ -309,7 +314,7 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
     // 长文件树加载后会平滑滚动恢复位置，拖拽期间的两次坐标测量会因此漂移，
     // 这里先滚动到可视区中央并等待滚动动画结束
     await target.evaluate(element => element.scrollIntoView({block: "center"}));
-    const fileTree = page.locator(".sy__file");
+    const fileTree = getVisibleFileTree(page);
     await expect.poll(async () => {
         const first = await fileTree.evaluate(element => element.scrollTop);
         await page.waitForTimeout(50);
@@ -477,6 +482,8 @@ const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Lo
     await dispatchTouchEvent(source, "touchend", {targetNodeID: targetNodeID!, offsetY: 4});
     expect((await moveResponse).ok()).toBe(true);
 };
+
+const getVisibleFileTree = (page: Page) => page.locator(".sy__file:visible").last();
 
 const nextAnimationFrame = (page: Page) => page.evaluate(() => new Promise<void>(resolve =>
     requestAnimationFrame(() => resolve())));
