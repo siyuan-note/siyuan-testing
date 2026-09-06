@@ -489,7 +489,14 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
         ).first();
         await expect(editable).toBeVisible();
         await editable.fill(value);
-        await requestTransaction(page, () => richTextMask.locator('[data-type="save"]').click());
+        const saveButton = richTextMask.locator('[data-type="save"]');
+        await requestTransaction(page, async () => {
+            if (await saveButton.isVisible()) {
+                await saveButton.click();
+            } else {
+                await richTextMask.click({position: {x: 1, y: 1}});
+            }
+        });
         await expect(richTextMask).toHaveCount(0);
         return;
     }

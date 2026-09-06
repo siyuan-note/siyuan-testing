@@ -108,12 +108,17 @@ test.describe("file tree", () => {
 
         await openWorkspace(page, `/?id=${grandchild.docID}`);
         await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
-        const restoreFileTree = await showFileTree(page);
+        let restoreFileTree = await showFileTree(page);
         try {
             await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID, child.notebookID);
+        } finally {
+            await restoreFileTree();
+        }
 
-            await page.reload();
-            await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
+        await page.reload();
+        await expect(await getDocumentEditor(page, grandchild.docID)).toContainText(marker);
+        restoreFileTree = await showFileTree(page);
+        try {
             await assertNestedTree(page, secondParent.docID, child.docID, grandchild.docID, child.notebookID);
         } finally {
             await restoreFileTree();
