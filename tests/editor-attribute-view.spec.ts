@@ -391,7 +391,7 @@ const addColumn = async (page: Page, block: Locator, type: string, name: string,
     const nameInput = editPanel.locator('[data-type="name"]');
     await expect(nameInput).toBeVisible({timeout: 15000});
     await nameInput.fill(name);
-    await requestTransaction(page, () => nameInput.press("Enter"));
+    await requestTransactionAndRender(page, () => nameInput.press("Enter"));
     await expect(header.locator(".av__celltext")).toHaveText(name);
     return {header, id: id!};
 };
@@ -473,28 +473,35 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
     );
-    await expect(cell).toBeVisible();
-    await expect(block).not.toHaveAttribute("data-rendering", "true");
     const input = page.locator(".av__mask .b3-text-field:visible");
     const richTextMask = page.locator(".av__richtext-mask");
-    await expect(async () => {
+    const openEditor = async () => {
+        await expect(cell).toBeVisible();
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
         if (!await input.isVisible() && !await richTextMask.isVisible()) {
             await cell.click();
         }
         expect(await input.isVisible() || await richTextMask.isVisible()).toBe(true);
-    }).toPass({timeout: 30000});
+    };
+    await expect(openEditor).toPass({timeout: 30000});
     if (await richTextMask.isVisible()) {
         const editable = richTextMask.locator(
             '.protyle-wysiwyg > [data-node-id] > [contenteditable="true"]',
         ).first();
-        await expect(editable).toBeVisible();
-        await editable.fill(value);
+        await expect(async () => {
+            if (!await richTextMask.isVisible()) {
+                await openEditor();
+            }
+            await expect(editable).toBeVisible();
+            await editable.fill(value);
+            await expect(editable).toHaveText(value);
+        }).toPass({timeout: 30000});
         const saveButton = richTextMask.locator('[data-type="save"]');
         await requestTransaction(page, async () => {
             if (await saveButton.isVisible()) {
-                await saveButton.click();
+                await saveButton.dispatchEvent("click");
             } else {
-                await richTextMask.click({position: {x: 1, y: 1}});
+                await richTextMask.dispatchEvent("mousedown", {button: 0});
             }
         });
         await expect(richTextMask).toHaveCount(0);
@@ -4434,6 +4441,7 @@ test.describe("attribute views", () => {
             selection?.addRange(range);
         });
         const transaction = waitForResponse(page, "/api/transactions", 30000);
+        const render = waitForResponse(page, "/api/av/renderAttributeView", 30000);
         await pasteTarget.evaluate((element, text) => {
             const clipboardData = new DataTransfer();
             clipboardData.setData("text/plain", text);
@@ -4443,7 +4451,7 @@ test.describe("attribute views", () => {
                 clipboardData,
             }));
         }, "Range pasted");
-        await transaction;
+        await Promise.all([transaction, render]);
         await expect.poll(() => getOrderedBlockContents(siyuanAPI, document.docID, blockID, avID), {timeout: 30000}).toMatchObject({
             contents: seedContents.map(() => "Range pasted"),
         });
