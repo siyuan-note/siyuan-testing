@@ -83,10 +83,8 @@ test("moves a block across documents and broadcasts undo and redo", async ({
     let sourceTab: Locator | undefined;
     let restoreFileTree: (() => Promise<void>) | undefined;
     try {
-        await Promise.all([
-            openWorkspace(sourcePage, `/?id=${sourceID}`),
-            openWorkspace(destinationPage, `/?id=${destination.docID}`),
-        ]);
+        await openWorkspace(sourcePage, `/?id=${sourceID}`);
+        await openWorkspace(destinationPage, `/?id=${destination.docID}`);
         let sourceObserver = await getDocumentEditor(sourcePage, sourceID);
         let destinationObserver = await getDocumentEditor(destinationPage, destination.docID);
 

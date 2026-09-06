@@ -470,16 +470,30 @@ const configureRollupColumn = async (page: Page, cell: Locator, relationColumnID
 };
 
 const editCell = async (page: Page, cell: Locator, value: string) => {
-    const input = page.locator(".av__mask .b3-text-field:visible");
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
     );
+    await expect(cell).toBeVisible();
+    await expect(block).not.toHaveAttribute("data-rendering", "true");
+    const input = page.locator(".av__mask .b3-text-field:visible");
+    const richTextMask = page.locator(".av__richtext-mask");
     await expect(async () => {
-        await expect(cell).toBeVisible();
-        await expect(block).not.toHaveAttribute("data-rendering", "true");
-        await cell.click();
-        await expect(input).toBeVisible({timeout: 2000});
+        if (!await input.isVisible() && !await richTextMask.isVisible()) {
+            await cell.click();
+        }
+        expect(await input.isVisible() || await richTextMask.isVisible()).toBe(true);
     }).toPass({timeout: 30000});
+    if (await richTextMask.isVisible()) {
+        const editable = richTextMask.locator(
+            '.protyle-wysiwyg > [data-node-id] > [contenteditable="true"]',
+        ).first();
+        await expect(editable).toBeVisible();
+        await editable.fill(value);
+        await requestTransaction(page, () => richTextMask.locator('[data-type="save"]').click());
+        await expect(richTextMask).toHaveCount(0);
+        return;
+    }
+
     await input.fill(value);
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);

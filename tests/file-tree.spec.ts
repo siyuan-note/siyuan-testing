@@ -60,6 +60,9 @@ test.describe("file tree", () => {
             await expect.poll(async () => (await siyuanAPI.getDocumentPath(sourceDocument.docID)).path, {
                 timeout: 30000,
             }).toBe(`/${targetDocument.docID}/${sourceDocument.docID}.sy`);
+            await expect.poll(async () => Number(await target.getAttribute("data-count")), {
+                timeout: 15000,
+            }).toBeGreaterThan(0);
             await expandTreeItem(target);
             const nestedSource = target.locator(
                 `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and ` +
@@ -362,18 +365,22 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
         }));
     }, dataTransfer);
     await nextAnimationFrame(page);
-    await target.evaluate((element, dataTransfer) => {
-        const rect = element.getBoundingClientRect();
-        element.dispatchEvent(new DragEvent("dragover", {
-            bubbles: true,
-            cancelable: true,
-            dataTransfer,
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2 + 4,
-        }));
-    }, dataTransfer);
-    await nextAnimationFrame(page);
-    await expect(target).toHaveClass(/(^|\s)dragover(\s|$)/);
+    await expect.poll(async () => {
+        await target.evaluate((element, dataTransfer) => {
+            const rect = element.getBoundingClientRect();
+            for (const offsetY of [4, 5]) {
+                element.dispatchEvent(new DragEvent("dragover", {
+                    bubbles: true,
+                    cancelable: true,
+                    dataTransfer,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2 + offsetY,
+                }));
+            }
+        }, dataTransfer);
+        await nextAnimationFrame(page);
+        return target.evaluate(element => element.classList.contains("dragover"));
+    }, {timeout: 5000}).toBe(true);
     const expectedTip = await page.evaluate(({sourceName, targetName}) => ({
         action: window.siyuan.languages.dragTipMoveChild.replace("${x}", targetName),
         title: sourceName,

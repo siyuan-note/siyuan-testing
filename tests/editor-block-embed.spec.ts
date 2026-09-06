@@ -241,12 +241,14 @@ const insertEmbedBlock = async (page: Page, api: SiyuanAPI, docID: string, edito
     expect(paragraphID).toBeTruthy();
     const editable = paragraph.locator(':scope > [contenteditable="true"]');
     if (await editable.textContent()) {
-        await editable.fill("");
+        await requestTransaction(page, () => editable.fill(""));
+        await waitForPersistedBlockText(api, docID, paragraphID!, "");
     }
+    const queryInput = `{{${query}`;
     await focusAtEnd(paragraph);
-    await page.keyboard.type(`{{${query}`, {delay: 10});
-    await expect(editable).toHaveText(`{{${query}`);
-    await waitForPersistedBlockText(api, docID, paragraphID!, `{{${query}`);
+    await page.keyboard.type(queryInput, {delay: 10});
+    await expect(editable).toHaveText(queryInput);
+    await waitForPersistedBlockText(api, docID, paragraphID!, queryInput);
     const protyle = editor.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]");
     const hint = protyle.locator(".protyle-hint:not(.fn__none)");
     // 嵌入块提示需要等待内核搜索返回，高负载下可能超过默认的 5 秒超时
