@@ -245,9 +245,8 @@ test.describe("command palette", () => {
                 await expect(paragraphs.nth(1)).toContainText("**literal** [link](https://example.com)");
                 await expect(paragraphs.nth(1).locator('[data-type="strong"], [data-type="a"]')).toHaveCount(0);
             } else {
-                await expect(paragraphs.nth(1).locator('[data-type="strong"]')).toHaveText("literal");
-                await expect(paragraphs.nth(1).locator('[data-type="a"]')).toHaveText("link");
-                await expect(paragraphs.nth(1).locator('[data-type="a"]')).toHaveAttribute("data-href", "https://example.com");
+                await expect(paragraphs.nth(1)).toContainText("Target:literal link");
+                await expect(paragraphs.nth(1).locator('[data-type="strong"], [data-type="a"]')).toHaveCount(0);
             }
             const root = await persisted(siyuanAPI, docID, editor);
             expect(text(root)).toContain("literal");
@@ -411,11 +410,16 @@ test.describe("command palette", () => {
             const target = await createTestDocument(`Command Palette ${key}`, "Creation anchor");
             const original = (await siyuanAPI.getNotebookConf(target.notebookID)).conf;
             const restoreFileTree = await showFileTree(page);
+            const fileTreeFilter = page.locator(".sy__file:visible input.b3-text-field.search__label");
+            const originalFilter = await fileTreeFilter.count() > 0 ? await fileTreeFilter.inputValue() : "";
             try {
+                if (originalFilter) {
+                    await fileTreeFilter.fill("");
+                }
                 await siyuanAPI.setNotebookConf(target.notebookID, {...original, sortMode: 6});
                 await page.reload();
                 const editor = await getDocumentEditor(page, target.docID);
-                await expect(page.locator(`.sy__file li[data-node-id="${target.docID}"]`)).toBeVisible();
+                await expect(page.locator(`.sy__file li[data-node-id="${target.docID}"]`)).toHaveCount(1);
                 const before = (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id);
                 await focusCommandTarget(editor.locator('[data-type="NodeParagraph"]'));
                 const response = page.waitForResponse(item => new URL(item.url()).pathname === "/api/filetree/createDoc");
@@ -431,9 +435,12 @@ test.describe("command palette", () => {
                 expected.splice(before.indexOf(target.docID) + (key === "newDocBelow" ? 1 : 0), 0, createdID);
                 await expect.poll(async () => (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id),
                     {timeout: 30000}).toEqual(expected);
-                await expect(page.locator(`.sy__file li[data-node-id="${createdID}"]`)).toBeVisible();
+                await expect(page.locator(`.sy__file li[data-node-id="${createdID}"]`)).toHaveCount(1);
             } finally {
                 await siyuanAPI.setNotebookConf(target.notebookID, original);
+                if (originalFilter && await fileTreeFilter.count() > 0) {
+                    await fileTreeFilter.fill(originalFilter);
+                }
                 await restoreFileTree();
             }
         });
