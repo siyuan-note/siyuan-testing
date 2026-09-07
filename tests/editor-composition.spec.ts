@@ -175,6 +175,8 @@ test.describe("editor composition", () => {
         page,
         siyuanAPI,
     }) => {
+        test.skip(process.platform !== "darwin", "macOS text replacement is only available on macOS");
+
         const {docID, editor} = await createTestDocument("Multiline Text Replacement E2E", ";markdown");
         const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]');
         const editable = paragraph.locator(':scope > [contenteditable="true"]');
