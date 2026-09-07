@@ -4,6 +4,11 @@ declare global {
     interface Window {
         siyuan: {
             config: {
+                keymap: {
+                    general: Record<string, {default: string; custom: string}>;
+                    editor: Record<string, Record<string, {default: string; custom: string}>>;
+                    plugin: Record<string, unknown>;
+                };
                 appearance: {
                     mode: number;
                     modeOS: boolean;
