@@ -38,7 +38,7 @@ export const focusCommandTarget = async (target: Locator) => {
     await expect(target).toBeVisible();
     await target.evaluate(element => {
         const editable = element.matches('[contenteditable="true"]') ? element :
-            element.closest('[contenteditable="true"]') || element.querySelector('[contenteditable="true"]');
+            element.querySelector('[contenteditable="true"]') || element.closest('[contenteditable="true"]');
         if (!editable) {
             throw new Error("Command target has no editable container");
         }
@@ -52,5 +52,11 @@ export const focusCommandTarget = async (target: Locator) => {
         }
         selection.removeAllRanges();
         selection.addRange(range);
+        const rangeElement = range.startContainer.nodeType === Node.ELEMENT_NODE ?
+            range.startContainer as Element : range.startContainer.parentElement;
+        const expectedBlock = element.closest("[data-node-id]");
+        if (expectedBlock && rangeElement?.closest("[data-node-id]") !== expectedBlock) {
+            throw new Error("Caret did not enter the requested command block");
+        }
     });
 };

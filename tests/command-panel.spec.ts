@@ -86,7 +86,8 @@ test.describe("command palette", () => {
                 expect(result.HeadingLevel).toBe(conversion.level);
             }
             if ("listType" in conversion) {
-                expect(result.ListData?.Typ).toBe(conversion.listType);
+                // 无序列表的 Typ 为零，持久化格式会省略该字段。
+                expect(result.ListData?.Typ ?? 0).toBe(conversion.listType);
             }
             expect(text(result)).toContain("Target content");
             await page.reload();
@@ -135,7 +136,8 @@ test.describe("command palette", () => {
             await expect.poll(async () => {
                 const root = await siyuanAPI.readDocument<ISyNode>(docID);
                 return flatten(root).filter(node => node.Type === "NodeTableRow").map(row =>
-                    (row.Children || []).filter(node => node.Type === "NodeTableCell").map(text));
+                    (row.Children || []).filter(node => node.Type === "NodeTableCell")
+                        .map(cell => (cell.Children || []).filter(node => node.Type !== "NodeKramdownSpanIAL").map(text).join("")));
             }, {timeout: 30000}).toEqual(operation.expected);
         });
     }
@@ -156,17 +158,50 @@ test.describe("command palette", () => {
         await expect(panel).toHaveCount(0);
     });
 
-    test("folds and expands the captured heading", async ({page, createTestDocument, siyuanAPI}) => {
+    test("hides all fold commands when multiple blocks are selected", async ({page, createTestDocument}) => {
+        const {editor} = await createTestDocument("Command Palette Multi Block Fold", "# First heading\n\n# Second heading\n\nGuard");
+        const headings = editor.locator('[data-type="NodeHeading"]');
+        await headings.nth(0).locator('[contenteditable="true"]').click();
+        await headings.nth(1).click({modifiers: ["Shift"]});
+        await expect(editor.locator(".protyle-wysiwyg--select")).toHaveCount(2);
+        const panel = await openCommandPanel(page);
+        await panel.locator("input").fill("core.context.block");
+        await expect(panel.locator('[data-command-id="core.context.block.delete"]')).toHaveCount(1);
+        for (const key of ["fold", "foldChildHeadings", "foldSiblingHeadings", "foldRecursive"]) {
+            await expect(panel.locator(`[data-command-id="core.context.block.${key}"]`)).toHaveCount(0);
+        }
+        await panel.locator("input").press("Escape");
+        await expect(panel).toHaveCount(0);
+        await headings.first().locator('[contenteditable="true"]').click();
+        await expect(editor.locator(".protyle-wysiwyg--select")).toHaveCount(0);
+        await focusCommandTarget(headings.first());
+        const singlePanel = await openCommandPanel(page);
+        await singlePanel.locator("input").fill("core.context.block.fold");
+        for (const key of ["fold", "foldChildHeadings", "foldSiblingHeadings", "foldRecursive"]) {
+            await expect(singlePanel.locator(`[data-command-id="core.context.block.${key}"]`)).toHaveCount(1);
+        }
+        await singlePanel.locator("input").press("Escape");
+        await expect(singlePanel).toHaveCount(0);
+    });
+
+    test("toggles the captured heading with one fold command", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor} = await createTestDocument("Command Palette Fold", "# Target heading\n\nHidden content\n\n# Guard heading\n\nGuard content");
         const heading = editor.locator('[data-type="NodeHeading"]').first();
         const id = await heading.getAttribute("data-node-id");
         await focusCommandTarget(heading);
-        await runPaletteCommand(page, "core.context.block.collapse");
+        const panel = await openCommandPanel(page);
+        await panel.locator("input").fill("core.context.block");
+        await expect(panel.locator('[data-command-id="core.context.block.fold"]')).toHaveCount(1);
+        await expect(panel.locator('[data-command-id="core.context.block.collapse"], [data-command-id="core.context.block.expand"]')).toHaveCount(0);
+        await panel.locator("input").press("Escape");
+        await expect(panel).toHaveCount(0);
+        await runPaletteCommand(page, "core.context.block.fold");
         await expect(heading).toHaveAttribute("fold", "1");
         await expect.poll(async () => (await siyuanAPI.getBlockAttrs(id!)).fold).toBe("1");
         await focusCommandTarget(heading);
-        await runPaletteCommand(page, "core.context.block.expand");
+        await runPaletteCommand(page, "core.context.block.fold");
         await expect(heading).not.toHaveAttribute("fold", "1");
+        await expect.poll(async () => (await siyuanAPI.getBlockAttrs(id!)).fold).not.toBe("1");
         await expect(editor).toContainText("Hidden content");
         await persisted(siyuanAPI, docID, editor);
     });
@@ -205,8 +240,15 @@ test.describe("command palette", () => {
             await focusCommandTarget(paragraphs.nth(1));
             await runPaletteCommand(page, `core.context.editor.${key}`);
             await expect(paragraphs.first()).toHaveText(/Guard/);
-            await expect(paragraphs.nth(1)).toContainText("**literal** [link](https://example.com)");
-            await expect(paragraphs.nth(1).locator('[data-type="strong"], [data-type="a"]')).toHaveCount(0);
+            // 纯文本粘贴仍解析 Markdown；转义文本粘贴才原样保留 Markdown 符号。
+            if (key === "pasteEscaped") {
+                await expect(paragraphs.nth(1)).toContainText("**literal** [link](https://example.com)");
+                await expect(paragraphs.nth(1).locator('[data-type="strong"], [data-type="a"]')).toHaveCount(0);
+            } else {
+                await expect(paragraphs.nth(1).locator('[data-type="strong"]')).toHaveText("literal");
+                await expect(paragraphs.nth(1).locator('[data-type="a"]')).toHaveText("link");
+                await expect(paragraphs.nth(1).locator('[data-type="a"]')).toHaveAttribute("data-href", "https://example.com");
+            }
             const root = await persisted(siyuanAPI, docID, editor);
             expect(text(root)).toContain("literal");
             expect(text(root.Children!.filter(node => node.ID)[0])).toBe("Guard");
@@ -236,7 +278,12 @@ test.describe("command palette", () => {
         await paragraphs.nth(0).locator('[contenteditable="true"]').click();
         await paragraphs.nth(1).click({modifiers: ["Shift"]});
         await expect(editor.locator(".protyle-wysiwyg--select")).toHaveCount(2);
-        await runPaletteCommand(page, "core.context.block.deleteSelection");
+        await openCommandPanel(page);
+        await commandPanel(page).locator("input").fill("core.context");
+        await expect(commandPanel(page).locator('[data-command-id="core.context.block.delete"]')).toHaveCount(1);
+        await expect(commandPanel(page).locator('[data-command-id="core.context.block.deleteSelection"], [data-command-id="core.context.listItem.delete"]')).toHaveCount(0);
+        await commandPanel(page).locator("input").press("Escape");
+        await runPaletteCommand(page, "core.context.block.delete");
         await expect(paragraphs).toHaveCount(1);
         await expect(paragraphs).toHaveText(/Guard/);
         const root = await persisted(siyuanAPI, docID, editor);
@@ -244,17 +291,18 @@ test.describe("command palette", () => {
         expect(text(root)).not.toContain("Delete second");
     });
 
-    test("deletes the current list item including its children, preserving siblings", async ({page, createTestDocument, siyuanAPI}) => {
+    test("deletes the current paragraph in a list without deleting nested items or siblings", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor} = await createTestDocument("Command Palette Delete Item", "- Keep first\n- Delete item\n  - Delete child\n- Keep last");
         const item = editor.locator(':scope > [data-type="NodeList"] > [data-type="NodeListItem"]').nth(1);
         await focusCommandTarget(item.locator(':scope > [data-type="NodeParagraph"]'));
-        await runPaletteCommand(page, "core.context.listItem.delete");
+        await runPaletteCommand(page, "core.context.block.delete");
         await expect(editor).not.toContainText("Delete item");
-        await expect(editor).not.toContainText("Delete child");
+        await expect(editor).toContainText("Delete child");
         await expect(editor).toContainText("Keep first");
         await expect(editor).toContainText("Keep last");
         const root = await persisted(siyuanAPI, docID, editor);
-        expect(text(root)).not.toContain("Delete");
+        expect(text(root)).not.toContain("Delete item");
+        expect(text(root)).toContain("Delete child");
     });
 
     test("pins and unpins the active tab without adding shortcut settings", async ({page, createTestDocument}) => {
