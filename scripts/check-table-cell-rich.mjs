@@ -17,6 +17,8 @@ export * from "./src/protyle/util/tableCellRichValue";
 export {mountProtyleLiteFragment} from "./src/protyle/lite/fragmentEditor";
 export {getAVRichTextLute} from "./src/protyle/render/av/richText";
 export {renderTableCellRichElements} from "./src/protyle/render/tableCellRich";
+export {applyTableCellRichInlineMark} from "./src/protyle/render/tableCellRichEditor";
+export {TableControl} from "./src/protyle/util/tableControl";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
     },
@@ -35,9 +37,23 @@ export {Constants} from "./src/constants";`,
 const browser = await chromium.launch({channel: "chrome", headless: true});
 try {
     const page = await browser.newPage();
-    await page.setContent('<style>.fn__none {display:none!important} [contenteditable=true] {white-space:break-spaces} .protyle-wysiwyg {min-height:24px}</style><div id="sidebar"></div><div id="host"></div>');
+    await page.setContent('<style>.fn__none {display:none!important} [contenteditable=true] {white-space:break-spaces} .protyle-wysiwyg {min-height:24px}</style><div id="sidebar"></div><div id="keyboardToolbar"><div class="keyboard__dynamic"></div><div></div></div><div id="host"></div>');
     await page.addStyleTag({content: appRequire("sass").compile(path.join(app, "src/assets/scss/base.scss"),
         {logger: {warn() {}, debug() {}}}).css});
+    // 外层样式可能为空段落生成提示文字；单元格编辑器必须覆盖这类伪元素。
+    await page.addStyleTag({content: '.protyle-wysiwyg [contenteditable=true]:empty::before {content:"Empty"}'});
+    await page.evaluate(() => {
+        const probe = document.createElement("div");
+        probe.className = "table__cell-editor";
+        probe.innerHTML = '<div class="protyle-wysiwyg"><div class="p"><div contenteditable="true"></div></div></div>';
+        document.body.appendChild(probe);
+        const edit = probe.querySelector("[contenteditable]");
+        if (getComputedStyle(edit, "::before").content !== "none" ||
+            getComputedStyle(edit, "::after").content !== "none") {
+            throw new Error("Empty cell must not inherit placeholder pseudo-elements");
+        }
+        probe.remove();
+    });
     await page.addScriptTag({path: path.join(app, "stage/protyle/js/lute/lute.min.js")});
     await page.addScriptTag({content: bundle.outputFiles[0].text});
     const result = await page.evaluate(() => {
@@ -163,8 +179,16 @@ try {
     await cells.last().click();
     await expect(cells.last().locator(".table__cell-editor")).toBeVisible();
     assert.deepEqual(await measure(cells.last()), blankRowSize, "empty row size when opening the editor");
+    await page.keyboard.type("1");
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "first input keeps row and table dimensions stable");
     await page.keyboard.press("Escape");
-    assert.deepEqual(await measure(cells.last()), blankRowSize, "empty row size when closing the editor");
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "first input stays stable after closing the editor");
+    await cells.last().click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "deleting text keeps row and table dimensions stable");
+    await page.keyboard.press("Escape");
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "cleared row size when closing the editor");
     await cells.first().click();
     await expect(cells.first().locator(".table__cell-editor")).toBeVisible();
     assert.deepEqual(await measure(cells.first()), originalSize, "ordinary cell size when opening the editor");
@@ -236,6 +260,100 @@ try {
     await page.keyboard.press("Shift+Tab");
     await expect(cells.nth(4).locator(".table__cell-editor")).toBeVisible();
     await page.keyboard.press("Escape");
+    // 批量样式通过无光标选区的临时编辑器处理，并应保留段落及列表结构。
+    await page.evaluate(() => {
+        let targets = Array.from(outerFragment.wysiwyg.querySelectorAll("tbody td")).slice(0, 2);
+        cellTest.setTableCellRich(targets[0], "paragraph");
+        cellTest.setTableCellRich(targets[1], "- first\n- second");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        for (const expected of [true, false]) {
+            cellTest.applyTableCellRichInlineMark(outerFragment.protyle, targets, "strong");
+            targets = Array.from(outerFragment.wysiwyg.querySelectorAll("tbody td")).slice(0, 2);
+            targets.forEach((cell, index) => {
+                const restored = document.createElement("div");
+                restored.innerHTML = cellTest.getTableCellRichBlockDOM(cell);
+                const edits = Array.from(restored.querySelectorAll('[data-type="NodeParagraph"] > [contenteditable="true"]'));
+                const texts = edits.map(edit => edit.textContent.replace(/\u200b/g, ""));
+                if (JSON.stringify(texts) !== JSON.stringify(index === 0 ? ["paragraph"] : ["first", "second"])) {
+                    throw new Error("Batch rich cell formatting changed the text");
+                }
+                if (edits.length !== (index === 0 ? 1 : 2) || edits.some(edit =>
+                    !!edit.querySelector('[data-type~="strong"]') !== expected)) {
+                    throw new Error(`Batch rich cell bold toggle failed: ${expected}, ${index}, ${restored.innerHTML}`);
+                }
+                if (index === 1 && !restored.querySelector('[data-type="NodeList"]')) {
+                    throw new Error("Batch rich cell formatting lost the list");
+                }
+            });
+        }
+    });
+    console.log("PASS: batch rich cell bold and unbold without a toolbar selection preserve paragraphs and lists");
+    await page.evaluate(() => {
+        document.getElementById("sidebar").remove();
+        document.body.appendChild(Object.assign(document.createElement("div"), {className: "layout-tab-bar"}));
+        delete outerFragment.protyle.gutter;
+        outerFragment.protyle.wysiwyg.tableControl = new cellTest.TableControl(outerFragment.protyle,
+            outerFragment.wysiwyg);
+    });
+    await cells.nth(1).hover();
+    await cells.nth(1).click();
+    const cellHandle = page.locator('#host > .protyle-table-control [data-type="cell"]');
+    await expect(cellHandle).toBeVisible();
+    await cells.nth(1).locator('.table__cell-editor [contenteditable="true"]').first().hover();
+    await expect(cells.nth(1).locator('.protyle-table-control__handle:not(.fn__none)')).toHaveCount(0);
+    await page.keyboard.press("End");
+    await page.keyboard.type("x");
+    await expect(cellHandle).toBeVisible();
+    await cellHandle.click({modifiers: ["Control"]});
+    await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() =>
+        outerFragment.protyle.wysiwyg.tableControl.getSelectedCells().length)).toBe(1);
+    await cells.nth(1).click();
+    await expect(cellHandle).toBeVisible();
+    await page.evaluate(() => {
+        window.cellMenuItems = [];
+        window.siyuan.menus.menu.append = element => window.cellMenuItems.push(element);
+        window.siyuan.menus.menu.popup = () => window.cellMenuOpened = true;
+    });
+    await cellHandle.click();
+    await expect.poll(() => page.evaluate(() => window.cellMenuOpened && window.cellMenuItems.length > 0)).toBe(true);
+    await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
+    console.log("PASS: cell handle stays visible while editing and can select the edited cell");
+    await page.evaluate(languages => window.siyuan.languages = languages,
+        JSON.parse(await readFile(path.join(app, "appearance/langs/en.json"), "utf8")));
+    await cells.last().click();
+    await page.keyboard.type("/");
+    const slashMenu = page.locator('.protyle-hint:not(.fn__none)');
+    await expect(slashMenu.locator('[data-id="heading1"]')).toBeVisible();
+    await expect(slashMenu.locator('[data-id="list"]')).toBeVisible();
+    await expect(slashMenu.locator('[data-id^="database"], [data-id="table"], [data-id="widget"]')).toHaveCount(0);
+    await slashMenu.locator('[data-id="heading1"]').click();
+    await page.keyboard.type("Heading");
+    await expect(cells.last().locator('[data-type="NodeHeading"]')).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await cells.last().click();
+    await expect(cells.last().locator('[data-type="NodeHeading"]')).toContainText("Heading");
+    await page.keyboard.press("Escape");
+    await cells.nth(4).click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type("/");
+    await expect(slashMenu.locator('[data-id="list"]')).toBeVisible();
+    await slashMenu.locator('[data-id="list"]').click();
+    await page.keyboard.type("List item");
+    await page.keyboard.press("Escape");
+    await cells.nth(4).click();
+    await expect(cells.nth(4).locator('[data-type="NodeList"]')).toContainText("List item");
+    await page.keyboard.press("Escape");
+    await cells.nth(3).click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type("/database");
+    await expect(slashMenu).toHaveCount(0);
+    await page.keyboard.press("Enter");
+    await expect(page.locator('#host [data-type="NodeAttributeView"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    console.log("PASS: cell slash menu excludes databases and nested tables and persists a supported heading");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
