@@ -595,6 +595,122 @@ try {
     await expect(page.locator('#host [data-type="NodeAttributeView"]')).toHaveCount(0);
     assert.deepEqual(errors, []);
     console.log("PASS: slash-created tables immediately support restricted list editing without a cell click");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B | C |\n| --- | --- | --- |\n| | | |\n| | | |");
+        outerFragment.wysiwyg.querySelectorAll("col").forEach(col => col.style.minWidth = "100px");
+        const cells = outerFragment.wysiwyg.querySelectorAll("th, td");
+        cells.forEach(cell => cell.textContent = "");
+        cellTest.setTableCellRich(cells[4], "## Heading\n\nfirst paragraph\n\nlast paragraph");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+    });
+    const arrowCells = page.locator('#host > .protyle-content > .protyle-wysiwyg th, #host > .protyle-content > .protyle-wysiwyg td');
+    const expectArrowCell = async index => {
+        await expect(arrowCells.nth(index).locator(".table__cell-editor")).toBeVisible();
+        assert.equal(await arrowCells.nth(index).evaluate(cell => cell.querySelector(".table__cell-editor").contains(getSelection().focusNode)), true);
+    };
+    await arrowCells.first().click();
+    for (const [key, index] of [["ArrowRight", 1], ["ArrowRight", 2], ["ArrowDown", 5], ["ArrowLeft", 4]]) {
+        await page.keyboard.press(key);
+        await expectArrowCell(index);
+    }
+    await page.keyboard.press("ArrowLeft");
+    await expectArrowCell(4);
+    const selectCellBoundary = async start => arrowCells.nth(4).evaluate((cell, start) => {
+        const edits = cell.querySelectorAll('.table__cell-editor [data-type^="Node"] > [contenteditable="true"]');
+        const range = document.createRange();
+        range.selectNodeContents(start ? edits[0] : edits[edits.length - 1]);
+        range.collapse(start);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+    }, start);
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(1);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(7);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowRight");
+    await expectArrowCell(5);
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, []);
+    console.log("PASS: all four arrow keys cross empty and rich cells only at content boundaries");
+    await arrowCells.first().evaluate(cell => {
+        cell.colSpan = 2;
+        cell.nextElementSibling.classList.add("fn__none");
+    });
+    await arrowCells.first().click();
+    await page.keyboard.press("ArrowRight");
+    await expectArrowCell(2);
+    await page.keyboard.press("ArrowLeft");
+    await expectArrowCell(0);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(3);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(0);
+    await page.keyboard.press("Escape");
+    await arrowCells.nth(4).evaluate(cell => {
+        cellTest.setTableCellRich(cell, "first<br />second");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    await arrowCells.nth(4).click();
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(7);
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, []);
+    console.log("PASS: arrow navigation skips merged placeholders and preserves movement within soft-wrapped cell content");
+    await arrowCells.nth(4).evaluate(cell => {
+        cellTest.setTableCellRich(cell, "## abcdef\n\n- ghijkl\n  - nested\n\nmnopqr");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    const textPoint = async (text, offset) => arrowCells.nth(4).evaluate((cell, {text, offset}) => {
+        const walker = document.createTreeWalker(cell.querySelector(".table__cell-rich"), NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            if (walker.currentNode.textContent === text) {
+                const range = document.createRange();
+                range.setStart(walker.currentNode, offset);
+                range.collapse(true);
+                const rect = range.getBoundingClientRect();
+                return {x: rect.x + 0.5, y: rect.y + rect.height / 2};
+            }
+        }
+        throw new Error(`Missing preview text: ${text}`);
+    }, {text, offset});
+    const headingPoint = await textPoint("abcdef", 2);
+    await page.mouse.click(headingPoint.x, headingPoint.y);
+    await expectArrowCell(4);
+    await page.keyboard.type("X");
+    await expect(arrowCells.nth(4).locator('[data-type="NodeHeading"]')).toHaveText("abXcdef");
+    await page.keyboard.press("Escape");
+    for (const backward of [false, true]) {
+        const start = await textPoint("abXcdef", 1);
+        const end = await textPoint("ghijkl", 3);
+        const from = backward ? end : start;
+        const to = backward ? start : end;
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, {steps: 12});
+        const selected = await page.evaluate(() => getSelection().toString());
+        assert.ok(selected.includes("bXcdef") && selected.includes("ghi"), "drag selects heading and list text");
+        await page.mouse.up();
+        await expectArrowCell(4);
+        assert.equal(await page.evaluate(() => getSelection().toString()), selected,
+            "entering cell editing preserves the dragged text selection");
+        await page.keyboard.press("Escape");
+    }
+    assert.deepEqual(errors, []);
+    console.log("PASS: clicking rich preview text preserves caret position and dragging preserves forward and backward selections");
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
     console.log("PASS: Markdown list input, nested list Tab, rich source promotion, reopening and retention");
