@@ -19,6 +19,7 @@ export {getAVRichTextLute} from "./src/protyle/render/av/richText";
 export {renderTableCellRichElements} from "./src/protyle/render/tableCellRich";
 export {applyTableCellRichInlineMark} from "./src/protyle/render/tableCellRichEditor";
 export {TableControl} from "./src/protyle/util/tableControl";
+export {LocalUndo} from "./src/protyle/undo";
 export {tableMenu} from "./src/menus/protyle";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
@@ -443,6 +444,71 @@ try {
     await page.keyboard.press("Control+Shift+z");
     await expect(cells.nth(1)).toBeVisible();
     console.log("PASS: both table split entry points support immediate undo and redo");
+    await page.evaluate(() => document.body.insertAdjacentHTML("beforeend", '<div id="message"><div></div></div>'));
+    await cells.nth(1).click();
+    const pasteEdit = cells.nth(1).locator('.p > [contenteditable="true"]').first();
+    await pasteEdit.click();
+    await page.keyboard.insertText("keep");
+    await pasteEdit.evaluate(edit => {
+        const range = document.createRange();
+        range.selectNodeContents(edit);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+    });
+    const markdownTable = "| Header | Header |\n|--------|--------|\n| Cell | Cell |\n| Cell | Cell | ";
+    const pasteCases = [
+        {"text/plain": markdownTable},
+        {"text/plain": "Header", "text/html": "<table><tr><td>Header</td></tr></table>"},
+        {"text/plain": "video", "text/html": '<video src="test.mp4"></video>'},
+        {"text/plain": "audio", "text/html": '<audio src="test.mp3"></audio>'},
+        {"text/plain": "frame", "text/html": '<iframe src="about:blank"></iframe>'},
+        {"text/plain": "Header", "text/siyuan": await page.evaluate(md => cellTest.getAVRichTextLute().Md2BlockDOM(md), markdownTable)},
+        {"text/plain": "before\n\n---\n\nafter"},
+        {"text/plain": "```mermaid\ngraph LR\nA-->B\n```"},
+        ...["NodeAttributeView", "NodeBlockQueryEmbed", "NodeSuperBlock", "NodeWidget", "NodeVideo", "NodeAudio", "NodeIFrame", "NodeHTMLBlock", "NodeCustomBlock", "NodeTabs", "NodeCallout"].map(type => ({
+            "text/plain": "before unsupported after",
+            "text/siyuan": `<div data-type="NodeParagraph"><div contenteditable="true">before</div></div><div data-type="${type}"></div><div data-type="NodeParagraph"><div contenteditable="true">after</div></div>`,
+        })),
+    ];
+    for (const payload of pasteCases) {
+        await page.locator("#message > div").evaluate(el => el.replaceChildren());
+        await pasteEdit.evaluate((edit, data) => {
+            const clipboard = new DataTransfer();
+            Object.entries(data).forEach(([type, value]) => clipboard.setData(type, value));
+            const originalAdd = cellTest.LocalUndo.prototype.add;
+            let undoCount = 0;
+            cellTest.LocalUndo.prototype.add = function (...args) {
+                undoCount++;
+                return originalAdd.apply(this, args);
+            };
+            try {
+                edit.dispatchEvent(new ClipboardEvent("paste", {clipboardData: clipboard, bubbles: true, cancelable: true}));
+                if (undoCount !== 0) throw new Error("Rejected paste added an undo operation");
+            } finally {
+                cellTest.LocalUndo.prototype.add = originalAdd;
+            }
+        }, payload);
+        await expect(page.locator("#message")).toContainText("Paste canceled");
+        await expect(pasteEdit).toHaveText("keep");
+        assert.equal(await page.evaluate(() => getSelection().toString()), "keep");
+        await expect(cells.nth(1).locator("table")).toHaveCount(0);
+    }
+    await pasteEdit.evaluate(edit => {
+        const range = document.createRange();
+        range.selectNodeContents(edit);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+    });
+    await pasteEdit.evaluate(edit => {
+        const clipboard = new DataTransfer();
+        clipboard.setData("text/plain", "left | right");
+        edit.dispatchEvent(new ClipboardEvent("paste", {clipboardData: clipboard, bubbles: true, cancelable: true}));
+    });
+    await expect(pasteEdit).toHaveText("left | right");
+    await page.keyboard.press("Escape");
+    await cells.nth(1).click();
+    await expect(cells.nth(1).locator('.p > [contenteditable="true"]').first()).toHaveText("left | right");
+    console.log("PASS: unsupported pasted blocks reject the whole payload without changing content or selection; pipe text persists");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
