@@ -19,6 +19,7 @@ export {getAVRichTextLute} from "./src/protyle/render/av/richText";
 export {renderTableCellRichElements} from "./src/protyle/render/tableCellRich";
 export {applyTableCellRichInlineMark} from "./src/protyle/render/tableCellRichEditor";
 export {TableControl} from "./src/protyle/util/tableControl";
+export {tableMenu} from "./src/menus/protyle";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
     },
@@ -413,6 +414,35 @@ try {
     await page.keyboard.press("Escape");
     await expect(cells.first().locator('.table__cell-rich [data-type="NodeList"]')).toHaveCount(2);
     console.log("PASS: merging rich cells preserves displayed and stored headings and nested lists");
+    await page.evaluate(() => {
+        const cell = outerFragment.wysiwyg.querySelector("tbody td");
+        const control = outerFragment.protyle.wysiwyg.tableControl;
+        control.selectCellRange(cell, cell);
+        control.splitCell(cell);
+    });
+    await expect(cells.nth(1)).toBeVisible();
+    await page.keyboard.press("Control+z");
+    await expect(cells.first()).toHaveAttribute("colspan", "2");
+    await expect(cells.nth(1)).toBeHidden();
+    await page.keyboard.press("Control+Shift+z");
+    await expect(cells.nth(1)).toBeVisible();
+    await page.keyboard.press("Control+z");
+    await expect(cells.first()).toHaveAttribute("colspan", "2");
+    await page.evaluate(() => {
+        const cell = outerFragment.wysiwyg.querySelector("tbody td");
+        outerFragment.protyle.wysiwyg.tableControl.clear();
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        const menu = cellTest.tableMenu(outerFragment.protyle, cell.closest('[data-type="NodeTable"]'), cell, range);
+        menu.otherMenus.find(item => item.id === "cancelMerged").click();
+    });
+    await expect(cells.nth(1)).toBeVisible();
+    await page.keyboard.press("Control+z");
+    await expect(cells.first()).toHaveAttribute("colspan", "2");
+    await expect(cells.nth(1)).toBeHidden();
+    await page.keyboard.press("Control+Shift+z");
+    await expect(cells.nth(1)).toBeVisible();
+    console.log("PASS: both table split entry points support immediate undo and redo");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
