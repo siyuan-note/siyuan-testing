@@ -14,8 +14,8 @@ interface IKeymap {
 }
 
 const action = "goToTab5";
-const addedKey = "⌥⇧⌘F13";
-const replacementKey = "⌥⇧⌘F14";
+const addedKey = "⌥⇧⌘F9";
+const replacementKey = "⌥⇧⌘F10";
 const rowSelector = `[data-key="general\u200b${action}"]`;
 
 const openKeymap = async (page: Page) => {
@@ -24,6 +24,7 @@ const openKeymap = async (page: Page) => {
     const dialog = page.locator('[data-key="dialog-setting"].b3-dialog--open');
     await dialog.locator('.config__side [data-name="keymap"]').click();
     const row = dialog.locator(rowSelector);
+    await dialog.locator("#keymapInput").fill((await row.locator(".b3-list-item__text").textContent())!.trim());
     await expect(row).toBeVisible();
     return row;
 };
@@ -57,7 +58,7 @@ const clickAction = async (row: Locator, type: string) => {
     await row.locator(`[data-type="${type}"]`).click();
 };
 
-const recordKey = async (page: Page, key = "F13") => {
+const recordKey = async (page: Page, key = "F9") => {
     await page.keyboard.press(`ControlOrMeta+Alt+Shift+${key}`);
 };
 
@@ -113,7 +114,7 @@ test("cancels recording without changing bindings and edits only the selected bi
     await expect(shortcutRow).toHaveAttribute("data-keys", expected);
 
     await shortcutRow.locator('[data-index="1"] [data-type="update"]').click();
-    await recordKey(page, "F14");
+    await recordKey(page, "F10");
     await expect(shortcutRow).toHaveAttribute("data-keys", JSON.stringify(["⌘5", replacementKey]));
     await expect.poll(async () => {
         const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
