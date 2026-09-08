@@ -5,6 +5,10 @@ import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface ISyNode {
+    Spec?: string;
+    TableCellRich?: {spec: number, format: string, content: string};
+    TextMarkTextContent?: string;
+    TextMarkInlineMathContent?: string;
     ID?: string;
     Data?: string;
     Properties?: Record<string, string>;
@@ -82,7 +86,9 @@ const requestHistoryAction = async (page: Page, table: Locator, action: "undo" |
 };
 
 const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
-    await cell.click();
+    if (await cell.locator(".table__cell-editor").count()) {
+        await page.keyboard.press("Escape");
+    }
     await selectCellContents(cell, true);
     await cell.click({button: "right"});
     const menu = page.locator("#commonMenu:not(.fn__none)");
@@ -95,9 +101,12 @@ const chooseTableCellAction = async (page: Page, cell: Locator, action: string) 
 
 const replaceCellText = async (page: Page, cell: Locator, value: string) => {
     const current = (await cell.textContent())?.replace(/\u200b/g, "").trim() || "";
-    await cell.dblclick();
+    await cell.click();
+    await expect(cell.locator(".table__cell-editor")).toBeVisible();
+    await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
     await expect.poll(() => page.evaluate(() => getSelection()?.toString() || "")).toBe(current);
     await requestTransaction(page, () => page.keyboard.type(value, {delay: 10}));
+    await page.keyboard.press("Escape");
 };
 
 const getDOMTableState = async (table: Locator) => ({
@@ -270,6 +279,396 @@ const copyTableControlSelection = async (page: Page) => page.evaluate(() => {
         plain: clipboardData.getData("text/plain"),
         types: Array.from(clipboardData.types).sort(),
     };
+});
+
+const getRichTableState = async (api: SiyuanAPI, docID: string) => {
+    const document = await api.readDocument<ISyNode>(docID);
+    const tables = flattenNodes(document).filter(node => node.Type === "NodeTable");
+    const cells = tables.flatMap(getTableRows).flatMap(row => row.Children || []);
+    const richCells = cells.filter(cell => cell.TableCellRich);
+    return {
+        spec: document.Spec,
+        sources: richCells.map(cell => cell.TableCellRich),
+        invalidDescendants: richCells.flatMap(cell => flattenNodes(cell).slice(1)).filter(node =>
+            node.ID || node.Properties?.id ||
+            ["NodeParagraph", "NodeList", "NodeListItem", "NodeHeading", "NodeBlockquote", "NodeCodeBlock", "NodeMathBlock"]
+                .includes(node.Type || "")).length,
+        projection: richCells.map(cell => flattenNodes(cell).map(node =>
+            node.Data || node.TextMarkTextContent || node.TextMarkInlineMathContent || "").join("")),
+    };
+};
+
+const pasteRichCellMarkdown = async (page: Page, cell: Locator, source: string) => {
+    const editable = cell.locator('.table__cell-editor .protyle-wysiwyg [contenteditable="true"]').first();
+    await expect(editable).toBeVisible();
+    await page.evaluate(text => navigator.clipboard.writeText(text), source);
+    await editable.evaluate(element => {
+        element.focus();
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        getSelection()!.removeAllRanges();
+        getSelection()!.addRange(range);
+    });
+    await page.keyboard.press(`${PRIMARY_MODIFIER}+V`);
+};
+
+const richCellSample = "- **first**\n- second\n\n```go\na | b\nc < d && e\n```\n\n$$\nx^2\n$$";
+
+const fillRichCell = async (page: Page, cell: Locator) => {
+    await cell.click();
+    await pasteRichCellMarkdown(page, cell, richCellSample);
+    await expect(cell.locator('.table__cell-editor [data-type="NodeCodeBlock"]')).toHaveCount(1);
+    await expect(cell.locator('.table__cell-editor [data-type="NodeMathBlock"]')).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(cell.locator(".table__cell-editor")).toHaveCount(0);
+    await expect(cell.locator(".table__cell-rich .code-block .hljs")).toContainText("c < d && e");
+};
+
+const waitForRichCellSource = async (api: SiyuanAPI, docID: string) => {
+    await expect.poll(() => getRichTableState(api, docID), {timeout: 30000}).toMatchObject({
+        spec: "4", invalidDescendants: 0,
+        sources: [{spec: 1, format: "kramdown", content: expect.stringContaining("```go")}],
+    });
+    return (await getRichTableState(api, docID)).sources[0];
+};
+
+test.describe("table cell rich text", () => {
+    test.describe.configure({mode: "serial"});
+
+    test("edits legacy text without upgrading storage and preserves table navigation", async ({
+        createTestDocument, page, siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument("Table Default Rich E2E",
+            "| Header | Next |\n| --- | --- |\n| \\*\\*literal\\*\\* | **bold** |\n| below | last |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cells = table.locator("tbody td");
+        await cells.first().click();
+        const fragment = cells.first().locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await expect.poll(() => getRichTableState(siyuanAPI, docID)).toMatchObject({spec: "2", sources: []});
+        await page.keyboard.press("End");
+        await page.keyboard.type(" updated");
+        await page.keyboard.press("Tab");
+        await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
+        await expect(cells.nth(1).locator('[data-type~="strong"]')).toHaveText("bold");
+        await page.keyboard.press("Enter");
+        await expect(cells.nth(3).locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("Shift+Tab");
+        await expect(cells.nth(2).locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("End");
+        await page.keyboard.press("Shift+Enter");
+        await page.keyboard.type("next line");
+        await page.keyboard.press("Escape");
+        await expect(cells.nth(2).locator("br")).not.toHaveCount(0);
+        await expect.poll(() => getRichTableState(siyuanAPI, docID)).toMatchObject({spec: "2", sources: []});
+        await expect(table.locator('[data-sy-table-cell-inline], [data-sy-table-cell-rich]')).toHaveCount(0);
+        await expect(cells.first()).toHaveText("**literal** updated");
+        await expect(cells.first().locator('[data-type~="strong"]')).toHaveCount(0);
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator("tbody td").first()).toHaveText("**literal** updated");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID)).toMatchObject({spec: "2", sources: []});
+    });
+
+    test("creates and indents a list by typing in an ordinary empty cell", async ({
+        createTestDocument, page, siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument("Table Default List E2E",
+            "| Header | Next |\n| --- | --- |\n| | ordinary |");
+        const cell = editor.locator("tbody td").first();
+        await cell.click();
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await page.keyboard.type("- first");
+        await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);
+        await page.keyboard.press("Enter");
+        await page.keyboard.type("second");
+        await page.keyboard.press("Tab");
+        await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(2);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "4", invalidDescendants: 0,
+            sources: [expect.objectContaining({content: expect.stringContaining("second")})],
+        });
+        const saved = (await getRichTableState(siyuanAPI, docID)).sources;
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await reloaded.locator("tbody td").first().click();
+        await expect(reloaded.locator('.table__cell-editor [data-type="NodeList"]')).toHaveCount(2);
+        await page.keyboard.press("Escape");
+        expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual(saved);
+    });
+
+    test("keeps paragraph, list, heading, quote, and code layout consistent when leaving the editor", async ({
+        createTestDocument, page,
+    }) => {
+        const {editor} = await createTestDocument("Table Rich Layout E2E",
+            "| First | Second | Rich |\n| --- | --- | --- |\n| untouched | ordinary | text |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").last();
+        await cell.click();
+        await pasteRichCellMarkdown(page, cell,
+            "first paragraph\n\nsecond paragraph\n\n- first\n  - second\n    - third\n\n# Heading\n\n> quoted text\n\n```go\na | b\nc < d && e\n```");
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment.locator('.code-block .hljs[data-render="true"]')).toBeVisible();
+        const measureLayout = (root: Locator) => root.evaluate(element => {
+            const origin = element.getBoundingClientRect();
+            return Array.from(element.querySelectorAll<HTMLElement>('[data-type^="Node"]')).map(node => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return {
+                    type: node.dataset.type,
+                    left: Math.round(rect.left - origin.left),
+                    top: Math.round(rect.top - origin.top),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                    fontSize: style.fontSize,
+                    lineHeight: style.lineHeight,
+                };
+            });
+        });
+        const editingLayout = await measureLayout(fragment);
+        const lineNumbers = await fragment.locator(".protyle-linenumber__rows > span").count();
+        await page.keyboard.press("Escape");
+        const preview = cell.locator(".table__cell-rich");
+        await expect(preview.locator('.code-block .hljs[data-render="true"]')).toBeVisible();
+        await expect.poll(() => measureLayout(preview)).toEqual(editingLayout);
+        await expect(preview.locator(".protyle-linenumber__rows > span")).toHaveCount(lineNumbers);
+        await expect(preview.locator('[data-node-id], [contenteditable="true"]')).toHaveCount(0);
+        const tableID = await table.getAttribute("data-node-id");
+        const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
+        for (const target of [preview.locator(".li").first(), preview.locator(".li .p").last(),
+            preview.locator(".code-block")]) {
+            await target.hover();
+            await expect(gutter).toBeVisible();
+            const gutterRect = await gutter.boundingBox();
+            const tableRect = await table.boundingBox();
+            expect(gutterRect!.x + gutterRect!.width / 2).toBeLessThan(tableRect!.x);
+        }
+        await page.keyboard.press("F2");
+        await expect(fragment.locator('.code-block .hljs[data-render="true"]')).toBeVisible();
+        await expect.poll(() => measureLayout(fragment)).toEqual(editingLayout);
+    });
+
+    test("keeps legacy cells literal and persists in-cell list editing without child block identities", async ({
+        createTestDocument, page, siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument("Table Rich List E2E",
+            "| Header | Next |\n| --- | --- |\n| \\*\\*literal\\*\\* | untouched |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        await expect(cell).toHaveText("**literal**");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "2", sources: [], invalidDescendants: 0,
+        });
+
+        await cell.click();
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await expect(fragment).toHaveCSS("box-shadow", "none");
+        const tableID = await table.getAttribute("data-node-id");
+        const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
+        await expect(gutter).not.toBeVisible();
+        await table.locator("tbody td").nth(1).hover();
+        await expect(gutter).toBeVisible();
+        await fragment.locator('[contenteditable="true"]').first().hover();
+        await expect(gutter).not.toBeVisible();
+        await expect(fragment.locator('[contenteditable="true"]').first()).toHaveText("**literal**");
+        await expect(fragment.locator('[data-type~="strong"]')).toHaveCount(0);
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press("Backspace");
+        await page.keyboard.type("- first");
+        await page.keyboard.press("Enter");
+        await page.keyboard.type("second");
+        await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(2);
+        await page.keyboard.press("Tab");
+        await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(2);
+        await page.keyboard.press("Shift+Tab");
+        await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await expect(fragment).toHaveCount(0);
+        await expect(table.locator("tbody tr")).toHaveCount(1);
+        await expect(cell.locator(".table__cell-rich .li")).toHaveCount(2);
+        await page.keyboard.press("F2");
+        await expect(fragment).toBeVisible();
+        await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(2);
+        await page.keyboard.press("Escape");
+        await expect(fragment).toHaveCount(0);
+
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "4", invalidDescendants: 0,
+            sources: [{spec: 1, format: "kramdown", content: expect.stringContaining("- second")}],
+            projection: [expect.stringContaining("first")],
+        });
+        await page.keyboard.press("Tab");
+        await expect.poll(() => page.evaluate(() => {
+            const node = getSelection()?.focusNode;
+            const element = node instanceof Element ? node : node?.parentElement;
+            return element?.closest("td")?.cellIndex;
+        })).toBe(1);
+        const beforeReload = await getRichTableState(siyuanAPI, docID);
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator(".table__cell-rich .li")).toHaveCount(2);
+        await expect(reloaded.locator("td[data-sy-table-cell-rich] [data-node-id]")).toHaveCount(0);
+        expect(await getRichTableState(siyuanAPI, docID)).toEqual(beforeReload);
+    });
+
+    test("copies rich cells into an ordinary table and preserves them through undo, redo, and reload", async ({
+        baseURL, context, createTestDocument, page, siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument("Table Rich Clipboard E2E",
+            "| Header | Next |\n| --- | --- |\n| seed | ordinary |\n\nSeparator\n\n" +
+            "| Target | Next |\n| --- | --- |\n| target | end |");
+        const tables = editor.locator(':scope > [data-type="NodeTable"]');
+        const table = tables.first();
+        const cell = table.locator("tbody tr").first().locator("td").first();
+        await fillRichCell(page, cell);
+        const original = await waitForRichCellSource(siyuanAPI, docID);
+        const second = table.locator("tbody tr").first().locator("td").nth(1);
+        await dragSelectCells(page, cell, second);
+        const copied = await copyTableControlSelection(page);
+        expect(copied.hasSiyuanComment).toBe(true);
+        expect(copied.types).toContain("text/siyuan");
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+C`);
+        await page.keyboard.press("Escape");
+        const destination = tables.nth(1);
+        const target = destination.locator("tbody td").first();
+        await selectCellContents(target, true);
+        await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+V`));
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            sources: [original, original], invalidDescendants: 0,
+        });
+        await expect(target.locator(".table__cell-rich .li")).toHaveCount(2);
+        await requestHistoryAction(page, destination, "undo");
+        await expect(target).toHaveText("target");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({sources: [original]});
+        await requestHistoryAction(page, destination, "redo");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({sources: [original, original]});
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator("td[data-sy-table-cell-rich]")).toHaveCount(2);
+        expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual([original, original]);
+    });
+
+    test("merges rich and ordinary cells without losing source and restores the merge with undo", async ({
+        baseURL, context, createTestDocument, page, siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument("Table Rich Merge E2E",
+            "| Header | Next |\n| --- | --- |\n| seed | ordinary |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        const second = table.locator("tbody td").nth(1);
+        await fillRichCell(page, cell);
+        const original = await waitForRichCellSource(siyuanAPI, docID);
+        await mergeTableCells(page, cell, second);
+        await expect(cell).toHaveAttribute("colspan", "2");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            sources: [expect.objectContaining({content: expect.stringContaining("ordinary")})], invalidDescendants: 0,
+        });
+        await expect(cell.locator(".table__cell-rich .code-block .hljs")).toContainText("c < d && e");
+        await requestHistoryAction(page, table, "undo");
+        await expect(cell).not.toHaveAttribute("colspan", "2");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            sources: [original], invalidDescendants: 0,
+        });
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator("tbody td").nth(1)).toHaveText("ordinary");
+        expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual([original]);
+    });
+
+    test("retains the rich source after removing block content and has no conversion menu", async ({
+        baseURL, context, createTestDocument, page, siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument("Table Rich Inline E2E",
+            "| Header | Next |\n| --- | --- |\n| seed | ordinary |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        await fillRichCell(page, cell);
+        await waitForRichCellSource(siyuanAPI, docID);
+        await cell.click();
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await fragment.locator('[contenteditable="true"]').first().focus();
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press("Backspace");
+        await page.keyboard.type("plain content");
+        await page.keyboard.press("Escape");
+        await expect(cell).toHaveAttribute("data-sy-table-cell-rich");
+        await expect(cell).toContainText("plain content");
+        await expect(cell.locator('[data-type="NodeList"], [data-type="NodeCodeBlock"], [data-type="NodeMathBlock"]')).toHaveCount(0);
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "4", sources: [expect.objectContaining({content: expect.stringContaining("plain content")})], invalidDescendants: 0,
+        });
+        await cell.click({button: "right"});
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
+        await expect(menu.locator('[data-id="tableCellRichEdit"], [data-id="tableCellRichDisable"]')).toHaveCount(0);
+        await page.keyboard.press("Escape");
+        const saved = await getRichTableState(siyuanAPI, docID);
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator("td[data-sy-table-cell-rich]")).toHaveCount(1);
+        expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual(saved.sources);
+    });
+
+    test("clears rich cells without changing their mode and restores their source with undo", async ({
+        baseURL, context, createTestDocument, page, siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument("Table Rich Clear E2E",
+            "| Header | Next |\n| --- | --- |\n| seed | ordinary |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        const second = table.locator("tbody td").nth(1);
+        await fillRichCell(page, cell);
+        const original = await waitForRichCellSource(siyuanAPI, docID);
+        await dragSelectCells(page, cell, second);
+        await second.click({button: "right"});
+        const menu = page.locator("#commonMenu:not(.fn__none)");
+        await expect(menu).toBeVisible();
+        const clearLabel = await page.evaluate(() => window.siyuan.languages.clear);
+        await requestTransaction(page, () => getMenuItemByLabel(page, menu, clearLabel).click());
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "4", sources: [{spec: 1, format: "kramdown", content: ""}], invalidDescendants: 0,
+        });
+        await expect(cell.locator(".table__cell-rich")).toBeEmpty();
+        await requestHistoryAction(page, table, "undo");
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({sources: [original]});
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await expect(reloaded.locator(".table__cell-rich .code-block .hljs")).toContainText("c < d && e");
+    });
+
+    test("exports rich formatting to HTML and a readable inline projection to Markdown", async ({
+        baseURL, context, createTestDocument, page, siyuanAPI,
+    }) => {
+        await allowClipboard(context, baseURL);
+        const {docID, editor} = await createTestDocument("Table Rich Export E2E",
+            "| Header | Next |\n| --- | --- |\n| seed | ordinary |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        await fillRichCell(page, cell);
+        const original = await waitForRichCellSource(siyuanAPI, docID);
+        const markdown = await siyuanAPI.post<{content: string}>("/api/export/exportMdContent", {id: docID});
+        expect(markdown.content).toContain("first");
+        expect(markdown.content).toContain("<code>a &#124; b<br />c &lt; d &amp;&amp; e</code>");
+        expect(markdown.content).not.toContain("data-sy-table-cell-rich");
+        expect(markdown.content).not.toContain("table-cell-rich=");
+        expect(markdown.content).not.toContain("```go");
+        const html = await siyuanAPI.post<{content: string}>("/api/export/exportHTML", {
+            id: docID, keepFold: false, merge: false, pdf: false, savePath: "",
+        });
+        expect(html.content).toContain('data-type="NodeList"');
+        expect(html.content).toContain('data-type="NodeCodeBlock"');
+        expect(html.content).toContain('data-subtype="math"');
+        expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual([original]);
+    });
 });
 
 test.describe("table editing", () => {
@@ -591,6 +990,8 @@ test.describe("table editing", () => {
         await expect.poll(() => getCornerRadii(tableElement)).toEqual(roundedCorners);
         // 单元格手柄仅在光标位于单元格内时显示（#18537），悬停不触发，这里只校验表格圆角不变
         await bodyCell.click();
+        await expect(bodyCell.locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("Escape");
         await expect(getVisibleTableControl(page, "cell")).toBeVisible();
     });
 
