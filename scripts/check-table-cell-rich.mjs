@@ -354,6 +354,41 @@ try {
     await expect(page.locator('#host [data-type="NodeAttributeView"]')).toHaveCount(0);
     await page.keyboard.press("Escape");
     console.log("PASS: cell slash menu excludes databases and nested tables and persists a supported heading");
+    await page.evaluate(() => {
+        window.siyuan.reqIds = {};
+        window.refQueries = [];
+        const originalFetch = window.fetch;
+        window.fetch = (url, init) => {
+            if (url !== "/api/search/searchRefBlock") {
+                return originalFetch(url, init);
+            }
+            const request = JSON.parse(init.body);
+            window.refQueries.push(request.k);
+            return Promise.resolve(new Response(JSON.stringify({code: 0, msg: "", data: {
+                k: request.k, reqId: request.reqId, newDoc: false, blocks: [{
+                    id: "20260908120000-ref0001", type: "NodeParagraph", ial: {},
+                    refText: "Reference target", content: "Reference target", hPath: "/Reference test",
+                }],
+            }}), {headers: {"content-type": "application/json"}}));
+        };
+    });
+    await cells.nth(2).evaluate(cell => {
+        cellTest.setTableCellRich(cell, "");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    await cells.nth(2).click();
+    await expect(cells.nth(2).locator(".table__cell-editor")).toBeVisible();
+    await page.keyboard.type("/");
+    await slashMenu.locator('[data-id="ref"]').click();
+    await page.keyboard.type("Reference");
+    await expect.poll(() => page.evaluate(() => window.refQueries.includes("Reference"))).toBe(true);
+    await expect(slashMenu.locator('[data-node-id="20260908120000-ref0001"]')).toBeVisible();
+    await slashMenu.locator('[data-node-id="20260908120000-ref0001"]').click();
+    await page.keyboard.press("Escape");
+    await cells.nth(2).click();
+    await expect(cells.nth(2).locator('[data-type~="block-ref"][data-id="20260908120000-ref0001"]')).toContainText("Reference target");
+    await page.keyboard.press("Escape");
+    console.log("PASS: slash reference searches as typing continues and preserves the selected reference");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
