@@ -509,6 +509,48 @@ try {
     await cells.nth(1).click();
     await expect(cells.nth(1).locator('.p > [contenteditable="true"]').first()).toHaveText("left | right");
     console.log("PASS: unsupported pasted blocks reject the whole payload without changing content or selection; pipe text persists");
+    await page.keyboard.press("Escape");
+    await cells.nth(1).evaluate(cell => { cell.innerHTML = ""; cell.style.height = "180px"; });
+    const clickBox = await cells.nth(1).boundingBox();
+    await page.mouse.move(clickBox.x + 12, clickBox.y + 12);
+    await page.mouse.down();
+    await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
+    const pressedCaret = await page.evaluate(() => {
+        const range = getSelection().getRangeAt(0);
+        return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
+    });
+    assert.equal(pressedCaret.node, "#text");
+    assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (clickBox.y + clickBox.height / 2)) < 3,
+        "mouse down places the empty cell caret at the vertically centered editing line");
+    await page.mouse.up();
+    assert.deepEqual(await page.evaluate(() => {
+        const range = getSelection().getRangeAt(0);
+        return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
+    }), pressedCaret, "mouse up must not reposition the empty cell caret");
+    await page.keyboard.type("stable");
+    await page.keyboard.press("Escape");
+    await expect(cells.nth(1)).toHaveText("stable");
+    console.log("PASS: clicking a tall empty cell positions the caret once without jumping on mouse up");
+    await cells.nth(1).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowRight");
+    const rightBlankState = await cells.nth(1).evaluate(cell => {
+        const range = getSelection().getRangeAt(0);
+        const table = cell.closest("table").getBoundingClientRect();
+        return {x: table.right + 40, y: table.top + table.height / 2, offset: range.startOffset,
+            caret: range.getBoundingClientRect().toJSON()};
+    });
+    await page.mouse.click(rightBlankState.x, rightBlankState.y);
+    await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
+    assert.deepEqual(await page.evaluate(() => {
+        const range = getSelection().getRangeAt(0);
+        return {offset: range.startOffset, caret: range.getBoundingClientRect().toJSON()};
+    }), {offset: rightBlankState.offset, caret: rightBlankState.caret}, "right-side blank click preserves the editing caret");
+    await page.keyboard.type("X");
+    await cells.first().click();
+    await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
+    await expect(cells.nth(1)).toHaveText("sXtable");
+    console.log("PASS: clicking the table's right-side blank preserves the caret and subsequent typing; another cell still ends editing");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
