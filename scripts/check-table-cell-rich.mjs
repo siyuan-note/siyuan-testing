@@ -16,6 +16,7 @@ const bundle = await build({
 export * from "./src/protyle/util/tableCellRichValue";
 export {mountProtyleLiteFragment} from "./src/protyle/lite/fragmentEditor";
 export {getAVRichTextLute} from "./src/protyle/render/av/richText";
+export {renderTableCellRichElements} from "./src/protyle/render/tableCellRich";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
     },
@@ -34,7 +35,7 @@ export {Constants} from "./src/constants";`,
 const browser = await chromium.launch({channel: "chrome", headless: true});
 try {
     const page = await browser.newPage();
-    await page.setContent('<style>.fn__none {display:none!important} [contenteditable=true] {white-space:break-spaces} td {min-width:160px} .protyle-wysiwyg {min-height:24px}</style><div id="sidebar"></div><div id="host"></div>');
+    await page.setContent('<style>.fn__none {display:none!important} [contenteditable=true] {white-space:break-spaces} .protyle-wysiwyg {min-height:24px}</style><div id="sidebar"></div><div id="host"></div>');
     await page.addStyleTag({content: appRequire("sass").compile(path.join(app, "src/assets/scss/base.scss"),
         {logger: {warn() {}, debug() {}}}).css});
     await page.addScriptTag({path: path.join(app, "stage/protyle/js/lute/lute.min.js")});
@@ -136,15 +137,37 @@ try {
         };
         window.outerFragment = cellTest.mountProtyleLiteFragment(document.getElementById("host"), {
             app: {plugins: []},
-            initialBlockHTML: cellTest.getAVRichTextLute().Md2BlockDOM("| A | B |\n| --- | --- |\n| \\*\\*literal\\*\\* | **bold** |\n| below | last |"),
+            initialBlockHTML: cellTest.getAVRichTextLute().Md2BlockDOM("| A | B |\n| --- | --- |\n| \\*\\*literal\\*\\* | **bold** |\n| below | last |\n| | |"),
             runtimeCapabilities: {upload: false, websocket: false, pluginExtensions: false,
                 customBlockRender: false, lute: cellTest.getAVRichTextLute()},
         });
         outerFragment.protyle.gutter = {element: blank(), render: noop};
     });
     const cells = page.locator("#host > .protyle-content > .protyle-wysiwyg tbody td");
+    const measure = cell => cell.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const table = element.closest("table").getBoundingClientRect();
+        return [rect.width, rect.height, table.width, table.height];
+    });
+    const originalSize = await measure(cells.first());
+    const headers = page.locator("#host > .protyle-content > .protyle-wysiwyg thead th");
+    for (let index = 0; index < await headers.count(); index++) {
+        const header = headers.nth(index);
+        const size = await measure(header);
+        await header.click();
+        await expect(header.locator(".table__cell-editor")).toBeVisible();
+        assert.deepEqual(await measure(header), size, "header cell size when opening the editor");
+        await page.keyboard.press("Escape");
+    }
+    const blankRowSize = await measure(cells.last());
+    await cells.last().click();
+    await expect(cells.last().locator(".table__cell-editor")).toBeVisible();
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "empty row size when opening the editor");
+    await page.keyboard.press("Escape");
+    assert.deepEqual(await measure(cells.last()), blankRowSize, "empty row size when closing the editor");
     await cells.first().click();
     await expect(cells.first().locator(".table__cell-editor")).toBeVisible();
+    assert.deepEqual(await measure(cells.first()), originalSize, "ordinary cell size when opening the editor");
     await page.keyboard.press("End");
     await page.keyboard.type(" changed");
     await page.keyboard.press("Tab");
@@ -170,7 +193,9 @@ try {
     await expect(cells.first()).toHaveText("**raw literal** updated");
     await expect(cells.first().locator('[data-type~="strong"]')).toHaveCount(0);
     await cells.nth(1).evaluate(cell => cell.textContent = "");
+    const emptySize = await measure(cells.nth(1));
     await cells.nth(1).click();
+    assert.deepEqual(await measure(cells.nth(1)), emptySize, "empty cell size when opening the editor");
     const fragment = cells.nth(1).locator(".table__cell-editor .protyle-wysiwyg");
     await page.keyboard.type("- first");
     await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);
@@ -190,8 +215,30 @@ try {
     await expect(cells.nth(1)).toHaveAttribute("data-sy-table-cell-rich");
     await expect(cells.nth(1).locator('[data-type="NodeList"]')).toHaveCount(0);
     await expect.poll(() => cells.nth(1).textContent().then(text => text.replace(/\u200b/g, ""))).toBe("plain again");
+    const ordinaryEmptySize = await measure(cells.last());
+    await cells.last().evaluate(cell => {
+        cellTest.setTableCellRich(cell, "");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    assert.deepEqual(await measure(cells.last()), ordinaryEmptySize, "rich empty preview matches ordinary empty cell");
+    await cells.last().click();
+    const emptyEditor = cells.last().locator(".table__cell-editor");
+    await expect(emptyEditor).toBeVisible();
+    await expect(emptyEditor.locator(".protyle-wysiwyg [placeholder]")).toHaveCount(0);
+    assert.deepEqual(await measure(cells.last()), ordinaryEmptySize, "rich empty editor matches ordinary empty cell");
+    await page.keyboard.type("123");
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Escape");
+    await expect(cells.last()).toHaveAttribute("data-sy-table-cell-rich");
+    assert.deepEqual(await measure(cells.last()), ordinaryEmptySize, "cleared rich cell remains compact");
+    await page.keyboard.press("Shift+Tab");
+    await expect(cells.nth(4).locator(".table__cell-editor")).toBeVisible();
+    await page.keyboard.press("Escape");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
+    console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
     console.log("PASS: Markdown list input, nested list Tab, rich source promotion, reopening and retention");
 } finally {
     await browser.close();

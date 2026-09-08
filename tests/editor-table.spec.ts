@@ -335,6 +335,29 @@ const waitForRichCellSource = async (api: SiyuanAPI, docID: string) => {
 test.describe("table cell rich text", () => {
     test.describe.configure({mode: "serial"});
 
+    test("keeps ordinary cell and table dimensions unchanged when entering and leaving editing", async ({
+        createTestDocument, page,
+    }) => {
+        const {editor} = await createTestDocument("Table Cell Size E2E",
+            "| Header | Next |\n| --- | --- |\n| 123 | **bold** |\n| | |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cells = table.locator("th, td");
+        const measure = () => table.evaluate(element =>
+            Array.from(element.querySelectorAll("table, th, td")).map(node => {
+                const rect = node.getBoundingClientRect();
+                return {width: rect.width, height: rect.height};
+            }));
+        const original = await measure();
+        for (let index = 0; index < await cells.count(); index++) {
+            await cells.nth(index).click();
+            await expect(cells.nth(index).locator(".table__cell-editor")).toBeVisible();
+            expect(await measure()).toEqual(original);
+            await page.keyboard.press("Escape");
+            await expect(cells.nth(index).locator(".table__cell-editor")).toHaveCount(0);
+            expect(await measure()).toEqual(original);
+        }
+    });
+
     test("edits legacy text without upgrading storage and preserves table navigation", async ({
         createTestDocument, page, siyuanAPI,
     }) => {
@@ -368,6 +391,48 @@ test.describe("table cell rich text", () => {
         const reloaded = await getDocumentEditor(page, docID);
         await expect(reloaded.locator("tbody td").first()).toHaveText("**literal** updated");
         await expect.poll(() => getRichTableState(siyuanAPI, docID)).toMatchObject({spec: "2", sources: []});
+    });
+
+    test("uses the same compact empty editor after clearing rich content and navigating by keyboard", async ({
+        createTestDocument, page, siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument("Table Empty Editor E2E",
+            "| Header | Next |\n| --- | --- |\n| | |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        const measure = () => table.evaluate(element => {
+            const rect = element.querySelector("table")!.getBoundingClientRect();
+            return {width: rect.width, height: rect.height};
+        });
+        const size = await measure();
+        await cell.click();
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment.locator("[placeholder]")).toHaveCount(0);
+        await page.keyboard.type("- first");
+        await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await expect(cell).toHaveAttribute("data-sy-table-cell-rich");
+        await cell.click();
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
+        await page.keyboard.press("Backspace");
+        await page.keyboard.press("Escape");
+        await expect.poll(measure).toEqual(size);
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            spec: "4", sources: [{spec: 1, format: "kramdown", content: ""}], invalidDescendants: 0,
+        });
+        await cell.click();
+        await expect(fragment).toBeVisible();
+        await expect(fragment.locator("[placeholder]")).toHaveCount(0);
+        expect(await measure()).toEqual(size);
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Tab");
+        await expect(table.locator("tbody td").nth(1).locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("Escape");
+        await page.reload();
+        const reloaded = await getDocumentEditor(page, docID);
+        await reloaded.locator("tbody td").first().click();
+        await expect(reloaded.locator(".table__cell-editor .protyle-wysiwyg [placeholder]")).toHaveCount(0);
     });
 
     test("creates and indents a list by typing in an ordinary empty cell", async ({
@@ -722,11 +787,13 @@ test.describe("table editing", () => {
 
         const newRow = table.locator("tbody tr").last();
         const newItemCell = newRow.locator("td").first();
-        await selectCellContents(newItemCell);
+        await expect(newItemCell.locator(".table__cell-editor")).toBeVisible();
         await requestTransaction(page, () => page.keyboard.type("Delta", {delay: 10}));
         const newQuantityCell = newRow.locator("td").last();
-        await selectCellContents(newQuantityCell);
+        await page.keyboard.press("Tab");
+        await expect(newQuantityCell.locator(".table__cell-editor")).toBeVisible();
         await requestTransaction(page, () => page.keyboard.type("3", {delay: 10}));
+        await page.keyboard.press("Escape");
 
         await expect.poll(() => getDOMTableState(table), {timeout: 30000}).toEqual({
             body: [["G", "1"], ["Beta", "2"], ["Delta", "3"]],
