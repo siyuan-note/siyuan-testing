@@ -141,6 +141,34 @@ test.describe("editor", () => {
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
     });
 
+    test("undoes and redoes when the caret is at the editor boundary", async ({page, createTestDocument, siyuanAPI}) => {
+        const original = "Boundary history content";
+        const {docID, editor} = await createTestDocument("Editor Boundary Undo E2E", original);
+        const content = original + "X";
+        const editable = editor.locator(':scope > [data-node-id] > [contenteditable="true"]').first();
+        await focusEditable(editable);
+        await editable.press("End");
+        await page.keyboard.type("X");
+        for (const action of ["undo", "redo"] as const) {
+            await editor.evaluate(element => {
+                (element as HTMLElement).focus();
+                const range = document.createRange();
+                range.setStart(element, element.childNodes.length);
+                range.collapse(true);
+                const selection = getSelection()!;
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
+            await Promise.all([
+                page.waitForResponse(response => new URL(response.url()).pathname === `/api/transactions/${action}`),
+                page.keyboard.press(action === "undo" ? UNDO_SHORTCUT : REDO_SHORTCUT),
+            ]);
+            await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID)).includes(content))
+                .toBe(action === "redo");
+            await expect(editable).toHaveText(action === "redo" ? content : original);
+        }
+    });
+
     test("creates and persists a JavaScript code block", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor} = await createTestDocument("Code Block E2E");
         const editable = editor.locator(":scope > [data-node-id] > [contenteditable=true]").first();

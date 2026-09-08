@@ -86,8 +86,10 @@ const requestHistoryAction = async (page: Page, table: Locator, action: "undo" |
 };
 
 const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
+    await page.keyboard.press("Escape");
     if (await cell.locator(".table__cell-editor").count()) {
         await page.keyboard.press("Escape");
+        await expect(cell.locator(".table__cell-editor")).toHaveCount(0);
     }
     await selectCellContents(cell, true);
     await cell.click({button: "right"});
@@ -341,6 +343,9 @@ test.describe("table cell rich text", () => {
         const cells = editor.locator(':scope > [data-type="NodeTable"] tbody td');
         const menu = page.locator(".protyle-hint:not(.fn__none)");
         await cells.first().click();
+        await expect.poll(() => cells.first().evaluate(cell =>
+            cell.querySelector(".table__cell-editor .protyle-wysiwyg")?.contains(getSelection()?.focusNode || null) || false))
+            .toBe(true);
         await page.keyboard.type("/");
         await expect(menu.locator('[data-id="heading1"]')).toBeVisible();
         await expect(menu.locator('[data-id="list"]')).toBeVisible();
@@ -352,6 +357,9 @@ test.describe("table cell rich text", () => {
         await expect(cells.first().locator('[data-type="NodeHeading"]')).toContainText("Cell heading");
         await page.keyboard.press("Escape");
         await cells.last().click();
+        await expect.poll(() => cells.last().evaluate(cell =>
+            cell.querySelector(".table__cell-editor .protyle-wysiwyg")?.contains(getSelection()?.focusNode || null) || false))
+            .toBe(true);
         await page.keyboard.type("/database");
         await expect(menu).toHaveCount(0);
         await page.keyboard.press("Enter");

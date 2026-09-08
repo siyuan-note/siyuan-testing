@@ -130,7 +130,9 @@ test.describe("command palette", () => {
             await focusCommandTarget(table.locator("tr").nth(1).locator("td").nth(1));
             await runPaletteCommand(page, `core.context.table.${operation.key}`);
             await expect.poll(() => table.locator("tr").evaluateAll(rows => rows.map(row =>
-                Array.from(row.querySelectorAll("th, td")).map(cell => (cell.textContent || "").replace(/\u200b/g, "").trim()))))
+                Array.from(row.querySelectorAll("th, td")).map(cell =>
+                    ((cell.querySelector(".table__cell-editor .protyle-wysiwyg") || cell).textContent || "")
+                        .replace(/\u200b/g, "").trim()))))
                 .toEqual(operation.expected);
             await persisted(siyuanAPI, docID, editor);
             await expect.poll(async () => {
