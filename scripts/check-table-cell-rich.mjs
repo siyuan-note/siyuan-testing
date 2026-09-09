@@ -707,9 +707,20 @@ try {
         await expectArrowCell(4);
         assert.equal(await page.evaluate(() => getSelection().toString()), selected,
             "entering cell editing preserves the dragged text selection");
+        await expect(arrowCells.nth(4).locator(".table__cell-editor .protyle-toolbar")).toBeVisible();
         await page.keyboard.press("Escape");
     }
     console.log("PASS: clicking rich preview text preserves caret position and dragging preserves forward and backward selections");
+    const expectCellText = async (cell, text) => {
+        await expect.poll(() => cell.evaluate(element =>
+            (element.querySelector(".table__cell-editor .protyle-wysiwyg") || element).textContent.trim())).toBe(text);
+    };
+    const expectCellCaret = async (cell, offset) => {
+        await expect.poll(() => cell.evaluate(element => {
+            const selection = getSelection();
+            return element.contains(selection.focusNode) ? selection.focusOffset : -1;
+        })).toBe(offset);
+    };
     await page.evaluate(() => {
         outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
         outerFragment.protyle.undo.clear();
@@ -720,9 +731,11 @@ try {
     await page.keyboard.press("Escape");
     await expect(cells.first()).toHaveText("firstX");
     await page.keyboard.press("Control+z");
-    await expect(cells.first()).toHaveText("first");
+    await expectCellText(cells.first(), "first");
+    await expectCellCaret(cells.first(), 5);
     await page.keyboard.press("Control+Shift+z");
-    await expect(cells.first()).toHaveText("firstX");
+    await expectCellText(cells.first(), "firstX");
+    await expectCellCaret(cells.first(), 6);
     await cells.first().click();
     await page.keyboard.press("End");
     await page.keyboard.type("Y");
@@ -730,13 +743,16 @@ try {
     await page.keyboard.press("End");
     await page.keyboard.type("Z");
     await page.keyboard.press("Control+z");
-    await expect(cells.nth(1)).toHaveText("second");
+    await expectCellText(cells.nth(1), "second");
+    await expectCellCaret(cells.nth(1), 6);
     await page.keyboard.press("Control+z");
-    await expect(cells.first()).toHaveText("firstX");
+    await expectCellText(cells.first(), "firstX");
     await page.keyboard.press("Control+Shift+z");
-    await expect(cells.first()).toHaveText("firstXY");
+    await expectCellText(cells.first(), "firstXY");
     await page.keyboard.press("Control+Shift+z");
-    await expect(cells.nth(1)).toHaveText("secondZ");
+    await expectCellText(cells.nth(1), "secondZ");
+    await expectCellCaret(cells.nth(1), 7);
+    await page.keyboard.press("Escape");
     console.log("PASS: cell edits undo and redo after Escape and across cells");
     await page.evaluate(() => {
         outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
@@ -758,9 +774,62 @@ try {
     await page.keyboard.type("X");
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+z");
-    await expect(cells.first().locator('.table__cell-rich [data-type="NodeParagraph"]')).toHaveText("paragraph");
+    await expect(richParagraph).toHaveText("paragraph");
+    await expectCellCaret(cells.first(), 9);
     await page.keyboard.press("Control+Shift+z");
-    await expect(cells.first().locator('.table__cell-rich [data-type="NodeParagraph"]')).toHaveText("paragraphX");
+    await expect(richParagraph).toHaveText("paragraphX");
+    await expectCellCaret(cells.first(), 10);
+    await page.keyboard.type("Y");
+    await expect(richParagraph).toHaveText("paragraphXY");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1],
+            "## Heading\n\n- first\n  - nested\n\nabcdef");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.nth(1).click();
+    const lastParagraph = cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p > [contenteditable="true"]');
+    await lastParagraph.evaluate(edit => getSelection().setBaseAndExtent(edit.firstChild, 4, edit.firstChild, 2));
+    await page.keyboard.type("X");
+    await expect(lastParagraph).toHaveText("abXef");
+    await page.keyboard.press("Control+z");
+    await expect(lastParagraph).toHaveText("abcdef");
+    await expect.poll(() => page.evaluate(() => ({
+        text: getSelection().toString(), anchor: getSelection().anchorOffset, focus: getSelection().focusOffset,
+    }))).toEqual({text: "cd", anchor: 4, focus: 2});
+    await page.keyboard.press("Control+Shift+z");
+    await expect(lastParagraph).toHaveText("abXef");
+    await expectCellCaret(cells.nth(1), 3);
+    await page.keyboard.press("Enter");
+    await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(2);
+    await page.keyboard.press("Control+z");
+    await expect(lastParagraph).toHaveText("abXef");
+    await expectCellCaret(cells.nth(1), 3);
+    await page.keyboard.press("Control+Shift+z");
+    await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(2);
+    await page.keyboard.type("Y");
+    await expect(lastParagraph.last()).toHaveText("Yef");
+    await page.keyboard.press("Escape");
+    console.log("PASS: undo and redo restore non-first rich cell, backward selections, paragraph splits and continued typing");
+    const plainPoints = await cells.first().evaluate(cell => [1, 4].map(offset => {
+        const range = document.createRange();
+        range.setStart(cell.firstChild, offset);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        return {x: rect.x + 0.5, y: rect.y + rect.height / 2};
+    }));
+    await page.mouse.move(plainPoints[0].x, plainPoints[0].y);
+    await page.mouse.down();
+    await page.mouse.move(plainPoints[1].x, plainPoints[1].y, {steps: 8});
+    await page.mouse.up();
+    await expect(cells.first().locator(".table__cell-editor .protyle-toolbar")).toBeVisible();
+    assert.equal(await page.evaluate(() => getSelection().toString()), "irs");
+    await cells.first().locator('.protyle-toolbar [data-type="strong"]').click();
+    await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg [data-type="strong"]')).toHaveText("irs");
+    await page.keyboard.press("Escape");
+    console.log("PASS: first drag in an ordinary cell shows a working formatting toolbar");
     console.log("PASS: rich cell Escape preserves undo and redo; clicking hides owner and cell selection toolbars");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
