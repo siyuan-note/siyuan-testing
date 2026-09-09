@@ -514,6 +514,8 @@ try {
     const clickBox = await cells.nth(1).boundingBox();
     await page.mouse.move(clickBox.x + 12, clickBox.y + 12);
     await page.mouse.down();
+    await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
+    await page.mouse.up();
     await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
     const pressedCaret = await page.evaluate(() => {
         const range = getSelection().getRangeAt(0);
@@ -521,8 +523,7 @@ try {
     });
     assert.equal(pressedCaret.node, "#text");
     assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (clickBox.y + clickBox.height / 2)) < 3,
-        "mouse down places the empty cell caret at the vertically centered editing line");
-    await page.mouse.up();
+        "click places the empty cell caret at the vertically centered editing line");
     assert.deepEqual(await page.evaluate(() => {
         const range = getSelection().getRangeAt(0);
         return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
@@ -1028,6 +1029,82 @@ try {
     await expectCellText(cells.nth(1), "你");
     await page.keyboard.press("Escape");
     console.log("PASS: IME composition remains one undo step without intermediate phonetic input");
+    for (const content of ["", "plain", "- item"]) {
+        await page.evaluate(content => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+            if (content) cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), content);
+            cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        }, content);
+        const start = await cells.first().boundingBox();
+        const end = await cells.nth(1).boundingBox();
+        await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {steps: 8});
+        await page.mouse.up();
+        await expect.poll(() => page.evaluate(() => outerFragment.protyle.wysiwyg.tableControl.getSelectedCells().length)).toBe(2);
+        await cells.first().click();
+        const edit = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+        await edit.click();
+        if (content) {
+            await edit.dblclick({position: {x: 12, y: 8}});
+            await expect(page.locator("#host .protyle-toolbar:not(.fn__none)")).toHaveCount(1);
+            await page.keyboard.press("Escape");
+            await cells.first().click();
+        }
+        const activeStart = await edit.boundingBox();
+        await page.mouse.move(activeStart.x + 4, activeStart.y + 8);
+        await page.mouse.down();
+        await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {steps: 8});
+        await page.mouse.up();
+        await expect.poll(() => page.evaluate(() => outerFragment.protyle.wysiwyg.tableControl.getSelectedCells().length)).toBe(2);
+        await expect(page.locator("#host .protyle-toolbar:not(.fn__none)")).toHaveCount(0);
+    }
+    console.log("PASS: empty, ordinary and rich cells support drag selection before and during editing without extra toolbars");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- item");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+    });
+    await cells.first().click();
+    await page.keyboard.press("End");
+    for (let index = 0; index < 5; index++) await page.keyboard.press("Enter");
+    const paragraphCount = await cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p').count();
+    assert.ok(paragraphCount >= 2, "several Enter presses create empty paragraphs");
+    await page.keyboard.press("Escape");
+    await cells.first().click();
+    await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(paragraphCount);
+    await page.keyboard.press("Escape");
+    console.log("PASS: empty paragraphs after a list survive closing and reopening the cell");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |\n\n" + "below\n\n".repeat(15));
+        outerFragment.protyle.contentElement.style.cssText = "height:400px;overflow:auto";
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- item");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.contentElement.scrollTop = 0;
+    });
+    await cells.first().click();
+    await page.keyboard.press("End");
+    const scrollBefore = await page.evaluate(() => {
+        window.cellScrollRequests = [];
+        window.originalCellTestScroll = Element.prototype.scroll;
+        Element.prototype.scroll = function (...args) {
+            if (this.closest(".table__cell-editor")) window.cellScrollRequests.push(args);
+            return window.originalCellTestScroll.apply(this, args);
+        };
+        return {top: outerFragment.protyle.contentElement.scrollTop, page: window.scrollY};
+    });
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("next");
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.press("Shift+Enter");
+    const scrollAfter = await page.evaluate(() => {
+        Element.prototype.scroll = window.originalCellTestScroll;
+        return {top: outerFragment.protyle.contentElement.scrollTop, page: window.scrollY, requests: window.cellScrollRequests};
+    });
+    assert.deepEqual(scrollAfter, {...scrollBefore, requests: []}, "visible cell edits must not scroll the document or fragment");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => outerFragment.protyle.contentElement.removeAttribute("style"));
+    console.log("PASS: list Enter and soft breaks in a visible cell do not cause unintended scrolling");
     console.log("PASS: rich cell Escape preserves undo and redo; clicking hides owner and cell selection toolbars");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
