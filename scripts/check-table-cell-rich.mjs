@@ -1070,9 +1070,14 @@ try {
     for (let index = 0; index < 5; index++) await page.keyboard.press("Enter");
     const paragraphCount = await cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p').count();
     assert.ok(paragraphCount >= 2, "several Enter presses create empty paragraphs");
+    const paragraphHeight = (await cells.first().boundingBox()).height;
     await page.keyboard.press("Escape");
+    assert.ok(Math.abs((await cells.first().boundingBox()).height - paragraphHeight) < 2,
+        "empty paragraphs retain their line boxes in cell preview");
     await cells.first().click();
     await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(paragraphCount);
+    assert.ok(Math.abs((await cells.first().boundingBox()).height - paragraphHeight) < 2,
+        "reopening a cell with empty paragraphs keeps its height");
     await page.keyboard.press("Escape");
     console.log("PASS: empty paragraphs after a list survive closing and reopening the cell");
     await page.evaluate(() => {
