@@ -713,7 +713,7 @@ try {
     console.log("PASS: clicking rich preview text preserves caret position and dragging preserves forward and backward selections");
     const expectCellText = async (cell, text) => {
         await expect.poll(() => cell.evaluate(element =>
-            (element.querySelector(".table__cell-editor .protyle-wysiwyg") || element).textContent.trim())).toBe(text);
+            (element.querySelector(".table__cell-editor .protyle-wysiwyg") || element).textContent.replaceAll("\u200b", "").trim())).toBe(text);
     };
     const expectCellCaret = async (cell, offset) => {
         await expect.poll(() => cell.evaluate(element => {
@@ -830,6 +830,204 @@ try {
     await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg [data-type="strong"]')).toHaveText("irs");
     await page.keyboard.press("Escape");
     console.log("PASS: first drag in an ordinary cell shows a working formatting toolbar");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.nth(1).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("XYZ");
+    for (const value of ["secondXY", "secondX", "second"]) {
+        await page.keyboard.press("Control+z");
+        await expectCellText(cells.nth(1), value);
+    }
+    for (const value of ["secondX", "secondXY", "secondXYZ"]) {
+        await page.keyboard.press("Control+Shift+z");
+        await expectCellText(cells.nth(1), value);
+    }
+    await page.keyboard.press("Escape");
+    console.log("PASS: rapid cell typing has one undo and redo step per key");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        const targets = outerFragment.wysiwyg.querySelectorAll("tbody td");
+        cellTest.setTableCellRich(targets[0], "- keep\n- move\n  - nested");
+        cellTest.setTableCellRich(targets[1], "- target");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.first().click();
+    const dragHandle = cells.first().locator('.table__cell-editor .protyle-wysiwyg > .list > .li > .protyle-action').nth(1);
+    const dragBox = await dragHandle.boundingBox();
+    const dropBox = await cells.nth(1).locator('[data-type="NodeListItem"]').boundingBox();
+    await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dragBox.x + dragBox.width / 2 + 10, dragBox.y + dragBox.height / 2, {steps: 3});
+    await page.mouse.move(dropBox.x + 10, dropBox.y + dropBox.height - 2, {steps: 8});
+    await page.mouse.move(dropBox.x + 11, dropBox.y + dropBox.height - 2);
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toBeVisible();
+    await page.evaluate(({x, y}) => {
+        const indicator = document.querySelector(".table__cell-rich .dragover__bottom--sibling");
+        const style = getComputedStyle(indicator, "::after");
+        const color = style.backgroundColor;
+        if (style.height !== "4px") throw new Error("Cell drop indicator differs from block drag line");
+        if (color === "rgba(0, 0, 0, 0)" || color === "transparent") throw new Error("Transparent cell drop indicator");
+        document.elementFromPoint(x, y).dispatchEvent(new DragEvent("dragleave", {
+            bubbles: true, clientX: x, clientY: y, relatedTarget: null,
+        }));
+        if (!indicator.classList.contains("dragover__bottom--sibling")) throw new Error("Internal dragleave removed the cell drop indicator");
+    }, {x: dropBox.x + 11, y: dropBox.y + dropBox.height - 2});
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(page.locator(".table__cell-drop")).toHaveCount(0);
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toHaveCount(0);
+    await page.evaluate(() => {
+        const source = outerFragment.wysiwyg.querySelector(".table__cell-editor .protyle-wysiwyg");
+        const item = source.querySelectorAll('[data-type="NodeList"] > [data-type="NodeListItem"]')[1];
+        const transfer = new DataTransfer();
+        item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+            dataTransfer: transfer, bubbles: true, cancelable: true,
+        }));
+        const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1].querySelector('[data-type="NodeListItem"]');
+        const rect = target.getBoundingClientRect();
+        const options = {dataTransfer: transfer, bubbles: true, cancelable: true, clientX: rect.x + 10, clientY: rect.bottom - 2};
+        target.dispatchEvent(new DragEvent("dragover", options));
+        if (!target.classList.contains("dragover__bottom--sibling")) throw new Error("Missing cell drop indicator");
+        target.dispatchEvent(new DragEvent("drop", options));
+    });
+    await expectCellText(cells.first(), "keep");
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await cells.nth(1).click();
+    await page.keyboard.press("Control+z");
+    await expect(cells.first().locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await expectCellText(cells.nth(1), "target");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.first(), "keep");
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await page.keyboard.press("Escape");
+    console.log("PASS: cross-cell list drag preserves nested blocks and undoes both cells in one step");
+    await cells.nth(1).click();
+    await page.evaluate(() => {
+        window.cutData = {};
+        window.ClipboardItem ||= class {
+            constructor(data) { this.data = data; this.types = Object.keys(data); }
+            async getType(type) { return this.data[type]; }
+        };
+        Object.defineProperty(navigator, "clipboard", {configurable: true, value: {write: async items => {
+            for (const item of items) for (const type of item.types) window.cutData[type] = await (await item.getType(type)).text();
+        }}});
+        const originalFetch = window.fetch;
+        window.fetch = (url, init) => url === "/api/block/checkBlocksExist" ?
+            Promise.resolve(new Response(JSON.stringify({code: 0, msg: "", data: {}}),
+                {headers: {"content-type": "application/json"}})) : originalFetch(url, init);
+        const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+        item.classList.add("protyle-wysiwyg--select");
+        const edit = item.querySelector('[contenteditable="true"]');
+        const range = document.createRange();
+        range.selectNodeContents(edit);
+        range.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        edit.dispatchEvent(new ClipboardEvent("cut", {clipboardData: new DataTransfer(), bubbles: true, cancelable: true}));
+    });
+    await expect.poll(() => page.evaluate(() => Object.keys(window.cutData).length)).toBeGreaterThan(0);
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(2);
+    await cells.first().click();
+    await page.keyboard.press("End");
+    await page.evaluate(() => {
+        const transfer = new DataTransfer();
+        Object.entries(window.cutData).forEach(([type, value]) => transfer.setData(type, value));
+        outerFragment.wysiwyg.querySelector('.table__cell-editor .protyle-wysiwyg').dispatchEvent(
+            new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
+    });
+    await expect(cells.first().locator('[data-type="NodeListItem"]')).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    console.log("PASS: actual block cut clipboard retains list structure when pasted in another cell");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- only");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    for (const copy of [true, false]) {
+        await cells.first().click();
+        await page.evaluate(copy => {
+            const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+            const transfer = new DataTransfer();
+            item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+                dataTransfer: transfer, bubbles: true, cancelable: true,
+            }));
+            const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1];
+            const rect = target.getBoundingClientRect();
+            target.dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, ctrlKey: copy,
+                bubbles: true, cancelable: true, clientX: rect.x + 5, clientY: rect.y + 5}));
+        }, copy);
+        await expectCellText(cells.first(), copy ? "only" : "");
+        await expectCellText(cells.nth(1), "only");
+        await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(0);
+        await page.keyboard.press("Control+z");
+        await expectCellText(cells.first(), "only");
+        await expectCellText(cells.nth(1), "");
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: copying and moving the last list item into an empty cell preserve content and undo atomically");
+    await page.evaluate(() => {
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1], "- parent");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.first().click();
+    await page.evaluate(() => {
+        const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+        const transfer = new DataTransfer();
+        item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+            dataTransfer: transfer, bubbles: true, cancelable: true,
+        }));
+        const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1].querySelector(".li");
+        const rect = target.querySelector(".p").getBoundingClientRect();
+        const options = {dataTransfer: transfer, bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.bottom - 2};
+        target.dispatchEvent(new DragEvent("dragover", options));
+        if (!target.classList.contains("dragover__bottom--child")) throw new Error("Missing child list drop indicator");
+        const indent = target.style.getPropertyValue("--drag-indent");
+        if (target.style.getPropertyValue("--drag-line-left") !== indent) throw new Error("Child line should align to list indent");
+        target.dispatchEvent(new DragEvent("drop", options));
+    });
+    await expectCellText(cells.first(), "");
+    await expect(cells.nth(1).locator('.table__cell-editor .li > .list > .li .p > [contenteditable="true"]')).toHaveText("only");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.first(), "only");
+    await expectCellText(cells.nth(1), "parent");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1], "");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    console.log("PASS: cross-cell list child indicator matches the inserted nesting and supports undo");
+    await cells.nth(1).click();
+    await page.evaluate(async () => {
+        const edit = outerFragment.wysiwyg.querySelector('.table__cell-editor .p > [contenteditable="true"]');
+        edit.dispatchEvent(new CompositionEvent("compositionstart", {bubbles: true}));
+        for (const text of ["n", "ni", "你"]) {
+            edit.dispatchEvent(new InputEvent("beforeinput", {bubbles: true, inputType: "insertCompositionText", data: text, isComposing: true}));
+            edit.textContent = text;
+            const range = document.createRange();
+            range.selectNodeContents(edit);
+            range.collapse(false);
+            getSelection().removeAllRanges();
+            getSelection().addRange(range);
+            edit.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertCompositionText", data: text, isComposing: true}));
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        edit.dispatchEvent(new CompositionEvent("compositionend", {bubbles: true, data: "你"}));
+    });
+    await expectCellText(cells.nth(1), "你");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.nth(1), "");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.nth(1), "你");
+    await page.keyboard.press("Escape");
+    console.log("PASS: IME composition remains one undo step without intermediate phonetic input");
     console.log("PASS: rich cell Escape preserves undo and redo; clicking hides owner and cell selection toolbars");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
