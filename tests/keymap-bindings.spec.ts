@@ -1,6 +1,7 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test as base} from "./fixtures";
 import {showFileTree} from "./helpers/runtime";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface IKeymapItem {
     default: string;
@@ -112,14 +113,14 @@ base("prefers the focused local shortcut and uses a fixed general order after re
     assign(keymap.editor.general.fullscreen);
     try {
         await siyuanAPI.post("/api/setting/setKeymap", {data: keymap});
-        const {editor} = await createTestDocument("Keymap Priority E2E", "Shortcut priority test");
-        const protyle = editor.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " protyle ")][1]');
+        const {docID} = await createTestDocument("Keymap Priority E2E", "Shortcut priority test");
         const panel = page.locator('[data-key="dialog-commandpanel"]');
         for (let reload = 0; reload < 2; reload++) {
             if (reload) {
                 await page.reload();
-                await expect(editor).toBeVisible({timeout: 30000});
             }
+            const editor = await getDocumentEditor(page, docID);
+            const protyle = editor.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]");
             await editor.locator('[contenteditable="true"]').first().click();
             await recordKey(page);
             await expect(protyle).toHaveClass(/fullscreen/);

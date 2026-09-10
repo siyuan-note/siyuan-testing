@@ -41,24 +41,15 @@ export const ensureTestNotebook = async (api: SiyuanAPI) => {
 
 export const getDocumentEditor = async (page: Page, docID: string) => {
     const titleSelector = `.protyle-title[data-node-id="${docID}"]`;
-    const titleElements = page.locator(titleSelector);
     await expect(page.locator(`${titleSelector}:visible`).last()).toBeVisible({timeout: 15000});
-    const visibleTitleIndex = await titleElements.evaluateAll(elements => {
-        let index = -1;
-        elements.forEach((element, currentIndex) => {
-            if (element.getClientRects().length > 0) {
-                index = currentIndex;
-            }
-        });
-        return index;
-    });
-    expect(visibleTitleIndex).toBeGreaterThanOrEqual(0);
-    const titleElement = titleElements.nth(visibleTitleIndex);
-    const protyle = titleElement.locator(
+    const titleElement = page.locator(`${titleSelector}:visible`).last();
+    const visibleProtyle = titleElement.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
     );
+    const tabID = await visibleProtyle.getAttribute("data-id");
+    const protyle = tabID ? page.locator(`.protyle[data-id="${tabID}"]`) : visibleProtyle;
     await expect(protyle).toHaveAttribute("data-loading", "finished", {timeout: 15000});
-    const editor = protyle.locator(".protyle-wysiwyg");
+    const editor = protyle.locator(".protyle-wysiwyg").first();
     await expect(editor).toBeVisible({timeout: 10000});
     return editor;
 };

@@ -86,8 +86,10 @@ const requestHistoryAction = async (page: Page, table: Locator, action: "undo" |
 };
 
 const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
+    await page.keyboard.press("Escape");
     if (await cell.locator(".table__cell-editor").count()) {
         await page.keyboard.press("Escape");
+        await expect(cell.locator(".table__cell-editor")).toHaveCount(0);
     }
     await selectCellContents(cell, true);
     await cell.click({button: "right"});
@@ -319,6 +321,12 @@ const fillRichCell = async (page: Page, cell: Locator) => {
     await pasteRichCellMarkdown(page, cell, richCellSample);
     await expect(cell.locator('.table__cell-editor [data-type="NodeCodeBlock"]')).toHaveCount(1);
     await expect(cell.locator('.table__cell-editor [data-type="NodeMathBlock"]')).toHaveCount(1);
+    // 粘贴末尾的公式会打开源码编辑浮层，先退出公式编辑，再退出单元格编辑。
+    const mathSource = page.locator(".protyle-util:not(.fn__none) textarea");
+    await expect(mathSource).toBeFocused();
+    await expect(mathSource).toHaveValue("x^2");
+    await page.keyboard.press("Escape");
+    await expect(mathSource).toBeHidden();
     await page.keyboard.press("Escape");
     await expect(cell.locator(".table__cell-editor")).toHaveCount(0);
     await expect(cell.locator(".table__cell-rich .code-block .hljs")).toContainText("c < d && e");
@@ -341,6 +349,9 @@ test.describe("table cell rich text", () => {
         const cells = editor.locator(':scope > [data-type="NodeTable"] tbody td');
         const menu = page.locator(".protyle-hint:not(.fn__none)");
         await cells.first().click();
+        await expect.poll(() => cells.first().evaluate(cell =>
+            cell.querySelector(".table__cell-editor .protyle-wysiwyg")?.contains(getSelection()?.focusNode || null) || false))
+            .toBe(true);
         await page.keyboard.type("/");
         await expect(menu.locator('[data-id="heading1"]')).toBeVisible();
         await expect(menu.locator('[data-id="list"]')).toBeVisible();
@@ -352,6 +363,9 @@ test.describe("table cell rich text", () => {
         await expect(cells.first().locator('[data-type="NodeHeading"]')).toContainText("Cell heading");
         await page.keyboard.press("Escape");
         await cells.last().click();
+        await expect.poll(() => cells.last().evaluate(cell =>
+            cell.querySelector(".table__cell-editor .protyle-wysiwyg")?.contains(getSelection()?.focusNode || null) || false))
+            .toBe(true);
         await page.keyboard.type("/database");
         await expect(menu).toHaveCount(0);
         await page.keyboard.press("Enter");
@@ -420,7 +434,8 @@ test.describe("table cell rich text", () => {
         await page.keyboard.type(" updated");
         await page.keyboard.press("Tab");
         await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
-        await expect(cells.nth(1).locator('[data-type~="strong"]')).toHaveText("bold");
+        await expect(cells.nth(1).locator(".table__cell-editor .protyle-wysiwyg [data-type~=\"strong\"]"))
+            .toHaveText("bold");
         await page.keyboard.press("Enter");
         await expect(cells.nth(3).locator(".table__cell-editor")).toBeVisible();
         await page.keyboard.press("Shift+Tab");
@@ -557,7 +572,7 @@ test.describe("table cell rich text", () => {
             const tableRect = await table.boundingBox();
             expect(gutterRect!.x + gutterRect!.width / 2).toBeLessThan(tableRect!.x);
         }
-        await page.keyboard.press("F2");
+        await cell.click();
         await expect(fragment.locator('.code-block .hljs[data-render="true"]')).toBeVisible();
         await expect.poll(() => measureLayout(fragment)).toEqual(editingLayout);
     });
@@ -602,7 +617,7 @@ test.describe("table cell rich text", () => {
         await expect(fragment).toHaveCount(0);
         await expect(table.locator("tbody tr")).toHaveCount(1);
         await expect(cell.locator(".table__cell-rich .li")).toHaveCount(2);
-        await page.keyboard.press("F2");
+        await cell.click();
         await expect(fragment).toBeVisible();
         await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(2);
         await page.keyboard.press("Escape");
@@ -648,6 +663,10 @@ test.describe("table cell rich text", () => {
         await page.keyboard.press("Escape");
         const destination = tables.nth(1);
         const target = destination.locator("tbody td").first();
+        await target.click();
+        await expect(target.locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(target.locator(".table__cell-editor")).toHaveCount(0);
         await selectCellContents(target, true);
         await requestTransaction(page, () => page.keyboard.press(`${PRIMARY_MODIFIER}+V`));
         await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
@@ -705,7 +724,7 @@ test.describe("table cell rich text", () => {
         await waitForRichCellSource(siyuanAPI, docID);
         await cell.click();
         const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
-        await fragment.locator('[contenteditable="true"]').first().focus();
+        await fragment.locator('[contenteditable="true"]').first().click();
         await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
         await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
         await page.keyboard.press("Backspace");
@@ -818,6 +837,10 @@ test.describe("table editing", () => {
         await page.keyboard.press(UNDO_SHORTCUT);
         await undoResponse;
         const restoredFirstCell = table.locator("tbody tr").first().locator("td").first();
+        await expect(restoredFirstCell.locator(".table__cell-editor .p > [contenteditable=\"true\"]"))
+            .toHaveText("Alpha");
+        await page.keyboard.press("Escape");
+        await expect(restoredFirstCell.locator(".table__cell-editor")).toHaveCount(0);
         await expect(restoredFirstCell).toHaveText("Alpha");
 
         await selectCellContents(restoredFirstCell, true);
@@ -825,6 +848,10 @@ test.describe("table editing", () => {
             new URL(response.url()).pathname === "/api/transactions/redo", {timeout: 30000});
         await page.keyboard.press(REDO_SHORTCUT);
         await redoResponse;
+        await expect(restoredFirstCell.locator(".table__cell-editor .p > [contenteditable=\"true\"]"))
+            .toHaveText("G");
+        await page.keyboard.press("Escape");
+        await expect(restoredFirstCell.locator(".table__cell-editor")).toHaveCount(0);
         await expect(table.locator("tbody tr").first().locator("td").first()).toHaveText("G");
 
         const lastCell = table.locator("tbody tr").last().locator("td").last();

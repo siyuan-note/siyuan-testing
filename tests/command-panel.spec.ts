@@ -27,8 +27,8 @@ const persisted = async (api: SiyuanAPI, docID: string, editor: Locator) => {
 };
 
 test.describe("command palette", () => {
-    test("loads contextual commands without adding shortcuts or an export submenu", async ({page}) => {
-        await openWorkspace(page);
+    test("loads contextual commands without adding shortcuts or an export submenu", async ({page, createTestDocument}) => {
+        await createTestDocument("Command Palette Registry E2E", "Command palette registry context");
         const keymap = await page.evaluate(() => JSON.stringify(window.siyuan.config.keymap));
         const panel = await openCommandPanel(page);
         await expect(panel.locator('[data-command-id="core.context.notebook.new"]'),
@@ -130,7 +130,9 @@ test.describe("command palette", () => {
             await focusCommandTarget(table.locator("tr").nth(1).locator("td").nth(1));
             await runPaletteCommand(page, `core.context.table.${operation.key}`);
             await expect.poll(() => table.locator("tr").evaluateAll(rows => rows.map(row =>
-                Array.from(row.querySelectorAll("th, td")).map(cell => (cell.textContent || "").replace(/\u200b/g, "").trim()))))
+                Array.from(row.querySelectorAll("th, td")).map(cell =>
+                    ((cell.querySelector(".table__cell-editor .protyle-wysiwyg") || cell).textContent || "")
+                        .replace(/\u200b/g, "").trim()))))
                 .toEqual(operation.expected);
             await persisted(siyuanAPI, docID, editor);
             await expect.poll(async () => {
@@ -412,6 +414,7 @@ test.describe("command palette", () => {
             const restoreFileTree = await showFileTree(page);
             const fileTreeFilter = page.locator(".sy__file:visible input.b3-text-field.search__label");
             const originalFilter = await fileTreeFilter.count() > 0 ? await fileTreeFilter.inputValue() : "";
+            let collapseNotebook: (() => Promise<void>) | undefined;
             try {
                 if (originalFilter) {
                     await fileTreeFilter.fill("");
@@ -419,6 +422,22 @@ test.describe("command palette", () => {
                 await siyuanAPI.setNotebookConf(target.notebookID, {...original, sortMode: 6});
                 await page.reload();
                 const editor = await getDocumentEditor(page, target.docID);
+                const notebookRoot = page.locator(
+                    `.sy__file ul.b3-list[data-url="${target.notebookID}"] > li[data-type="navigation-root"]`,
+                );
+                await expect(notebookRoot).toBeVisible();
+                const notebookArrow = notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
+                const wasExpanded = await notebookArrow.evaluate(element =>
+                    element.classList.contains("b3-list-item__arrow--open"));
+                if (!wasExpanded) {
+                    await notebookRoot.locator(":scope > .b3-list-item__toggle").click();
+                    collapseNotebook = async () => {
+                        if (await notebookArrow.count() && await notebookArrow.evaluate(element =>
+                            element.classList.contains("b3-list-item__arrow--open"))) {
+                            await notebookRoot.locator(":scope > .b3-list-item__toggle").click();
+                        }
+                    };
+                }
                 await expect(page.locator(`.sy__file li[data-node-id="${target.docID}"]`)).toHaveCount(1);
                 const before = (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id);
                 await focusCommandTarget(editor.locator('[data-type="NodeParagraph"]'));
@@ -438,6 +457,7 @@ test.describe("command palette", () => {
                 await expect(page.locator(`.sy__file li[data-node-id="${createdID}"]`)).toHaveCount(1);
             } finally {
                 await siyuanAPI.setNotebookConf(target.notebookID, original);
+                await collapseNotebook?.();
                 if (originalFilter && await fileTreeFilter.count() > 0) {
                     await fileTreeFilter.fill(originalFilter);
                 }

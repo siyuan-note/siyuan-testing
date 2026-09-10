@@ -21,6 +21,7 @@ export {applyTableCellRichInlineMark} from "./src/protyle/render/tableCellRichEd
 export {TableControl} from "./src/protyle/util/tableControl";
 export {LocalUndo} from "./src/protyle/undo";
 export {tableMenu} from "./src/menus/protyle";
+export {matchHotKey} from "./src/protyle/util/hotKey";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
     },
@@ -514,15 +515,17 @@ try {
     const clickBox = await cells.nth(1).boundingBox();
     await page.mouse.move(clickBox.x + 12, clickBox.y + 12);
     await page.mouse.down();
+    await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
+    await page.mouse.up();
     await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
     const pressedCaret = await page.evaluate(() => {
         const range = getSelection().getRangeAt(0);
         return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
     });
     assert.equal(pressedCaret.node, "#text");
-    assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (clickBox.y + clickBox.height / 2)) < 3,
-        "mouse down places the empty cell caret at the vertically centered editing line");
-    await page.mouse.up();
+    const emptyLine = await cells.nth(1).locator('.p > [contenteditable="true"]').first().boundingBox();
+    assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (emptyLine.y + emptyLine.height / 2)) < 3,
+        "click places the empty cell caret on its editing line");
     assert.deepEqual(await page.evaluate(() => {
         const range = getSelection().getRangeAt(0);
         return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
@@ -551,6 +554,690 @@ try {
     await expect(cells.nth(1).locator(".table__cell-editor")).toHaveCount(0);
     await expect(cells.nth(1)).toHaveText("sXtable");
     console.log("PASS: clicking the table's right-side blank preserves the caret and subsequent typing; another cell still ends editing");
+    assert.deepEqual(errors, []);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("fresh");
+        outerFragment.focus(true);
+    });
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Backspace");
+    await page.evaluate(() => outerFragment.protyle.lite = false);
+    await page.keyboard.press("Control+o");
+    const newHeader = page.locator('#host > .protyle-content > .protyle-wysiwyg th').first();
+    await expect(newHeader.locator(".table__cell-editor")).toBeVisible();
+    await page.evaluate(() => outerFragment.protyle.lite = true);
+    await page.keyboard.type("/");
+    await expect(slashMenu.locator('[data-id="heading1"]')).toBeVisible();
+    await expect(slashMenu.locator('[data-id^="database"], [data-id="table"], [data-id="widget"]')).toHaveCount(0);
+    await page.keyboard.type("data");
+    await expect(page.locator(".protyle-hint--lite-overlay:not(.fn__none) [data-id^='database']")).toHaveCount(0);
+    await expect(page.locator('#host [data-type="NodeAttributeView"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    console.log("PASS: creating a table by shortcut enters restricted cell editing before typing without a cell click");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("fresh");
+        outerFragment.focus(true);
+    });
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Backspace");
+    await page.evaluate(() => outerFragment.protyle.lite = false);
+    await page.keyboard.type("/table");
+    await expect(slashMenu.locator('[data-id="table"]')).toBeVisible();
+    await slashMenu.locator('[data-id="table"]').click();
+    await expect(newHeader.locator(".table__cell-editor")).toBeVisible();
+    await page.evaluate(() => outerFragment.protyle.lite = true);
+    await page.keyboard.type("/");
+    await expect(slashMenu.locator('[data-id="list"]')).toBeVisible();
+    await expect(slashMenu.locator('[data-id^="database"], [data-id="table"]')).toHaveCount(0);
+    await slashMenu.locator('[data-id="list"]').click();
+    await page.keyboard.type("item");
+    await expect(newHeader.locator('[data-type="NodeList"]')).toContainText("item");
+    await page.keyboard.press("Escape");
+    await expect(newHeader).toHaveAttribute("data-sy-table-cell-rich");
+    await expect(page.locator('#host [data-type="NodeAttributeView"]')).toHaveCount(0);
+    assert.deepEqual(errors, []);
+    console.log("PASS: slash-created tables immediately support restricted list editing without a cell click");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B | C |\n| --- | --- | --- |\n| | | |\n| | | |");
+        outerFragment.wysiwyg.querySelectorAll("col").forEach(col => col.style.minWidth = "100px");
+        const cells = outerFragment.wysiwyg.querySelectorAll("th, td");
+        cells.forEach(cell => cell.textContent = "");
+        cellTest.setTableCellRich(cells[4], "## Heading\n\nfirst paragraph\n\nlast paragraph");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+    });
+    const arrowCells = page.locator('#host > .protyle-content > .protyle-wysiwyg th, #host > .protyle-content > .protyle-wysiwyg td');
+    const expectArrowCell = async index => {
+        await expect(arrowCells.nth(index).locator(".table__cell-editor")).toBeVisible();
+        assert.equal(await arrowCells.nth(index).evaluate(cell => cell.querySelector(".table__cell-editor").contains(getSelection().focusNode)), true);
+    };
+    await arrowCells.first().click();
+    for (const [key, index] of [["ArrowRight", 1], ["ArrowRight", 2], ["ArrowDown", 5], ["ArrowLeft", 4]]) {
+        await page.keyboard.press(key);
+        await expectArrowCell(index);
+    }
+    await page.keyboard.press("ArrowLeft");
+    await expectArrowCell(4);
+    const selectCellBoundary = async start => arrowCells.nth(4).evaluate((cell, start) => {
+        const edits = cell.querySelectorAll('.table__cell-editor [data-type^="Node"] > [contenteditable="true"]');
+        const range = document.createRange();
+        range.selectNodeContents(start ? edits[0] : edits[edits.length - 1]);
+        range.collapse(start);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+    }, start);
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(1);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(7);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowRight");
+    await expectArrowCell(5);
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, []);
+    console.log("PASS: all four arrow keys cross empty and rich cells only at content boundaries");
+    await arrowCells.first().evaluate(cell => {
+        cell.colSpan = 2;
+        cell.nextElementSibling.classList.add("fn__none");
+    });
+    await arrowCells.first().click();
+    await page.keyboard.press("ArrowRight");
+    await expectArrowCell(2);
+    await page.keyboard.press("ArrowLeft");
+    await expectArrowCell(0);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(3);
+    await page.keyboard.press("ArrowUp");
+    await expectArrowCell(0);
+    await page.keyboard.press("Escape");
+    await arrowCells.nth(4).evaluate(cell => {
+        cellTest.setTableCellRich(cell, "first<br />second");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    await arrowCells.nth(4).click();
+    await selectCellBoundary(true);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(4);
+    await selectCellBoundary(false);
+    await page.keyboard.press("ArrowDown");
+    await expectArrowCell(7);
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, []);
+    console.log("PASS: arrow navigation skips merged placeholders and preserves movement within soft-wrapped cell content");
+    await arrowCells.nth(4).evaluate(cell => {
+        cellTest.setTableCellRich(cell, "## abcdef\n\n- ghijkl\n  - nested\n\nmnopqr");
+        cellTest.renderTableCellRichElements(cell);
+    });
+    const textPoint = async (text, offset) => arrowCells.nth(4).evaluate((cell, {text, offset}) => {
+        const walker = document.createTreeWalker(cell.querySelector(".table__cell-rich"), NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            if (walker.currentNode.textContent === text) {
+                const range = document.createRange();
+                range.setStart(walker.currentNode, offset);
+                range.collapse(true);
+                const rect = range.getBoundingClientRect();
+                return {x: rect.x + 0.5, y: rect.y + rect.height / 2};
+            }
+        }
+        throw new Error(`Missing preview text: ${text}`);
+    }, {text, offset});
+    const headingPoint = await textPoint("abcdef", 2);
+    await page.mouse.click(headingPoint.x, headingPoint.y);
+    await expectArrowCell(4);
+    await page.keyboard.type("X");
+    await expect(arrowCells.nth(4).locator('[data-type="NodeHeading"]')).toHaveText("abXcdef");
+    await page.keyboard.press("Escape");
+    for (const backward of [false, true]) {
+        const start = await textPoint("abXcdef", 1);
+        const end = await textPoint("ghijkl", 3);
+        const from = backward ? end : start;
+        const to = backward ? start : end;
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, {steps: 12});
+        const selected = await page.evaluate(() => getSelection().toString());
+        assert.ok(selected.includes("bXcdef") && selected.includes("ghi"), "drag selects heading and list text");
+        await page.mouse.up();
+        await expectArrowCell(4);
+        assert.equal(await page.evaluate(() => getSelection().toString()), selected,
+            "entering cell editing preserves the dragged text selection");
+        await expect(arrowCells.nth(4).locator(".table__cell-editor .protyle-toolbar")).toBeVisible();
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: clicking rich preview text preserves caret position and dragging preserves forward and backward selections");
+    const expectCellText = async (cell, text) => {
+        await expect.poll(() => cell.evaluate(element =>
+            (element.querySelector(".table__cell-editor .protyle-wysiwyg") || element).textContent.replaceAll("\u200b", "").trim())).toBe(text);
+    };
+    const expectCellCaret = async (cell, offset) => {
+        await expect.poll(() => cell.evaluate(element => {
+            const selection = getSelection();
+            return element.contains(selection.focusNode) ? selection.focusOffset : -1;
+        })).toBe(offset);
+    };
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.first().click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("X");
+    await page.keyboard.press("Escape");
+    await expect(cells.first()).toHaveText("firstX");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.first(), "first");
+    await expectCellCaret(cells.first(), 5);
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.first(), "firstX");
+    await expectCellCaret(cells.first(), 6);
+    await cells.first().click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("Y");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("End");
+    await page.keyboard.type("Z");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.nth(1), "second");
+    await expectCellCaret(cells.nth(1), 6);
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.first(), "firstX");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.first(), "firstXY");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.nth(1), "secondZ");
+    await expectCellCaret(cells.nth(1), 7);
+    await page.keyboard.press("Escape");
+    console.log("PASS: cell edits undo and redo after Escape and across cells");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "## heading\n\nparagraph");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+        outerFragment.protyle.toolbar.element.classList.remove("fn__none");
+    });
+    await cells.first().click();
+    await expect(page.locator("#host > .protyle-toolbar")).toBeHidden();
+    const richParagraph = cells.first().locator('.table__cell-editor [data-type="NodeParagraph"] > [contenteditable="true"]');
+    await richParagraph.click();
+    await richParagraph.dblclick({position: {x: 15, y: 10}});
+    const cellToolbar = cells.first().locator(".protyle-toolbar");
+    await expect(cellToolbar).toBeVisible();
+    await richParagraph.click();
+    await expect(cellToolbar).toBeHidden();
+    await page.keyboard.press("End");
+    await page.keyboard.type("X");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+z");
+    await expect(richParagraph).toHaveText("paragraph");
+    await expectCellCaret(cells.first(), 9);
+    await page.keyboard.press("Control+Shift+z");
+    await expect(richParagraph).toHaveText("paragraphX");
+    await expectCellCaret(cells.first(), 10);
+    await page.keyboard.type("Y");
+    await expect(richParagraph).toHaveText("paragraphXY");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1],
+            "## Heading\n\n- first\n  - nested\n\nabcdef");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.nth(1).click();
+    const lastParagraph = cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p > [contenteditable="true"]');
+    await lastParagraph.evaluate(edit => getSelection().setBaseAndExtent(edit.firstChild, 4, edit.firstChild, 2));
+    await page.keyboard.type("X");
+    await expect(lastParagraph).toHaveText("abXef");
+    await page.keyboard.press("Control+z");
+    await expect(lastParagraph).toHaveText("abcdef");
+    await expect.poll(() => page.evaluate(() => ({
+        text: getSelection().toString(), anchor: getSelection().anchorOffset, focus: getSelection().focusOffset,
+    }))).toEqual({text: "cd", anchor: 4, focus: 2});
+    await page.keyboard.press("Control+Shift+z");
+    await expect(lastParagraph).toHaveText("abXef");
+    await expectCellCaret(cells.nth(1), 3);
+    await page.keyboard.press("Enter");
+    await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(2);
+    await page.keyboard.press("Control+z");
+    await expect(lastParagraph).toHaveText("abXef");
+    await expectCellCaret(cells.nth(1), 3);
+    await page.keyboard.press("Control+Shift+z");
+    await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(2);
+    await page.keyboard.type("Y");
+    await expect(lastParagraph.last()).toHaveText("Yef");
+    await page.keyboard.press("Escape");
+    console.log("PASS: undo and redo restore non-first rich cell, backward selections, paragraph splits and continued typing");
+    const plainPoints = await cells.first().evaluate(cell => [1, 4].map(offset => {
+        const range = document.createRange();
+        range.setStart(cell.firstChild, offset);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        return {x: rect.x + 0.5, y: rect.y + rect.height / 2};
+    }));
+    await page.mouse.move(plainPoints[0].x, plainPoints[0].y);
+    await page.mouse.down();
+    await page.mouse.move(plainPoints[1].x, plainPoints[1].y, {steps: 8});
+    await page.mouse.up();
+    await expect(cells.first().locator(".table__cell-editor .protyle-toolbar")).toBeVisible();
+    assert.equal(await page.evaluate(() => getSelection().toString()), "irs");
+    await cells.first().locator('.protyle-toolbar [data-type="strong"]').click();
+    await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg [data-type="strong"]')).toHaveText("irs");
+    await page.keyboard.press("Escape");
+    console.log("PASS: first drag in an ordinary cell shows a working formatting toolbar");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.nth(1).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("XYZ");
+    for (const value of ["secondXY", "secondX", "second"]) {
+        await page.keyboard.press("Control+z");
+        await expectCellText(cells.nth(1), value);
+    }
+    for (const value of ["secondX", "secondXY", "secondXYZ"]) {
+        await page.keyboard.press("Control+Shift+z");
+        await expectCellText(cells.nth(1), value);
+    }
+    await page.keyboard.press("Escape");
+    console.log("PASS: rapid cell typing has one undo and redo step per key");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| first | second |");
+        const targets = outerFragment.wysiwyg.querySelectorAll("tbody td");
+        cellTest.setTableCellRich(targets[0], "- keep\n- move\n  - nested");
+        cellTest.setTableCellRich(targets[1], "- target");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.first().click();
+    const dragHandle = cells.first().locator('.table__cell-editor .protyle-wysiwyg > .list > .li > .protyle-action').nth(1);
+    assert.equal(await cells.first().locator('.table__cell-editor .protyle-wysiwyg').evaluate(el => getComputedStyle(el).padding), "0px");
+    assert.equal(await cells.nth(1).locator('.table__cell-rich').evaluate(el => getComputedStyle(el).padding), "0px");
+    const dragBox = await dragHandle.boundingBox();
+    const dropBox = await cells.nth(1).locator('[data-type="NodeListItem"]').boundingBox();
+    await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dragBox.x + dragBox.width / 2 + 10, dragBox.y + dragBox.height / 2, {steps: 3});
+    const sourceTarget = await cells.first().locator('.table__cell-editor .li').first().boundingBox();
+    await page.mouse.move(sourceTarget.x + 10, sourceTarget.y + 5, {steps: 4});
+    await page.mouse.move(sourceTarget.x + 11, sourceTarget.y + 5);
+    await expect(cells.first().locator('[class*="dragover__"]')).toHaveCount(1);
+    await page.mouse.move(dropBox.x + 10, dropBox.y + dropBox.height - 2, {steps: 8});
+    await page.mouse.move(dropBox.x + 11, dropBox.y + dropBox.height - 2);
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toBeVisible();
+    await page.evaluate(({x, y}) => {
+        const indicator = document.querySelector(".table__cell-rich .dragover__bottom--sibling");
+        const indicators = outerFragment.wysiwyg.querySelectorAll('[class*="dragover"]');
+        if (indicators.length !== 1) throw new Error("Stale drag indicators: " + Array.from(indicators).map(el => el.className).join(", "));
+        const style = getComputedStyle(indicator, "::after");
+        const color = style.backgroundColor;
+        if (style.height !== "4px") throw new Error("Cell drop indicator differs from block drag line");
+        if (color === "rgba(0, 0, 0, 0)" || color === "transparent") throw new Error("Transparent cell drop indicator");
+        document.elementFromPoint(x, y).dispatchEvent(new DragEvent("dragleave", {
+            bubbles: true, clientX: x, clientY: y, relatedTarget: null,
+        }));
+        if (!indicator.classList.contains("dragover__bottom--sibling")) throw new Error("Internal dragleave removed the cell drop indicator");
+    }, {x: dropBox.x + 11, y: dropBox.y + dropBox.height - 2});
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(page.locator(".table__cell-drop")).toHaveCount(0);
+    await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toHaveCount(0);
+    await page.evaluate(() => {
+        const source = outerFragment.wysiwyg.querySelector(".table__cell-editor .protyle-wysiwyg");
+        const item = source.querySelectorAll('[data-type="NodeList"] > [data-type="NodeListItem"]')[1];
+        const transfer = new DataTransfer();
+        item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+            dataTransfer: transfer, bubbles: true, cancelable: true,
+        }));
+        const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1].querySelector('[data-type="NodeListItem"]');
+        const rect = target.getBoundingClientRect();
+        const options = {dataTransfer: transfer, bubbles: true, cancelable: true, clientX: rect.x + 10, clientY: rect.bottom - 2};
+        target.dispatchEvent(new DragEvent("dragover", options));
+        if (!target.classList.contains("dragover__bottom--sibling")) throw new Error("Missing cell drop indicator");
+        target.dispatchEvent(new DragEvent("drop", options));
+    });
+    await expectCellText(cells.first(), "keep");
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await cells.nth(1).click();
+    await page.keyboard.press("Control+z");
+    await expect(cells.first().locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await expectCellText(cells.nth(1), "target");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.first(), "keep");
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(3);
+    await page.keyboard.press("Escape");
+    console.log("PASS: cross-cell list drag preserves nested blocks and undoes both cells in one step");
+    await cells.nth(1).click();
+    await page.evaluate(() => {
+        window.cutData = {};
+        window.ClipboardItem ||= class {
+            constructor(data) { this.data = data; this.types = Object.keys(data); }
+            async getType(type) { return this.data[type]; }
+        };
+        Object.defineProperty(navigator, "clipboard", {configurable: true, value: {write: async items => {
+            for (const item of items) for (const type of item.types) window.cutData[type] = await (await item.getType(type)).text();
+        }}});
+        const originalFetch = window.fetch;
+        window.fetch = (url, init) => url === "/api/block/checkBlocksExist" ?
+            Promise.resolve(new Response(JSON.stringify({code: 0, msg: "", data: {}}),
+                {headers: {"content-type": "application/json"}})) : originalFetch(url, init);
+        const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+        item.classList.add("protyle-wysiwyg--select");
+        const edit = item.querySelector('[contenteditable="true"]');
+        const range = document.createRange();
+        range.selectNodeContents(edit);
+        range.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        edit.dispatchEvent(new ClipboardEvent("cut", {clipboardData: new DataTransfer(), bubbles: true, cancelable: true}));
+    });
+    await expect.poll(() => page.evaluate(() => Object.keys(window.cutData).length)).toBeGreaterThan(0);
+    await expect(cells.nth(1).locator('[data-type="NodeListItem"]')).toHaveCount(2);
+    await cells.first().click();
+    await page.keyboard.press("End");
+    await page.evaluate(() => {
+        const transfer = new DataTransfer();
+        Object.entries(window.cutData).forEach(([type, value]) => transfer.setData(type, value));
+        outerFragment.wysiwyg.querySelector('.table__cell-editor .protyle-wysiwyg').dispatchEvent(
+            new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
+    });
+    await expect(cells.first().locator('[data-type="NodeListItem"]')).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    console.log("PASS: actual block cut clipboard retains list structure when pasted in another cell");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- only");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    for (const copy of [true, false]) {
+        await cells.first().click();
+        await page.evaluate(copy => {
+            const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+            const transfer = new DataTransfer();
+            item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+                dataTransfer: transfer, bubbles: true, cancelable: true,
+            }));
+            const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1];
+            const rect = target.getBoundingClientRect();
+            target.dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, ctrlKey: copy,
+                bubbles: true, cancelable: true, clientX: rect.x + 5, clientY: rect.y + 5}));
+        }, copy);
+        await expectCellText(cells.first(), copy ? "only" : "");
+        await expectCellText(cells.nth(1), "only");
+        await expect(cells.nth(1).locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(0);
+        await page.keyboard.press("Control+z");
+        await expectCellText(cells.first(), "only");
+        await expectCellText(cells.nth(1), "");
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: copying and moving the last list item into an empty cell preserve content and undo atomically");
+    await page.evaluate(() => {
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1], "- parent");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    await cells.first().click();
+    await page.evaluate(() => {
+        const item = outerFragment.wysiwyg.querySelector('.table__cell-editor [data-type="NodeListItem"]');
+        const transfer = new DataTransfer();
+        item.querySelector(".protyle-action").dispatchEvent(new DragEvent("dragstart", {
+            dataTransfer: transfer, bubbles: true, cancelable: true,
+        }));
+        const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1].querySelector(".li");
+        const rect = target.querySelector(".p").getBoundingClientRect();
+        const options = {dataTransfer: transfer, bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.bottom - 2};
+        target.dispatchEvent(new DragEvent("dragover", options));
+        if (!target.classList.contains("dragover__bottom--child")) throw new Error("Missing child list drop indicator");
+        const indent = target.style.getPropertyValue("--drag-indent");
+        if (target.style.getPropertyValue("--drag-line-left") !== indent) throw new Error("Child line should align to list indent");
+        target.dispatchEvent(new DragEvent("drop", options));
+    });
+    await expectCellText(cells.first(), "");
+    await expect(cells.nth(1).locator('.table__cell-editor .li > .list > .li .p > [contenteditable="true"]')).toHaveText("only");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.first(), "only");
+    await expectCellText(cells.nth(1), "parent");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelectorAll("tbody td")[1], "");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.undo.clear();
+    });
+    console.log("PASS: cross-cell list child indicator matches the inserted nesting and supports undo");
+    await cells.nth(1).click();
+    await page.evaluate(async () => {
+        const edit = outerFragment.wysiwyg.querySelector('.table__cell-editor .p > [contenteditable="true"]');
+        edit.dispatchEvent(new CompositionEvent("compositionstart", {bubbles: true}));
+        for (const text of ["n", "ni", "你"]) {
+            edit.dispatchEvent(new InputEvent("beforeinput", {bubbles: true, inputType: "insertCompositionText", data: text, isComposing: true}));
+            edit.textContent = text;
+            const range = document.createRange();
+            range.selectNodeContents(edit);
+            range.collapse(false);
+            getSelection().removeAllRanges();
+            getSelection().addRange(range);
+            edit.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertCompositionText", data: text, isComposing: true}));
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        edit.dispatchEvent(new CompositionEvent("compositionend", {bubbles: true, data: "你"}));
+    });
+    await expectCellText(cells.nth(1), "你");
+    await page.keyboard.press("Control+z");
+    await expectCellText(cells.nth(1), "");
+    await page.keyboard.press("Control+Shift+z");
+    await expectCellText(cells.nth(1), "你");
+    await page.keyboard.press("Escape");
+    console.log("PASS: IME composition remains one undo step without intermediate phonetic input");
+    for (const content of ["", "plain", "- item"]) {
+        await page.evaluate(content => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+            if (content) cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), content);
+            cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        }, content);
+        const start = await cells.first().boundingBox();
+        const end = await cells.nth(1).boundingBox();
+        await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {steps: 8});
+        await page.mouse.up();
+        await expect.poll(() => page.evaluate(() => outerFragment.protyle.wysiwyg.tableControl.getSelectedCells().length)).toBe(2);
+        await cells.first().click();
+        const edit = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+        await edit.click();
+        if (content) {
+            await edit.dblclick({position: {x: 12, y: 8}});
+            await expect(page.locator("#host .protyle-toolbar:not(.fn__none)")).toHaveCount(1);
+            await page.keyboard.press("Escape");
+            await cells.first().click();
+        }
+        const activeStart = await edit.boundingBox();
+        await page.mouse.move(activeStart.x + 4, activeStart.y + 8);
+        await page.mouse.down();
+        await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {steps: 8});
+        await page.mouse.up();
+        await expect.poll(() => page.evaluate(() => outerFragment.protyle.wysiwyg.tableControl.getSelectedCells().length)).toBe(2);
+        await expect(page.locator("#host .protyle-toolbar:not(.fn__none)")).toHaveCount(0);
+    }
+    console.log("PASS: empty, ordinary and rich cells support drag selection before and during editing without extra toolbars");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- item");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+    });
+    await cells.first().click();
+    await page.keyboard.press("End");
+    for (let index = 0; index < 5; index++) await page.keyboard.press("Enter");
+    const paragraphCount = await cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p').count();
+    assert.ok(paragraphCount >= 2, "several Enter presses create empty paragraphs");
+    const paragraphHeight = (await cells.first().boundingBox()).height;
+    await page.keyboard.press("Escape");
+    assert.ok(Math.abs((await cells.first().boundingBox()).height - paragraphHeight) < 2,
+        "empty paragraphs retain their line boxes in cell preview");
+    await cells.first().click();
+    await expect(cells.first().locator('.table__cell-editor .protyle-wysiwyg > .p')).toHaveCount(paragraphCount);
+    assert.ok(Math.abs((await cells.first().boundingBox()).height - paragraphHeight) < 2,
+        "reopening a cell with empty paragraphs keeps its height");
+    await page.keyboard.press("Escape");
+    console.log("PASS: empty paragraphs after a list survive closing and reopening the cell");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |\n\n" + "below\n\n".repeat(15));
+        outerFragment.protyle.contentElement.style.cssText = "height:400px;overflow:auto";
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- item");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+        outerFragment.protyle.contentElement.scrollTop = 0;
+    });
+    await cells.first().click();
+    await page.keyboard.press("End");
+    const scrollBefore = await page.evaluate(() => {
+        window.cellScrollRequests = [];
+        window.originalCellTestScroll = Element.prototype.scroll;
+        Element.prototype.scroll = function (...args) {
+            if (this.closest(".table__cell-editor")) window.cellScrollRequests.push(args);
+            return window.originalCellTestScroll.apply(this, args);
+        };
+        return {top: outerFragment.protyle.contentElement.scrollTop, page: window.scrollY};
+    });
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("next");
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.press("Shift+Enter");
+    const scrollAfter = await page.evaluate(() => {
+        Element.prototype.scroll = window.originalCellTestScroll;
+        return {top: outerFragment.protyle.contentElement.scrollTop, page: window.scrollY, requests: window.cellScrollRequests};
+    });
+    assert.deepEqual(scrollAfter, {...scrollBefore, requests: []}, "visible cell edits must not scroll the document or fragment");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => outerFragment.protyle.contentElement.removeAttribute("style"));
+    console.log("PASS: list Enter and soft breaks in a visible cell do not cause unintended scrolling");
+    console.log("PASS: rich cell Escape preserves undo and redo; clicking hides owner and cell selection toolbars");
+    for (const fixture of ["plain", "- item", "> quote", "## heading\n\n- item\n  - nested\n\nlast"]) {
+        for (const action of ["type", "paste", "text", "backspace"]) {
+            await page.evaluate(fixture => {
+                outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+                cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), fixture);
+                cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+            }, fixture);
+            await cells.first().click();
+            const editable = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+            await editable.click();
+            await page.keyboard.press("End");
+            for (let index = 0; index < 4; index++) await page.keyboard.press("Shift+Enter");
+            const before = await editable.textContent();
+            const height = (await cells.first().boundingBox()).height;
+            if (action === "type") await page.keyboard.type("1");
+            if (action === "text") await page.keyboard.insertText("测试");
+            if (action === "backspace") await page.keyboard.press("Backspace");
+            if (action === "paste") {
+                await editable.evaluate(element => {
+                    const data = new DataTransfer();
+                    data.setData("text/plain", "pasted");
+                    element.dispatchEvent(new ClipboardEvent("paste", {clipboardData: data, bubbles: true, cancelable: true}));
+                });
+            }
+            const readText = () => cells.first().locator('.p > [contenteditable]').first().textContent();
+            // 输入后的末尾占位换行由浏览器维护，只比较可见内容及其前面的软换行。
+            const expectedText = before.trimEnd() + "\n".repeat(4) +
+                (action === "type" ? "1" : action === "text" ? "测试" : "pasted");
+            if (action === "backspace") {
+                await expect.poll(async () => ((await readText()).match(/\n/g) || []).length).toBe(4);
+            } else {
+                await expect.poll(async () => (await readText()).trimEnd(), `${fixture}: ${action}`).toBe(expectedText);
+            }
+            if (action !== "backspace") {
+                assert.ok(Math.abs((await cells.first().boundingBox()).height - height) < 2,
+                    `${fixture}: ${action} after soft breaks keeps the cell height`);
+            }
+            const text = await readText();
+            await cells.nth(1).click();
+            assert.equal(await readText(), text);
+            await cells.first().click();
+            assert.equal(await readText(), text);
+            await page.keyboard.press("Escape");
+        }
+    }
+    console.log("PASS: typing, text insertion, paste and backspace preserve cell soft breaks across reopening");
+    await cells.first().click();
+    await page.evaluate(() => {
+        window.globalCellKeys = [];
+        window.outerCellKeys = [];
+        window.cellKeyAbort = new AbortController();
+        outerFragment.wysiwyg.addEventListener("keydown", event => window.outerCellKeys.push(event.key),
+            {signal: window.cellKeyAbort.signal});
+        window.addEventListener("keydown", event => {
+            for (const name of ["config", "globalSearch"]) {
+                if (cellTest.matchHotKey(window.siyuan.config.keymap.general[name], event)) {
+                    window.globalCellKeys.push(name);
+                    event.preventDefault();
+                }
+            }
+        }, {signal: window.cellKeyAbort.signal});
+    });
+    await page.keyboard.press("Alt+p");
+    await page.keyboard.press("Control+p");
+    assert.deepEqual(await page.evaluate(() => window.globalCellKeys), ["config", "globalSearch"]);
+    assert.deepEqual(await page.evaluate(() => window.outerCellKeys), []);
+    await page.evaluate(() => {
+        window.siyuan.config.keymap.general.config.custom = "⌥O";
+    });
+    await page.keyboard.press("Alt+o");
+    assert.deepEqual(await page.evaluate(() => window.globalCellKeys), ["config", "globalSearch", "config"]);
+    await page.evaluate(() => {
+        window.cellKeyAbort.abort();
+        window.siyuan.config.keymap.general.config.custom = cellTest.Constants.SIYUAN_KEYMAP.general.config.custom;
+    });
+    await page.keyboard.press("Escape");
+    console.log("PASS: cell global shortcuts and custom bindings reach global listeners without reentering the outer editor");
+    for (const fixture of ["", "plain", "- item", "> quote"]) {
+        await page.evaluate(fixture => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+            if (fixture) cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), fixture);
+            cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+            window.cellMenuItems = [];
+            window.cellMenuOpened = false;
+        }, fixture);
+        await cells.first().click();
+        const edit = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+        await edit.click({button: "right"});
+        await expect.poll(() => page.evaluate(() => window.cellMenuOpened)).toBe(true);
+        const menuIds = await page.evaluate(() => window.cellMenuItems.map(el => el.dataset.id));
+        assert.ok(menuIds.includes("insertRowAbove"), `${fixture}: missing table row menu: ${menuIds}`);
+        assert.ok(menuIds.includes("insertColumnRight"), `${fixture}: missing table column menu`);
+        await page.evaluate(() => window.cellMenuItems.find(el => el.dataset.id === "insertRowAbove").click());
+        await expect(cells).toHaveCount(4);
+        await expect(cells.nth(2)).toContainText(fixture.replace(/^[->] /, ""));
+        await page.keyboard.press("Control+z");
+        await expect(cells).toHaveCount(2);
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: editing empty, plain, list and quote cells exposes table menus with undoable row insertion");
+    for (const [rich, layout] of [[false, "auto"], [true, "auto"], [false, "fixed"], [true, "fixed"]]) {
+        await page.evaluate(({rich, layout}) => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| 111111111111111111111111111111 | target |");
+            const table = outerFragment.wysiwyg.querySelector("table");
+            table.style.cssText = `table-layout:${layout};width:${layout === "fixed" ? "200px" : "max-content"}`;
+            table.querySelectorAll("col").forEach(col => col.style.cssText = "width:100px;min-width:0");
+            if (rich) cellTest.setTableCellRich(table.querySelector("tbody td"), "- 111111111111111111111111111111");
+            cellTest.renderTableCellRichElements(table);
+        }, {rich, layout});
+        const previewSize = await measure(cells.first());
+        await cells.first().click();
+        assert.deepEqual(await measure(cells.first()), previewSize, "fixed-width cell keeps its wrapping when editing starts");
+        await cells.nth(1).click();
+        assert.deepEqual(await measure(cells.first()), previewSize, "fixed-width cell keeps its wrapping when editing ends");
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: plain and rich cells keep wrapping across editing transitions in auto and fixed table layouts");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");

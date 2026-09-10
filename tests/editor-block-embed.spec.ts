@@ -376,6 +376,9 @@ test.describe("block query embeds", () => {
             const document = await readValidDocument(siyuanAPI, created.docID);
             return flattenNodes(document).find(node => node.ID === placeholderID)?.Type;
         }, {timeout: 30000}).toBe("NodeBlockQueryEmbed");
+        await expect.poll(async () =>
+            (await siyuanAPI.querySQL(`select id from blocks where id = '${tableID}'`)).map(block => block.id),
+        {timeout: 30000}).toEqual([tableID]);
         await page.reload();
 
         const editor = await getDocumentEditor(page, created.docID);
