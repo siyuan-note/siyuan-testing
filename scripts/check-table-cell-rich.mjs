@@ -1221,6 +1221,23 @@ try {
         await page.keyboard.press("Escape");
     }
     console.log("PASS: editing empty, plain, list and quote cells exposes table menus with undoable row insertion");
+    for (const [rich, layout] of [[false, "auto"], [true, "auto"], [false, "fixed"], [true, "fixed"]]) {
+        await page.evaluate(({rich, layout}) => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| 111111111111111111111111111111 | target |");
+            const table = outerFragment.wysiwyg.querySelector("table");
+            table.style.cssText = `table-layout:${layout};width:${layout === "fixed" ? "200px" : "max-content"}`;
+            table.querySelectorAll("col").forEach(col => col.style.cssText = "width:100px;min-width:0");
+            if (rich) cellTest.setTableCellRich(table.querySelector("tbody td"), "- 111111111111111111111111111111");
+            cellTest.renderTableCellRichElements(table);
+        }, {rich, layout});
+        const previewSize = await measure(cells.first());
+        await cells.first().click();
+        assert.deepEqual(await measure(cells.first()), previewSize, "fixed-width cell keeps its wrapping when editing starts");
+        await cells.nth(1).click();
+        assert.deepEqual(await measure(cells.first()), previewSize, "fixed-width cell keeps its wrapping when editing ends");
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: plain and rich cells keep wrapping across editing transitions in auto and fixed table layouts");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
