@@ -7,6 +7,7 @@ final class SelectionTests: XCTestCase {
     }
 
     struct Gesture: Decodable {
+        let kind: String?
         let start: Point
         let end: Point
         let viewport: Viewport
@@ -32,7 +33,11 @@ final class SelectionTests: XCTestCase {
         let origin = safari.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let start = origin.withOffset(CGVector(dx: gesture.start.x * scale, dy: topInset + gesture.start.y * scale))
         let end = origin.withOffset(CGVector(dx: gesture.end.x * scale, dy: topInset + gesture.end.y * scale))
-        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        if gesture.kind == "tap" {
+            start.tap()
+        } else {
+            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
         let screenshot = XCTAttachment(screenshot: safari.screenshot())
         screenshot.lifetime = .keepAlways
         add(screenshot)
