@@ -33,6 +33,7 @@ const documentNavigationTests = [
 
 export default defineConfig({
     testDir: "./tests",
+    testIgnore: "**/ipad/**",
     timeout: 60000,
     retries: 0,
     workers: 2,
@@ -59,6 +60,7 @@ export default defineConfig({
             name: "main",
             dependencies: ["parallel"],
             testIgnore: [
+                "**/ipad/**",
                 ...encryptedNotebookTests,
                 ...editorTests,
                 ...documentNavigationTests,
@@ -77,8 +79,8 @@ export default defineConfig({
             name: "editor",
             dependencies: ["encrypted-notebook"],
             testMatch: editorTests,
-            testIgnore: process.env.SIYUAN_E2E_EXCLUDE_ATTRIBUTE_VIEW === "1" ?
-                attributeViewTests : undefined,
+            testIgnore: ["**/ipad/**", ...(process.env.SIYUAN_E2E_EXCLUDE_ATTRIBUTE_VIEW === "1" ?
+                attributeViewTests : [])],
             workers: 1,
         },
         {

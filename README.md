@@ -22,6 +22,7 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test`: start the managed local instance, run all tests in headless mode, and stop the instance; API robustness and pure log-audit checks use two workers, while UI projects run serially.
 - `pnpm test:smoke`: run the tagged startup, document, editor, import, flashcard, and WebSocket checks in about one to two minutes.
 - `pnpm test:focused -- tests/<feature>.spec.ts`: run one spec with a managed local instance.
+- `pnpm test:ipad`: run native iPad side-selection gestures with XCTest and the browser touch-cancellation regression.
 - `pnpm test:editor`: run all editor specs serially.
 - `pnpm test:navigation`: run document, notebook, file-tree, tag, bookmark, outline, and backlink specs serially.
 - `pnpm test:data`: run import, export, history, asset, and attribute-view specs serially.
@@ -35,6 +36,18 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm exec playwright test ...`: run Playwright against an instance started separately; direct commands do not manage the kernel or desktop compiler lifecycle.
 
 During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Managed commands always close their kernel and compiler before returning. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Direct Playwright commands that operate the SiYuan UI must use `--workers=1`; only tests that avoid shared UI and global application state are safe to run concurrently.
+
+## iPad touch regression
+
+The opt-in `pnpm test:ipad` command requires macOS, Xcode, Python 3 and one booted iPad simulator with iOS 18 or later. Open Safari once and finish any first-run prompts before testing. If multiple iPads are booted, set `SIYUAN_IPAD_UDID` to the intended device. The suite brings Simulator Safari to the foreground; do not interact with that simulator while it runs. The native cases are excluded from the default browser suite and CI shards.
+
+Tests create independent documents through the existing `createTestDocument` fixture in the managed `~/SiYuan-Testing` workspace. Simulator Safari loads the actual desktop bundle from that test instance; the installed SiYuan iOS application and its workspace are not used. XCTest sends system touch gestures, while Web Inspector only observes the DOM and event provenance. The suite never injects an implementation of block selection or synthetic JavaScript touch events. This covers iPad WebKit and desktop-layout integration, but does not cover additional gesture recognizers in the native SiYuan wrapper.
+
+Native cases cover vertical selection from the left margin, diagonal selection into content, upward selection from the right margin, exact selected block IDs after release, subsequent selection after cleanup, and scrolling inside content without selecting blocks. A separate Chromium test uses browser-generated CDP touch cancellation to verify cleanup and the next gesture; it also runs in the normal editor suite. It is not presented as an iPad system-cancellation test.
+
+Each native gesture retains its `.xcresult` bundle and screenshot under `test-results`, together with the observed selection and system-event metadata. Tests navigate their Safari test tab to `about:blank` before the usual document cleanup; failed documents remain available for diagnosis. Temporary XCTest build products are removed after the worker finishes. Web Inspector transport discovery uses Xcode's simulator service and may need adapting when Xcode changes its protocol; a connection failure fails the test rather than skipping its assertions.
+
+Specialized Playwright configurations live in `config/`; the default `playwright.config.ts` remains at the repository root. All configurations write artifacts to the root `test-results/` directory.
 
 ## Coverage
 

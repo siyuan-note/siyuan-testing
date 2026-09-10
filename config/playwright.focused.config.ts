@@ -1,5 +1,5 @@
 import {defineConfig} from "@playwright/test";
-import {getBaseURL} from "./tests/helpers/runtime";
+import {getBaseURL} from "../tests/helpers/runtime";
 
 const editorTests = [
     "**/editor*.spec.ts",
@@ -20,12 +20,13 @@ const getFocusedProject = () => {
         case undefined:
             return {
                 name: "focused",
-                testIgnore: /global\.(setup|teardown)\.ts/,
+                testIgnore: [/global\.(setup|teardown)\.ts/, "**/ipad/**"],
             };
         case "main":
             return {
                 name: "main",
                 testIgnore: [
+                    "**/ipad/**",
                     /global\.(setup|teardown)\.ts/,
                     ...encryptedNotebookTests,
                     ...editorTests,
@@ -38,7 +39,7 @@ const getFocusedProject = () => {
             return {
                 name: "editor",
                 testMatch: editorTests,
-                testIgnore: attributeViewTests,
+                testIgnore: [...attributeViewTests, "**/ipad/**"],
                 // editor 是多文件 shard，按文件并行提速（测试互相独立：独立文档 + teardown）；
                 // retries 兜底并行下偶发的粘贴/控件时序 flake
                 retries: 1,
@@ -55,7 +56,9 @@ const getFocusedProject = () => {
 };
 
 export default defineConfig({
-    testDir: "./tests",
+    testDir: "../tests",
+    outputDir: "../test-results",
+    testIgnore: "**/ipad/**",
     timeout: 60000,
     retries: 0,
     workers: getWorkerCount(),

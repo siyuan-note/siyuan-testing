@@ -35,7 +35,7 @@ const listTests = (shard) => {
     };
     delete env.SIYUAN_E2E_SHARD;
     if (shard) {
-        args.push("--config=playwright.focused.config.ts");
+        args.push("--config=config/playwright.focused.config.ts");
         env.SIYUAN_E2E_SHARD = shard;
     }
     const result = spawnSync(process.execPath, args, {
