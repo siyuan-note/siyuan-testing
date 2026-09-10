@@ -157,7 +157,8 @@ test("moves a block across documents and broadcasts undo and redo", async ({
             sourceTopLevel: [sourceStayID],
         });
 
-        await destinationAnchor.locator('[contenteditable="true"]').press(UNDO_SHORTCUT);
+        await destinationAnchor.locator('[contenteditable="true"]').click();
+        await page.keyboard.press(UNDO_SHORTCUT);
         const confirmButton = page.locator("#confirmDialogConfirmBtn");
         await expect(confirmButton).toBeVisible();
         const confirmDialog = confirmButton.locator("xpath=ancestor::*[@data-key='dialog-confirm'][1]");
@@ -178,7 +179,8 @@ test("moves a block across documents and broadcasts undo and redo", async ({
             sourceTopLevel: [movedBlockID, sourceStayID],
         });
 
-        await destinationAnchor.locator('[contenteditable="true"]').press(REDO_SHORTCUT);
+        await destinationAnchor.locator('[contenteditable="true"]').click();
+        await page.keyboard.press(REDO_SHORTCUT);
         await expect(sourceEditor.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(0);
         await expect(destinationEditor.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(1);
         await expect(sourceObserver.locator(`[data-node-id="${movedBlockID}"]`)).toHaveCount(0);

@@ -1,6 +1,7 @@
 import {Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {openWorkspace} from "./helpers/runtime";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 const openEditorFontSizeMenu = async (page: Page) => {
     await page.locator("#barWorkspace").click();
@@ -18,12 +19,13 @@ const openEditorFontSizeMenu = async (page: Page) => {
 
 test.describe("editor font size", () => {
     test("changes and persists the font size from the main menu", async ({page, siyuanAPI, createTestDocument}) => {
-        const {editor} = await createTestDocument("Editor Font Size E2E", "Editor font size test");
+        const {docID} = await createTestDocument("Editor Font Size E2E", "Editor font size test");
         const originalEditor = (await siyuanAPI.getConf()).conf.editor;
         await siyuanAPI.setEditor({...originalEditor, fontSize: 16});
 
         try {
             await page.reload();
+            const editor = await getDocumentEditor(page, docID);
             await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
             await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontSize)).toBe(16);
 

@@ -125,7 +125,7 @@ test.describe("editor", () => {
         const paragraph = editor.locator('[data-type="NodeParagraph"]').filter({hasText: content});
         await expect(paragraph).toBeVisible();
         const undoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/undo");
-        await editable.press(UNDO_SHORTCUT);
+        await page.keyboard.press(UNDO_SHORTCUT);
         await Promise.all([inputTransaction, undoResponse]);
         await expect(paragraph).toHaveCount(0);
         expect(transactionPaths.lastIndexOf("/api/transactions")).toBeGreaterThanOrEqual(0);
@@ -135,7 +135,8 @@ test.describe("editor", () => {
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain(content);
 
         const redoResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions/redo");
-        await editor.locator(":scope > [data-node-id] > [contenteditable=true]").first().press(REDO_SHORTCUT);
+        await focusEditable(editor.locator(":scope > [data-node-id] > [contenteditable=true]").first());
+        await page.keyboard.press(REDO_SHORTCUT);
         await redoResponse;
         await expect(paragraph).toBeVisible();
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(content);
@@ -147,8 +148,9 @@ test.describe("editor", () => {
         const content = original + "X";
         const editable = editor.locator(':scope > [data-node-id] > [contenteditable="true"]').first();
         await focusEditable(editable);
-        await editable.press("End");
+        await page.keyboard.press("End");
         await page.keyboard.type("X");
+        await expect(editable).toHaveText(content);
         for (const action of ["undo", "redo"] as const) {
             await editor.evaluate(element => {
                 (element as HTMLElement).focus();

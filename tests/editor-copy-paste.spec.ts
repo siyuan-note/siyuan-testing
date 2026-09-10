@@ -164,7 +164,7 @@ const requestHistoryAction = async (page: Page, editor: Locator, shortcut: strin
     const response = page.waitForResponse(item =>
         new URL(item.url()).pathname === `/api/transactions/${action}`, {timeout: 30000});
     const editable = editor.locator('[contenteditable="true"]').last();
-    await editable.focus();
+    await editable.click();
     await page.keyboard.press(shortcut);
     const historyResponse = await response;
     expect(historyResponse.ok()).toBe(true);
