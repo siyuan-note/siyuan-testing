@@ -21,6 +21,7 @@ export {applyTableCellRichInlineMark} from "./src/protyle/render/tableCellRichEd
 export {TableControl} from "./src/protyle/util/tableControl";
 export {LocalUndo} from "./src/protyle/undo";
 export {tableMenu} from "./src/menus/protyle";
+export {matchHotKey} from "./src/protyle/util/hotKey";
 export {Constants} from "./src/constants";`,
         resolveDir: app,
     },
@@ -522,8 +523,9 @@ try {
         return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
     });
     assert.equal(pressedCaret.node, "#text");
-    assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (clickBox.y + clickBox.height / 2)) < 3,
-        "click places the empty cell caret at the vertically centered editing line");
+    const emptyLine = await cells.nth(1).locator('.p > [contenteditable="true"]').first().boundingBox();
+    assert.ok(Math.abs(pressedCaret.rect.y + pressedCaret.rect.height / 2 - (emptyLine.y + emptyLine.height / 2)) < 3,
+        "click places the empty cell caret on its editing line");
     assert.deepEqual(await page.evaluate(() => {
         const range = getSelection().getRangeAt(0);
         return {node: range.startContainer.nodeName, offset: range.startOffset, rect: range.getBoundingClientRect().toJSON()};
@@ -858,16 +860,24 @@ try {
     });
     await cells.first().click();
     const dragHandle = cells.first().locator('.table__cell-editor .protyle-wysiwyg > .list > .li > .protyle-action').nth(1);
+    assert.equal(await cells.first().locator('.table__cell-editor .protyle-wysiwyg').evaluate(el => getComputedStyle(el).padding), "0px");
+    assert.equal(await cells.nth(1).locator('.table__cell-rich').evaluate(el => getComputedStyle(el).padding), "0px");
     const dragBox = await dragHandle.boundingBox();
     const dropBox = await cells.nth(1).locator('[data-type="NodeListItem"]').boundingBox();
     await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(dragBox.x + dragBox.width / 2 + 10, dragBox.y + dragBox.height / 2, {steps: 3});
+    const sourceTarget = await cells.first().locator('.table__cell-editor .li').first().boundingBox();
+    await page.mouse.move(sourceTarget.x + 10, sourceTarget.y + 5, {steps: 4});
+    await page.mouse.move(sourceTarget.x + 11, sourceTarget.y + 5);
+    await expect(cells.first().locator('[class*="dragover__"]')).toHaveCount(1);
     await page.mouse.move(dropBox.x + 10, dropBox.y + dropBox.height - 2, {steps: 8});
     await page.mouse.move(dropBox.x + 11, dropBox.y + dropBox.height - 2);
     await expect(page.locator(".table__cell-rich .dragover__bottom--sibling")).toBeVisible();
     await page.evaluate(({x, y}) => {
         const indicator = document.querySelector(".table__cell-rich .dragover__bottom--sibling");
+        const indicators = outerFragment.wysiwyg.querySelectorAll('[class*="dragover"]');
+        if (indicators.length !== 1) throw new Error("Stale drag indicators: " + Array.from(indicators).map(el => el.className).join(", "));
         const style = getComputedStyle(indicator, "::after");
         const color = style.backgroundColor;
         if (style.height !== "4px") throw new Error("Cell drop indicator differs from block drag line");
@@ -1157,6 +1167,37 @@ try {
         }
     }
     console.log("PASS: typing, text insertion, paste and backspace preserve cell soft breaks across reopening");
+    await cells.first().click();
+    await page.evaluate(() => {
+        window.globalCellKeys = [];
+        window.outerCellKeys = [];
+        window.cellKeyAbort = new AbortController();
+        outerFragment.wysiwyg.addEventListener("keydown", event => window.outerCellKeys.push(event.key),
+            {signal: window.cellKeyAbort.signal});
+        window.addEventListener("keydown", event => {
+            for (const name of ["config", "globalSearch"]) {
+                if (cellTest.matchHotKey(window.siyuan.config.keymap.general[name], event)) {
+                    window.globalCellKeys.push(name);
+                    event.preventDefault();
+                }
+            }
+        }, {signal: window.cellKeyAbort.signal});
+    });
+    await page.keyboard.press("Alt+p");
+    await page.keyboard.press("Control+p");
+    assert.deepEqual(await page.evaluate(() => window.globalCellKeys), ["config", "globalSearch"]);
+    assert.deepEqual(await page.evaluate(() => window.outerCellKeys), []);
+    await page.evaluate(() => {
+        window.siyuan.config.keymap.general.config.custom = "⌥O";
+    });
+    await page.keyboard.press("Alt+o");
+    assert.deepEqual(await page.evaluate(() => window.globalCellKeys), ["config", "globalSearch", "config"]);
+    await page.evaluate(() => {
+        window.cellKeyAbort.abort();
+        window.siyuan.config.keymap.general.config.custom = cellTest.Constants.SIYUAN_KEYMAP.general.config.custom;
+    });
+    await page.keyboard.press("Escape");
+    console.log("PASS: cell global shortcuts and custom bindings reach global listeners without reentering the outer editor");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
