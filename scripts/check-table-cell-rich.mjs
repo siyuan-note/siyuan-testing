@@ -1198,6 +1198,29 @@ try {
     });
     await page.keyboard.press("Escape");
     console.log("PASS: cell global shortcuts and custom bindings reach global listeners without reentering the outer editor");
+    for (const fixture of ["", "plain", "- item", "> quote"]) {
+        await page.evaluate(fixture => {
+            outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+            if (fixture) cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), fixture);
+            cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+            window.cellMenuItems = [];
+            window.cellMenuOpened = false;
+        }, fixture);
+        await cells.first().click();
+        const edit = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+        await edit.click({button: "right"});
+        await expect.poll(() => page.evaluate(() => window.cellMenuOpened)).toBe(true);
+        const menuIds = await page.evaluate(() => window.cellMenuItems.map(el => el.dataset.id));
+        assert.ok(menuIds.includes("insertRowAbove"), `${fixture}: missing table row menu: ${menuIds}`);
+        assert.ok(menuIds.includes("insertColumnRight"), `${fixture}: missing table column menu`);
+        await page.evaluate(() => window.cellMenuItems.find(el => el.dataset.id === "insertRowAbove").click());
+        await expect(cells).toHaveCount(4);
+        await expect(cells.nth(2)).toContainText(fixture.replace(/^[->] /, ""));
+        await page.keyboard.press("Control+z");
+        await expect(cells).toHaveCount(2);
+        await page.keyboard.press("Escape");
+    }
+    console.log("PASS: editing empty, plain, list and quote cells exposes table menus with undoable row insertion");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
