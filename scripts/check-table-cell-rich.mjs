@@ -1111,6 +1111,52 @@ try {
     await page.evaluate(() => outerFragment.protyle.contentElement.removeAttribute("style"));
     console.log("PASS: list Enter and soft breaks in a visible cell do not cause unintended scrolling");
     console.log("PASS: rich cell Escape preserves undo and redo; clicking hides owner and cell selection toolbars");
+    for (const fixture of ["plain", "- item", "> quote", "## heading\n\n- item\n  - nested\n\nlast"]) {
+        for (const action of ["type", "paste", "text", "backspace"]) {
+            await page.evaluate(fixture => {
+                outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+                cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), fixture);
+                cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+            }, fixture);
+            await cells.first().click();
+            const editable = cells.first().locator('.table__cell-editor .p > [contenteditable="true"]').first();
+            await editable.click();
+            await page.keyboard.press("End");
+            for (let index = 0; index < 4; index++) await page.keyboard.press("Shift+Enter");
+            const before = await editable.textContent();
+            const height = (await cells.first().boundingBox()).height;
+            if (action === "type") await page.keyboard.type("1");
+            if (action === "text") await page.keyboard.insertText("测试");
+            if (action === "backspace") await page.keyboard.press("Backspace");
+            if (action === "paste") {
+                await editable.evaluate(element => {
+                    const data = new DataTransfer();
+                    data.setData("text/plain", "pasted");
+                    element.dispatchEvent(new ClipboardEvent("paste", {clipboardData: data, bubbles: true, cancelable: true}));
+                });
+            }
+            const readText = () => cells.first().locator('.p > [contenteditable]').first().textContent();
+            // 输入后的末尾占位换行由浏览器维护，只比较可见内容及其前面的软换行。
+            const expectedText = before.trimEnd() + "\n".repeat(4) +
+                (action === "type" ? "1" : action === "text" ? "测试" : "pasted");
+            if (action === "backspace") {
+                await expect.poll(async () => ((await readText()).match(/\n/g) || []).length).toBe(4);
+            } else {
+                await expect.poll(async () => (await readText()).trimEnd(), `${fixture}: ${action}`).toBe(expectedText);
+            }
+            if (action !== "backspace") {
+                assert.ok(Math.abs((await cells.first().boundingBox()).height - height) < 2,
+                    `${fixture}: ${action} after soft breaks keeps the cell height`);
+            }
+            const text = await readText();
+            await cells.nth(1).click();
+            assert.equal(await readText(), text);
+            await cells.first().click();
+            assert.equal(await readText(), text);
+            await page.keyboard.press("Escape");
+        }
+    }
+    console.log("PASS: typing, text insertion, paste and backspace preserve cell soft breaks across reopening");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
