@@ -970,6 +970,17 @@ try {
             }));
             const target = outerFragment.wysiwyg.querySelectorAll("tbody td")[1];
             const rect = target.getBoundingClientRect();
+            for (const y of [rect.top + 2, rect.bottom - 2]) {
+                target.dispatchEvent(new DragEvent("dragover", {dataTransfer: transfer, ctrlKey: copy,
+                    bubbles: true, cancelable: true, clientX: rect.x + 5, clientY: y}));
+                const line = getComputedStyle(target, "::before");
+                const placeholder = getComputedStyle(target, "::after");
+                if (line.height !== "4px" || line.position !== "absolute") throw new Error("Empty cell drop must show a thin insertion line");
+                if (placeholder.position === "absolute" || placeholder.backgroundColor !== "rgba(0, 0, 0, 0)") {
+                    throw new Error("Empty cell placeholder must not become a drop highlight");
+                }
+                if (target.getBoundingClientRect().height !== rect.height) throw new Error("Drop indicator changed empty cell height");
+            }
             target.dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, ctrlKey: copy,
                 bubbles: true, cancelable: true, clientX: rect.x + 5, clientY: rect.y + 5}));
         }, copy);
@@ -1238,6 +1249,31 @@ try {
         await page.keyboard.press("Escape");
     }
     console.log("PASS: plain and rich cells keep wrapping across editing transitions in auto and fixed table layouts");
+    await page.evaluate(() => {
+        outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |\n\n- body\n  - nested");
+        cellTest.setTableCellRich(outerFragment.wysiwyg.querySelector("tbody td"), "- cell\n  - nested");
+        cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+    });
+    const listInsets = () => page.evaluate(() => {
+        const cell = outerFragment.wysiwyg.querySelector("tbody td");
+        const body = outerFragment.wysiwyg.querySelector(":scope > .list");
+        const cellList = cell.querySelector(".list");
+        const markerX = list => {
+            const rect = list.querySelector(".protyle-action").getBoundingClientRect();
+            return rect.left + rect.width / 2;
+        };
+        const border = parseFloat(getComputedStyle(cell).borderLeftWidth);
+        return {cell: markerX(cellList) - cell.getBoundingClientRect().left - border,
+            body: markerX(body) - body.getBoundingClientRect().left,
+            nested: cellList.querySelector(".list").getBoundingClientRect().left - cellList.getBoundingClientRect().left};
+    });
+    const previewInsets = await listInsets();
+    assert.ok(Math.abs(previewInsets.cell - previewInsets.body) < 1, "cell list marker inset matches body list");
+    assert.equal(previewInsets.nested, 34, "nested list indentation is preserved");
+    await cells.first().click();
+    assert.deepEqual(await listInsets(), previewInsets, "list spacing stays consistent while editing");
+    await page.keyboard.press("Escape");
+    console.log("PASS: cell lists match body marker insets and retain nested indentation");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
