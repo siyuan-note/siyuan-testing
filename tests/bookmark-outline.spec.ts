@@ -1,5 +1,5 @@
 import {expect, test} from "./fixtures";
-import {showDock} from "./helpers/runtime";
+import {showDock, showFileTree} from "./helpers/runtime";
 import {IOutlineBlock, IOutlinePath} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
@@ -29,6 +29,7 @@ test.describe("bookmarks and outline", () => {
 
         const origin = await createTestDocument("Bookmark Navigation Origin", "Navigate away before opening bookmark");
         await expect(origin.editor).toBeVisible();
+        const restoreFileTree = await showFileTree(page);
         const restoreDockVisibility = await showDock(page);
         const dockItem = page.locator('.dock__item[data-type="bookmark"]').first();
         const initiallyActive = await dockItem.evaluate(element => element.classList.contains("dock__item--active"));
@@ -38,6 +39,8 @@ test.describe("bookmarks and outline", () => {
             const bookmarkPanel = page.locator(".sy__bookmark").last();
             const bookmarkGroup = bookmarkPanel.locator(`li[data-treetype="bookmark"][data-bookmark="${bookmark}"]`);
             await expect(bookmarkGroup).toBeVisible({timeout: 15000});
+            await bookmarkPanel.locator(`li[data-node-id="${targetBlockID}"] > .b3-list-item__text`).click();
+            await expect(page.locator(`.protyle-title[data-node-id="${target.docID}"]:visible`).last()).toBeVisible();
 
             await openMenuItemByIcon(page, bookmarkGroup, "#iconEdit");
             const renameDialog = page.locator('[data-key="dialog-renamebookmark"].b3-dialog--open').last();
@@ -46,13 +49,25 @@ test.describe("bookmarks and outline", () => {
             await renameInput.fill(renamed);
             const renameResponse = page.waitForResponse(response =>
                 response.url().endsWith("/api/bookmark/renameBookmark") && response.request().method() === "POST");
+            const reloaded = page.waitForEvent("framenavigated", frame => frame === page.mainFrame());
+            const layoutSaved = page.waitForResponse(response =>
+                response.url().endsWith("/api/system/setUILayout") &&
+                response.request().postDataJSON()?.errorExit === false);
             await renameInput.press("Enter");
             expect((await renameResponse).ok()).toBe(true);
+            const savedLayout = await layoutSaved;
+            expect((await savedLayout.json()).code).toBe(0);
+            const layout = savedLayout.request().postDataJSON().layout;
+            expect([layout.left, layout.right, layout.bottom].flatMap(dock => dock.data.flat())
+                .find(item => item.type === "bookmark")?.show).toBe(true);
+            await reloaded;
+            await expect(page.locator("#barSearch")).toBeVisible();
             await expect.poll(async () => (await siyuanAPI.getBookmarks()).find(
                 item => item.name === renamed,
             )?.blocks.some(block => block.id === targetBlockID), {timeout: BOOKMARK_SYNC_TIMEOUT}).toBe(true);
 
-            await activateDock(page, dockItem, ".sy__bookmark");
+            // 重命名刷新后应直接恢复书签面板，不能通过重新点击侧栏掩盖布局丢失。
+            await expect(page.locator(".sy__bookmark .block__logo:visible")).toBeVisible();
             const updatedBookmarkPanel = page.locator(".sy__bookmark:visible").last();
             const renamedGroup = updatedBookmarkPanel.locator(
                 `li[data-treetype="bookmark"][data-bookmark="${renamed}"]`,
@@ -89,6 +104,7 @@ test.describe("bookmarks and outline", () => {
                 await restoreDock(page, dockItem, initiallyActive);
             } finally {
                 await restoreDockVisibility();
+                await restoreFileTree();
             }
         }
     });
