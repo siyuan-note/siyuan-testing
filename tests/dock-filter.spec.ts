@@ -2,9 +2,52 @@ import type {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {showDock} from "./helpers/runtime";
 
-type DockType = "bookmark" | "outline" | "tag";
+type DockType = "bookmark" | "outline" | "tag" | "graph" | "globalGraph";
 
 test.describe("dock panel filters", () => {
+    for (const type of ["graph", "globalGraph"] as const) {
+        test(`${type} hides search on canvas click and preserves the query indicator`, async ({
+            createTestDocument,
+            page,
+            fullEntryVisibility,
+        }) => {
+            await createTestDocument("Graph Search", "Graph search regression content");
+            const dock = await openDockPanel(page, type);
+            try {
+                const input = dock.panel.locator("input.search__label");
+                const searchIcon = dock.panel.locator('[data-type="search"]');
+                const canvas = dock.panel.locator(".graph__svg");
+                await expect(canvas).toBeVisible();
+                await expect(dock.panel.locator('[data-type="refresh"] svg')).not.toHaveClass(/fn__rotate/);
+                await setDockFilter(dock.panel, "Graph");
+                await expect(input).toBeFocused();
+                await canvas.click({position: {x: 5, y: 5}});
+                await expect(input).toBeHidden();
+                await expect(searchIcon).toHaveClass(/block__icon--active/);
+                await expect(searchIcon).toHaveAttribute("aria-label", / Graph$/);
+
+                await canvas.click({position: {x: 5, y: 5}});
+                await expect(searchIcon).toHaveClass(/block__icon--active/);
+                await dock.panel.locator(":scope > .block__icons").hover();
+                await searchIcon.click();
+                await expect(input).toBeVisible();
+                await expect(input).toBeFocused();
+                await expect(input).toHaveValue("Graph");
+                await expect.poll(() => input.evaluate((element: HTMLInputElement) =>
+                    [element.selectionStart, element.selectionEnd])).toEqual([0, 5]);
+
+                await input.fill("");
+                await canvas.click({position: {x: 5, y: 5}});
+                await expect(input).toBeHidden();
+                await expect(searchIcon).not.toHaveClass(/block__icon--active/);
+                await expect(searchIcon).not.toHaveAttribute("aria-label", / Graph$/);
+            } finally {
+                await clearDockFilter(dock.panel);
+                await dock.restore();
+            }
+        });
+    }
+
     test("filters bookmark groups and restores them after clearing the query", async ({
         createTestDocument,
         page,
