@@ -1274,6 +1274,45 @@ try {
     assert.deepEqual(await listInsets(), previewInsets, "list spacing stays consistent while editing");
     await page.keyboard.press("Escape");
     console.log("PASS: cell lists match body marker insets and retain nested indentation");
+    await page.addStyleTag({content: ".protyle-wysiwyg [data-node-id] {text-align:justify}"});
+    for (const align of ["left", "center", "right"]) {
+        for (const content of ["text", "first\n\nlast", "## heading\n\nfirst", "- item\n  - nested"]) {
+            await page.evaluate(({align, content}) => {
+                outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+                const cell = outerFragment.wysiwyg.querySelector("tbody td");
+                cell.style.textAlign = align;
+                cell.style.width = "240px";
+                cellTest.setTableCellRich(cell, content);
+                cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+            }, {align, content});
+            const alignment = () => cells.first().evaluate(cell => {
+                const text = cell.querySelector('.p > [contenteditable]');
+                const range = document.createRange();
+                range.selectNodeContents(text);
+                const rect = range.getBoundingClientRect();
+                return {x: rect.x, width: rect.width, align: getComputedStyle(text).textAlign};
+            });
+            const before = await alignment();
+            assert.equal(before.align, align);
+            if (!content.startsWith("-")) {
+                const bounds = await cells.first().evaluate(cell => {
+                    const rect = cell.getBoundingClientRect();
+                    const style = getComputedStyle(cell);
+                    return {left: rect.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth),
+                        right: rect.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth)};
+                });
+                const expectedX = align === "left" ? bounds.left : align === "right" ? bounds.right - before.width :
+                    (bounds.left + bounds.right - before.width) / 2;
+                assert.ok(Math.abs(before.x - expectedX) < 1, `${align}: paragraph uses the cell content alignment boundary`);
+            }
+            await cells.first().click();
+            assert.deepEqual(await alignment(), before, `${align}: ${content} keeps alignment when editing`);
+            await cells.nth(1).click();
+            assert.deepEqual(await alignment(), before, `${align}: ${content} keeps alignment after editing`);
+            await page.keyboard.press("Escape");
+        }
+    }
+    console.log("PASS: cell alignment overrides document justification and stays consistent for paragraphs, headings and lists");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
