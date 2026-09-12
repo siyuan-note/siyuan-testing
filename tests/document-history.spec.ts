@@ -10,7 +10,7 @@ test.describe("document history", () => {
     }) => {
         const original = `History original ${Date.now()}`;
         const replacement = `History replacement ${Date.now()}`;
-        const document = await createTestDocument("Document History E2E", original);
+        const document = await createTestDocument("Document History E2E <em> &amp; &#60; \"quoted\"", original);
         const paragraph = document.editor.locator(':scope > [data-type="NodeParagraph"]').first();
         const paragraphID = await paragraph.getAttribute("data-node-id");
         expect(paragraphID).toBeTruthy();
@@ -47,6 +47,8 @@ test.describe("document history", () => {
         await historyMenuItem.click();
 
         const historyDialog = page.locator('[data-key="dialog-historydoc"]');
+        await expect(historyDialog.locator(".b3-dialog__header")).toHaveText(document.title);
+        await expect(historyDialog.locator(".b3-dialog__header em")).toHaveCount(0);
         const snapshot = historyDialog.locator(`.history__side .b3-list-item[data-created="${created}"]`);
         await expect(snapshot).toBeVisible({timeout: 15000});
         await snapshot.click();
