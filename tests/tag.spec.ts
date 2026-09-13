@@ -118,8 +118,8 @@ test.describe("tags", () => {
             expect(resultBlockID).not.toBeNull();
             await resultItem.dblclick();
             await expect(page.locator(`.protyle-title[data-node-id="${document.docID}"]:visible`).last()).toBeVisible();
-            await expect(page.locator(`.protyle-wysiwyg [data-node-id="${resultBlockID}"]:visible`)).toBeVisible();
             editor = await getDocumentEditor(page, document.docID);
+            await expect(editor.locator(`[data-node-id="${resultBlockID}"]`)).toBeVisible();
 
             await openTagMenuItem(page, renamedNode, "#iconTrashcan");
             const confirmButton = page.locator("#confirmDialogConfirmBtn:visible");

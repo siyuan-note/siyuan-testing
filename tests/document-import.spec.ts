@@ -111,8 +111,8 @@ test.describe("document import", () => {
                 const second = await fileTree.evaluate(element => element.scrollTop);
                 return first === second;
             }, {timeout: 5000}).toBe(true);
-            await notebookRoot.hover({force: true});
-            await notebookRoot.locator(':scope > [data-type="more-root"]').click({force: true});
+            await notebookRoot.hover();
+            await notebookRoot.locator(':scope > [data-type="more-root"]').click();
 
             const menu = page.locator("#commonMenu:not(.fn__none)");
             await expect(menu).toBeVisible();

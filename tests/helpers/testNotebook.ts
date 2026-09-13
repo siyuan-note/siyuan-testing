@@ -51,6 +51,11 @@ export const getDocumentEditor = async (page: Page, docID: string) => {
     await expect(protyle).toHaveAttribute("data-loading", "finished", {timeout: 15000});
     const editor = protyle.locator(".protyle-wysiwyg").first();
     await expect(editor).toBeVisible({timeout: 10000});
+    // 侧栏宽度动画和字体加载也会改变正文尺寸，测量前等待页面布局稳定。
+    await editor.evaluate(() => document.fonts.ready.then(() => undefined));
+    await expect.poll(() => editor.evaluate(() => document.getAnimations().filter(animation =>
+        animation.playState === "running" && animation.effect?.getComputedTiming().iterations !== Infinity,
+    ).length)).toBe(0);
     return editor;
 };
 

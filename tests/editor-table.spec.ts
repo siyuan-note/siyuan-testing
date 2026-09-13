@@ -201,6 +201,7 @@ const hoverTableControl = async (page: Page, cell: Locator, type: TableControlTy
         }
         return;
     }
+    await cell.hover();
     const table = cell.locator("xpath=ancestor::table");
     const tableBox = await table.boundingBox();
     const cellBox = await cell.boundingBox();
@@ -216,6 +217,7 @@ const hoverTableControl = async (page: Page, cell: Locator, type: TableControlTy
     } else {
         await page.mouse.move(tableBox!.x + tableBox!.width + 1, tableBox!.y + tableBox!.height / 2, {steps: 10});
     }
+    await expect(getVisibleTableControl(page, type)).toBeVisible();
 };
 
 const openTableControlMenu = async (page: Page, cell: Locator, type: TableControlType) => {

@@ -75,7 +75,7 @@ export const withSearchMethod = async (page: Page, methodIcon: string,
             k: string;
             r: string;
             types: Record<string, boolean>;
-            subTypes: Record<string, boolean>;
+            subTypes: Record<string, Record<string, boolean>>;
             replaceTypes: Record<string, boolean>;
         };
         Object.assign(config, {
@@ -92,8 +92,10 @@ export const withSearchMethod = async (page: Page, methodIcon: string,
         Object.keys(config.types).forEach(type => {
             config.types[type] = true;
         });
-        Object.keys(config.subTypes).forEach(type => {
-            config.subTypes[type] = false;
+        Object.values(config.subTypes).forEach(group => {
+            Object.keys(group).forEach(type => {
+                group[type] = false;
+            });
         });
         config.replaceTypes.text = true;
     });

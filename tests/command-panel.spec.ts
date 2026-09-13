@@ -422,6 +422,7 @@ test.describe("command palette", () => {
                 await siyuanAPI.setNotebookConf(target.notebookID, {...original, sortMode: 6});
                 await page.reload();
                 const editor = await getDocumentEditor(page, target.docID);
+                await showFileTree(page);
                 const notebookRoot = page.locator(
                     `.sy__file ul.b3-list[data-url="${target.notebookID}"] > li[data-type="navigation-root"]`,
                 );
