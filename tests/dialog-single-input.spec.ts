@@ -98,8 +98,9 @@ test.describe("single-input dialogs", () => {
         try {
             const input = dialog.locator("input");
             await input.fill("invalid\tname");
-            await input.press("Enter");
+            await dialog.locator(".b3-dialog__action .b3-button--text").click();
             await expect(dialog.locator(".b3-dialog__container")).toBeVisible();
+            await expect(input).toBeFocused();
             await expect(input).toHaveValue("invalid\tname");
             const message = await page.evaluate(() => window.siyuan.languages.fileNameRule);
             await expect(page.locator("#message")).toContainText(message);
