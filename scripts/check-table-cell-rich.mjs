@@ -1293,7 +1293,7 @@ try {
                 return {x: rect.x, width: rect.width, align: getComputedStyle(text).textAlign};
             });
             const before = await alignment();
-            assert.equal(before.align, align);
+            assert.equal(before.align, content.startsWith("-") ? "left" : align);
             if (!content.startsWith("-")) {
                 const bounds = await cells.first().evaluate(cell => {
                     const rect = cell.getBoundingClientRect();
@@ -1313,6 +1313,58 @@ try {
         }
     }
     console.log("PASS: cell alignment overrides document justification and stays consistent for paragraphs, headings and lists");
+    for (const mode of ["style", "attribute"]) {
+        for (const align of ["center", "right"]) {
+            for (const long of [false, true]) {
+                await page.evaluate(({mode, align, long}) => {
+                    outerFragment.setMarkdown("| A | B |\n| --- | --- |\n| | target |");
+                    const cell = outerFragment.wysiwyg.querySelector("tbody td");
+                    const table = cell.closest("table");
+                    table.style.tableLayout = "fixed";
+                    table.style.width = "400px";
+                    if (mode === "style") {
+                        cell.style.textAlign = align;
+                    } else {
+                        cell.setAttribute("align", align);
+                    }
+                    cellTest.setTableCellRich(cell, `- ${long ? "long text ".repeat(20) : "short"}\n  - nested\n- second`);
+                    cellTest.renderTableCellRichElements(outerFragment.wysiwyg);
+                }, {mode, align, long});
+                const measureList = () => cells.first().evaluate(cell => {
+                    const list = cell.querySelector('.list[data-type="NodeList"]');
+                    const rect = list.getBoundingClientRect();
+                    const cellRect = cell.getBoundingClientRect();
+                    const style = getComputedStyle(cell);
+                    const left = cellRect.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+                    const right = cellRect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+                    const texts = Array.from(list.querySelector('.li').querySelectorAll('.p > [contenteditable]'))
+                        .filter(text => text.textContent.trim());
+                    const ranges = texts.map(text => {
+                        const range = document.createRange();
+                        range.selectNodeContents(text);
+                        const bounds = range.getBoundingClientRect();
+                        return {x: bounds.x, right: bounds.right, align: getComputedStyle(text).textAlign};
+                    }).filter(rect => rect.right > rect.x);
+                    return {x: rect.x, width: rect.width, height: rect.height, left, right, ranges};
+                });
+                const before = await measureList();
+                const expected = align === "center" ? (before.left + before.right - before.width) / 2 : before.right - before.width;
+                assert.ok(Math.abs(before.x - expected) < 1, `${mode} ${align}: entire list is aligned`);
+                assert.ok(before.width <= before.right - before.left + 1, "list fits cell width");
+                assert.ok(Math.abs(before.ranges[1].x - before.ranges[0].x - 34) < 1, `nested text keeps its indentation: ${JSON.stringify({mode, align, long, before})}`);
+                for (const text of before.ranges) {
+                    assert.equal(text.align, "left", "list text keeps left alignment");
+                    assert.ok(text.right <= before.right + 1, "list text stays within cell");
+                }
+                await cells.first().locator('.p > [contenteditable]').first().click();
+                assert.deepEqual(await measureList(), before, "editing preserves complete list geometry");
+                await cells.nth(1).click();
+                assert.deepEqual(await measureList(), before, "closing preserves complete list geometry");
+                await page.keyboard.press("Escape");
+            }
+        }
+    }
+    console.log("PASS: centered and right-aligned lists move as a whole and wrap consistently during editing");
     assert.deepEqual(errors, []);
     console.log("PASS: default cell click editing, Tab/Enter navigation, soft breaks and Escape through real editor events");
     console.log("PASS: header, ordinary and empty cell dimensions remain unchanged when editing starts and ends");
