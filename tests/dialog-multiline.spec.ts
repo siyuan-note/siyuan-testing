@@ -110,6 +110,7 @@ test.describe("multiline input dialogs", () => {
         await expect(input).toBeFocused();
         await expectResizeBounds(page, input);
         await input.press("Escape");
-        await reopened.locator(".b3-dialog__close").click();
+        await page.keyboard.press("Escape");
+        await expect(reopened).toHaveCount(0);
     });
 });
