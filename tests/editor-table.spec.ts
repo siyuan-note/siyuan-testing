@@ -451,6 +451,10 @@ test.describe("table cell rich text", () => {
         await expect(table.locator('[data-sy-table-cell-inline], [data-sy-table-cell-rich]')).toHaveCount(0);
         await expect(cells.first()).toHaveText("**literal** updated");
         await expect(cells.first().locator('[data-type~="strong"]')).toHaveCount(0);
+        await expect.poll(async () => {
+            const text = (await getPersistedTableState(siyuanAPI, docID)).text;
+            return [text.includes("**literal** updated"), text.includes("next line")];
+        }, {timeout: 30000}).toEqual([true, true]);
         await page.reload();
         const reloaded = await getDocumentEditor(page, docID);
         await expect(reloaded.locator("tbody td").first()).toHaveText("**literal** updated");
