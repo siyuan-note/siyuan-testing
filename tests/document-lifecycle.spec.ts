@@ -96,9 +96,16 @@ test.describe("document lifecycle", () => {
             await expect(parentItem).toBeVisible({timeout: 15000});
             const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
             const parentToggle = parentItem.locator(":scope > .b3-list-item__toggle");
+            // 展开动画期间切换按钮不会处理点击，等待子列表就绪后再折叠。
+            await expect.poll(() => parentItem.evaluate(element => {
+                const children = element.nextElementSibling;
+                return children?.tagName === "UL" ? children.getAnimations().filter(animation =>
+                    animation.playState === "running").length : 0;
+            })).toBe(0);
             if (await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
                 await parentToggle.click({force: true});
                 await expect(parentArrow).not.toHaveClass(/b3-list-item__arrow--open/);
+                await expect(parentItem.locator("xpath=following-sibling::*[1][self::ul]")).toHaveCount(0);
             }
             const listChildren = page.waitForResponse(response =>
                 new URL(response.url()).pathname === "/api/filetree/listDocsByPath" &&

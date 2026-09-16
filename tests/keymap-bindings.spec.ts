@@ -315,8 +315,10 @@ test("adds a binding and preserves both bindings after reload", async ({page, si
         return conf.keymap.general[action].bindings?.keys;
     }).toEqual(["⌘5", addedKey]);
 
+    const docID = new URL(page.url()).searchParams.get("id");
+    expect(docID).toBeTruthy();
     await page.reload();
-    await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
+    await getDocumentEditor(page, docID!);
     const row = await openKeymap(page);
     await expect(row).toHaveAttribute("data-keys", JSON.stringify(["⌘5", addedKey]));
     await expect(row.locator(".config-keymap__text")).toHaveCount(2);

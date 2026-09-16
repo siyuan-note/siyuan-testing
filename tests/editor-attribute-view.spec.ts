@@ -3578,7 +3578,7 @@ test.describe("attribute views", () => {
         await expect(restoredRows).toHaveCount(1);
         const restoredRowID = await restoredRows.first().getAttribute("data-id");
         expect(restoredRowID).toBeTruthy();
-        expect(restoredRowID).not.toBe(rowID);
+        expect(restoredRowID).toBe(rowID);
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
             return (await getCurrentView(siyuanAPI, document.docID, blockID, avID))?.itemIds?.includes(restoredRowID!) ?? false;

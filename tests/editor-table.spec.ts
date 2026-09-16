@@ -475,6 +475,8 @@ test.describe("table cell rich text", () => {
         const size = await measure();
         await cell.click();
         const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await expect.poll(() => fragment.evaluate(element => element.contains(document.activeElement))).toBe(true);
         await expect(fragment.locator("[placeholder]")).toHaveCount(0);
         await page.keyboard.type("- first");
         await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);

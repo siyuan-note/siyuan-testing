@@ -1,5 +1,6 @@
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {getDocumentEditor} from "./helpers/testNotebook";
 
 const resizeTextarea = async (page: Page, input: Locator, delta: number) => {
     const box = await input.boundingBox();
@@ -101,7 +102,7 @@ test.describe("multiline input dialogs", () => {
         const snapshots = await siyuanAPI.post<{snapshots: {id: string; memo: string}[]}>("/api/repo/getRepoSnapshots", {page: 1});
         expect(snapshots.snapshots.find(snapshot => snapshot.id === created.id)?.memo).toBe(memo);
         await page.reload();
-        await expect(page.locator("#barSearch")).toBeVisible();
+        await getDocumentEditor(page, document.docID);
         const reopened = await openHistory(page);
         const savedRow = reopened.locator(`[data-type="repoitem"][data-id="${created.id}"]`);
         await savedRow.hover();
@@ -110,6 +111,7 @@ test.describe("multiline input dialogs", () => {
         await expect(input).toBeFocused();
         await expectResizeBounds(page, input);
         await input.press("Escape");
+        await expect(dialog).toHaveCount(0);
         await page.keyboard.press("Escape");
         await expect(reopened).toHaveCount(0);
     });
