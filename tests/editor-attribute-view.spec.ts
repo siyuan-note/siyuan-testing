@@ -3744,9 +3744,24 @@ test.describe("attribute views", () => {
     }) => {
         const document = await createTestDocument("Attribute View Filter Selection E2E", "Database seed");
         const {avID, block} = await insertAttributeView(page, document.editor);
+        // 新增行事务返回后仍会异步重绘，先等准备阶段的真实行数据和界面完成更新。
+        const initialRender = page.waitForResponse(async response => {
+            if (!response.url().endsWith("/api/av/renderAttributeView")) {
+                return false;
+            }
+            const request = response.request().postDataJSON();
+            if (request.id !== avID || request.ignoreRows) {
+                return false;
+            }
+            const result = await response.json();
+            return result.data?.view?.rows?.some((row: {cells: Array<{value: IAttributeViewValue}>}) =>
+                row.cells.some(cell => cell.value.block?.content === "Selected row")) === true;
+        }, {timeout: AV_RENDER_TIMEOUT});
         const row = await addRow(page, block, "Selected row");
-        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        await initialRender;
+        await expect(block).toHaveAttribute("data-render", "true");
         const cell = row.row.locator('[data-dtype="block"]');
+        await expect(cell).toContainText("Selected row");
         await cell.click();
         const input = page.locator(".av__mask .b3-text-field");
         await expect(input).toBeVisible();
@@ -3773,6 +3788,7 @@ test.describe("attribute views", () => {
         try {
             await requestTransaction(page, () => input.press("Enter"));
             await ready;
+            await expect(cell).toHaveClass(/av__cell--select/);
             await block.locator('[data-type="av-filter"]').click();
             const panel = page.locator(".av__panel .b3-menu");
             await expect(panel).toBeVisible();

@@ -520,16 +520,23 @@ test.describe("table cell rich text", () => {
         await page.keyboard.type("second");
         await page.keyboard.press("Tab");
         await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(2);
+        await expect(fragment.locator('[data-type="NodeList"] [data-type="NodeList"]')).toHaveText("second");
         await page.keyboard.press("Escape");
+        await expect(cell).toHaveAttribute("data-sy-table-cell-rich");
+        const saved = [JSON.parse(Buffer.from((await cell.getAttribute("data-sy-table-cell-rich"))!,
+            "base64url").toString("utf8")) as NonNullable<ISyNode["TableCellRich"]>];
+        expect(saved).toEqual([{spec: 1, format: "kramdown", content: expect.stringMatching(/^- first\n\n?[ \t]+- second$/)}]);
+        // 缩进前的列表也包含 second，必须等持久化内容与编辑器提交的完整结构一致后再重载。
         await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
             spec: "4", invalidDescendants: 0,
-            sources: [expect.objectContaining({content: expect.stringContaining("second")})],
+            sources: saved,
         });
-        const saved = (await getRichTableState(siyuanAPI, docID)).sources;
         await page.reload();
         const reloaded = await getDocumentEditor(page, docID);
         await reloaded.locator("tbody td").first().click();
         await expect(reloaded.locator('.table__cell-editor [data-type="NodeList"]')).toHaveCount(2);
+        await expect(reloaded.locator('.table__cell-editor [data-type="NodeList"] [data-type="NodeList"]'))
+            .toHaveText("second");
         await page.keyboard.press("Escape");
         expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual(saved);
     });
