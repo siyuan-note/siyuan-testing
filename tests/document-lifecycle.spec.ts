@@ -90,7 +90,7 @@ test.describe("document lifecycle", () => {
                 if (!await notebookRoot.locator(
                     ":scope > .b3-list-item__toggle .b3-list-item__arrow--open",
                 ).isVisible()) {
-                    await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
+                    await notebookRoot.locator(":scope > .b3-list-item__toggle").click();
                 }
             }
             await expect(parentItem).toBeVisible({timeout: 15000});
@@ -103,16 +103,12 @@ test.describe("document lifecycle", () => {
                     animation.playState === "running").length : 0;
             })).toBe(0);
             if (await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
-                await parentToggle.click({force: true});
+                await parentToggle.click();
                 await expect(parentArrow).not.toHaveClass(/b3-list-item__arrow--open/);
                 await expect(parentItem.locator("xpath=following-sibling::*[1][self::ul]")).toHaveCount(0);
             }
-            const listChildren = page.waitForResponse(response =>
-                new URL(response.url()).pathname === "/api/filetree/listDocsByPath" &&
-                response.request().postDataJSON()?.path === `/${parent.docID}.sy`,
-            );
-            await parentToggle.click({force: true});
-            await listChildren;
+            // 等待按钮位置稳定后展开，并通过实际层级验证结果。
+            await parentToggle.click();
             await expect(parentArrow).toHaveClass(/b3-list-item__arrow--open/);
             await expect(parentItem.locator(
                 `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,

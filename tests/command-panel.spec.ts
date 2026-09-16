@@ -186,6 +186,40 @@ test.describe("command palette", () => {
         await expect(singlePanel).toHaveCount(0);
     });
 
+    test("keeps palette focus when a pending editor click finishes", async ({page, createTestDocument}) => {
+        const {editor} = await createTestDocument("Command Palette Pending Click", "# Heading\n\nGuard");
+        const heading = editor.locator('[data-type="NodeHeading"] [contenteditable="true"]');
+        // 控制点击回调的执行顺序，复现对话框先打开、编辑器延迟处理后到达的情况。
+        await editor.evaluate(element => {
+            const pending: (() => void)[] = [];
+            const state = window as typeof window & {finishPendingEditorClick?: () => number};
+            state.finishPendingEditorClick = () => {
+                delete state.finishPendingEditorClick;
+                pending.forEach(callback => callback());
+                return pending.length;
+            };
+            element.addEventListener("click", () => {
+                const schedule = window.setTimeout;
+                window.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+                    if (typeof callback === "function" && !delay) {
+                        pending.push(() => callback(...args));
+                        return 0;
+                    }
+                    return schedule(callback, delay, ...args);
+                }) as typeof window.setTimeout;
+                schedule(() => { window.setTimeout = schedule; }, 0);
+            }, {capture: true, once: true});
+        });
+        await heading.click();
+        const panel = await openCommandPanel(page);
+        expect(await page.evaluate(() => (window as typeof window & {
+            finishPendingEditorClick: () => number;
+        }).finishPendingEditorClick())).toBeGreaterThan(0);
+        await expect(panel.locator("input")).toBeFocused();
+        await panel.locator("input").press("Escape");
+        await expect(panel).toHaveCount(0);
+    });
+
     test("toggles the captured heading with one fold command", async ({page, createTestDocument, siyuanAPI}) => {
         const {docID, editor} = await createTestDocument("Command Palette Fold", "# Target heading\n\nHidden content\n\n# Guard heading\n\nGuard content");
         const heading = editor.locator('[data-type="NodeHeading"]').first();
