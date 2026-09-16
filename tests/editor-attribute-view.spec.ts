@@ -3715,6 +3715,8 @@ test.describe("attribute views", () => {
         await filterInput.fill("Bravo");
         await requestTransactionAndRender(page, () => filterInput.press("Enter"));
         await expectRowOrder(block, [bravo.id]);
+        await expect(filterInput).toBeVisible();
+        await expect(filterInput).toHaveValue("Bravo");
 
         await expect.poll(async () => {
             const av = await getAttributeView(siyuanAPI, avID);
@@ -3735,6 +3737,68 @@ test.describe("attribute views", () => {
         await expect(reloadedBlock.locator('[data-type="av-sort"]')).toHaveClass(/block__icon--active/);
         await expect(reloadedBlock.locator('[data-type="av-filter"]')).toHaveClass(/block__icon--active/);
         await expectRowOrder(reloadedBlock, [bravo.id]);
+    });
+
+    test("keeps filters open when a delayed cell render restores a filtered-out selection", async ({
+        createTestDocument, page,
+    }) => {
+        const document = await createTestDocument("Attribute View Filter Selection E2E", "Database seed");
+        const {avID, block} = await insertAttributeView(page, document.editor);
+        const row = await addRow(page, block, "Selected row");
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        const cell = row.row.locator('[data-dtype="block"]');
+        await cell.click();
+        const input = page.locator(".av__mask .b3-text-field");
+        await expect(input).toBeVisible();
+        await input.fill("Updated row");
+
+        let releaseRender!: () => void;
+        let renderReady!: () => void;
+        const released = new Promise<void>(resolve => { releaseRender = resolve; });
+        const ready = new Promise<void>(resolve => { renderReady = resolve; });
+        let held = false;
+        // 暂停单元格更新的重绘，待筛选面板打开后恢复真实响应和选中态。
+        await page.route("**/api/av/renderAttributeView", async route => {
+            const request = route.request().postDataJSON();
+            if (!held && request.id === avID && !request.ignoreRows) {
+                held = true;
+                const response = await route.fetch();
+                renderReady();
+                await released;
+                await route.fulfill({response});
+            } else {
+                await route.continue();
+            }
+        });
+        try {
+            await requestTransaction(page, () => input.press("Enter"));
+            await ready;
+            await block.locator('[data-type="av-filter"]').click();
+            const panel = page.locator(".av__panel .b3-menu");
+            await expect(panel).toBeVisible();
+            releaseRender();
+            await expect(cell).toHaveClass(/av__cell--select/);
+            await expect(cell).toContainText("Updated row");
+            const primaryName = await block.locator(
+                '.av__row--header [data-dtype="block"] .av__celltext',
+            ).innerText();
+            await panel.locator('[data-type="addFilterCondition"]').click();
+            await page.locator('#commonMenu[data-name="addFilterCondition"] .b3-menu__item').first().click();
+            const menu = page.locator('#commonMenu[data-name="av-add-filter"]');
+            await requestTransactionAndRender(page, () => menu.locator(".b3-menu__item").filter({
+                hasText: primaryName,
+            }).click());
+            const filterInput = panel.locator('[data-type="filterValue"]');
+            await expect(filterInput).toBeVisible();
+            await filterInput.fill("No matching row");
+            await requestTransactionAndRender(page, () => filterInput.press("Enter"));
+            await expectRowOrder(block, []);
+            await expect(filterInput).toBeVisible();
+            await expect(filterInput).toHaveValue("No matching row");
+        } finally {
+            releaseRender();
+            await page.unroute("**/api/av/renderAttributeView");
+        }
     });
 
     test("combines multi-field sorting and nested OR filters across views", async ({
@@ -4163,16 +4227,27 @@ test.describe("attribute views", () => {
         await requestTransaction(page, () => pageSizeMenu.locator(".b3-menu__item").last().click());
 
         await expect(reloadedBlock).toHaveAttribute("data-v-scroll", "true", {timeout: 30000});
-        await expect(reloadedBlock.locator(
-            ".av__body .av__row:not(.av__row--header):not(.av__row--util):not([data-type=ghost])",
-        )).toHaveCount(100);
         await expect.poll(() => getOrderedBlockContents(siyuanAPI, document.docID, blockID, avID), {timeout: 30000}).toMatchObject({
             pageSize: 102400,
         });
+        const {itemIds} = await getOrderedBlockContents(siyuanAPI, document.docID, blockID, avID);
+        expect(itemIds).toHaveLength(seedContents.length);
+        const content = reloadedBlock.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle-content ')][1]",
+        );
+        const firstRow = reloadedBlock.locator(`.av__body .av__row[data-id="${itemIds[0]}"]`);
+        // 分页按钮会滚动到表尾；先回到数据起点，避免把虚拟窗口首行误当作第一条数据。
+        await content.evaluate(element => {
+            element.scrollTop = 0;
+            element.dispatchEvent(new Event("scroll"));
+        });
+        await expect(firstRow).toBeVisible();
+        // 行数随视口裁剪变化，验证末行尚未渲染，确保粘贴确实跨越虚拟窗口。
+        await expect(reloadedBlock.locator(`.av__body .av__row[data-id="${itemIds.at(-1)}"]`)).toHaveCount(0);
 
         const pasteContents = Array.from({length: 130}, (_, index) =>
             `Pasted ${index.toString().padStart(3, "0")}`);
-        const firstCell = reloadedBlock.locator(".av__body .av__row[data-id] [data-dtype=block]").first();
+        const firstCell = firstRow.locator("[data-dtype=block]");
         await firstCell.click();
         await page.keyboard.press("Escape");
         await expect(firstCell).toHaveClass(/av__cell--select/);
