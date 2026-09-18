@@ -623,8 +623,11 @@ export class SiyuanAPI {
         return response.text();
     }
 
-    async removeWorkspaceFile(path: string) {
-        await this.post<null>("/api/file/removeFile", {path});
+    async removeWorkspaceFile(path: string, options: {ignoreNotFound?: boolean} = {}) {
+        const result = await this.postResult<null>("/api/file/removeFile", {path});
+        if (result.code !== 0 && !(options.ignoreNotFound && result.code === 404)) {
+            throw new Error(`/api/file/removeFile failed with code ${result.code}: ${result.msg}`);
+        }
     }
 
     async writeWorkspaceFile(path: string, name: string, mimeType: string, buffer: Buffer) {

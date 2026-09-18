@@ -51,7 +51,7 @@ test.describe("appearance packages in synced data", () => {
             await expect(page.locator("#themeStyle")).toHaveCount(0);
         } finally {
             await siyuanAPI.setAppearance(original);
-            await siyuanAPI.removeWorkspaceFile(root);
+            await siyuanAPI.removeWorkspaceFile(root, {ignoreNotFound: true});
         }
     });
 
@@ -86,7 +86,7 @@ test.describe("appearance packages in synced data", () => {
             await expect(page.locator("#iconDefaultScript")).toHaveAttribute("src", /\/appearance\/icons\/litheness\/icon\.js/);
         } finally {
             await siyuanAPI.setAppearance(original);
-            await siyuanAPI.removeWorkspaceFile(root);
+            await siyuanAPI.removeWorkspaceFile(root, {ignoreNotFound: true});
             await page.locator("html").evaluate(element => element.removeAttribute("data-e2e-icon-package"));
         }
     });
