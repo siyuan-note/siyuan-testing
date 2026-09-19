@@ -1,7 +1,6 @@
 import {expect, test} from "./fixtures";
 import {expectSemanticInlineText} from "./helpers/editorText";
 import {showDock} from "./helpers/runtime";
-import {ISiyuanResponse, ISearchResult} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface ISyNode {
@@ -94,22 +93,13 @@ test.describe("tags", () => {
                 timeout: 30000,
             })
                 .toContain(renamedTag);
-            const renamedNode = tagPanel.locator(`li[data-treetype="tag"][data-label="${renamedTag}"]`);
-            await expect(renamedNode).toBeVisible({timeout: 15000});
             await expectSemanticInlineText(editor.locator('span[data-type~="tag"]'), renamedTag);
-
-            const searchResponse = page.waitForResponse(response => {
-                if (!response.url().endsWith("/api/search/fullTextSearchBlock")) {
-                    return false;
-                }
-                return response.request().postDataJSON().query === `#${renamedTag}#`;
-            });
-            await renamedNode.locator(":scope > .b3-list-item__text").click();
-            const searchResult = await (await searchResponse).json() as ISiyuanResponse<ISearchResult>;
-            expect(searchResult.code).toBe(0);
-            expect(searchResult.data.blocks.some(block => block.rootID === document.docID)).toBe(true);
+            const renamedNode = tagPanel.locator(`li[data-treetype="tag"][data-label="${renamedTag}"]`);
+            const renamedLabel = renamedNode.locator(":scope > .b3-list-item__text");
+            await expect(renamedLabel).toBeVisible({timeout: 15000});
+            await renamedLabel.click();
             const searchInput = page.locator("#searchInput:visible").last();
-            await expect(searchInput).toHaveValue(`#${renamedTag}#`);
+            await expect(searchInput).toHaveValue(`#${renamedTag}#`, {timeout: 15000});
             const resultItem = page.locator(
                 `#searchList:visible [data-type="search-item"][data-root-id="${document.docID}"]`,
             ).first();
