@@ -3,6 +3,52 @@ import {IpadSimulator} from "../helpers/ipadSimulator";
 
 let ipad: IpadSimulator;
 
+test("native tab switches preserve cross-document back and forward history without body taps", async ({
+    createTestDocument, baseURL, fullEntryVisibility,
+}, testInfo) => {
+    test.setTimeout(300000);
+    const c = await createTestDocument("iPad tab C", "Third document.");
+    const b = await createTestDocument("iPad tab B", `[Next](siyuan://blocks/${c.docID})`);
+    const a = await createTestDocument("iPad tab A", `[Next](siyuan://blocks/${b.docID})`);
+    await ipad.open(baseURL!, a.docID);
+    const active = () => ipad.evaluate<string>(`(() => {
+        const titles = Array.from(document.querySelectorAll('.protyle-title[data-node-id]'));
+        return titles.find(title => title.getBoundingClientRect().height > 0)?.getAttribute('data-node-id');
+    })()`, true);
+    // 准备三个保留的页签，验证阶段仅通过系统触摸切换页签和导航按钮。
+    for (const [current, next] of [[a, b], [b, c], [c, undefined]] as const) {
+        await expect.poll(active).toBe(current.docID);
+        await ipad.evaluate(`(() => {
+            document.querySelector('.layout-tab-bar .item--focus').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));
+            return true;
+        })()`);
+        if (next) {
+            await ipad.evaluate(`(() => {
+                const editor = document.querySelector('.protyle-title[data-node-id="${current.docID}"]').closest('.protyle');
+                editor.querySelector('[data-href="siyuan://blocks/${next.docID}"]').click();
+                return true;
+            })()`);
+        }
+    }
+    for (const doc of [a, b, c]) {
+        const point = await ipad.evaluate<{x: number; y: number}>(`(() => {
+            const editor = document.querySelector('.protyle-title[data-node-id="${doc.docID}"]').closest('.protyle');
+            const tab = document.querySelector('.layout-tab-bar [data-id="' + editor.dataset.id + '"]');
+            tab.scrollIntoView({block:'nearest', inline:'nearest'});
+            const r = tab.getBoundingClientRect();
+            return {x:r.left + r.width / 2, y:r.top + r.height / 2};
+        })()`);
+        await ipad.tap(point, testInfo);
+        await expect.poll(active).toBe(doc.docID);
+    }
+    for (const [control, expected] of [
+        ["barBack", b], ["barBack", a], ["barForward", b], ["barForward", c],
+    ] as const) {
+        await ipad.tap(await ipad.controlPoint(control), testInfo);
+        await expect.poll(active, {message: `${control} must display ${expected.title}`}).toBe(expected.docID);
+    }
+});
+
 test.beforeAll(async () => {
     test.setTimeout(150000);
     ipad = await IpadSimulator.create();
