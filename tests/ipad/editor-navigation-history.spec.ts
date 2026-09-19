@@ -3,6 +3,65 @@ import {IpadSimulator} from "../helpers/ipadSimulator";
 
 let ipad: IpadSimulator;
 
+for (const returnByHistory of [false, true]) {
+    test(`native reading position survives returning by ${returnByHistory ? "back" : "tab"}`, async ({
+        createTestDocument, baseURL, fullEntryVisibility,
+    }, testInfo) => {
+        test.setTimeout(300000);
+        const destination = await createTestDocument("iPad reading destination", "Destination.");
+        const document = await createTestDocument("iPad reading position",
+            `[Next](siyuan://blocks/${destination.docID})\n\n` + Array.from({length: 70}, (_,index) =>
+                `Paragraph ${index + 1}. Reading position verification. Swipe without tapping the text. ` +
+                "Keep the old caret position while reading later paragraphs.").join("\n\n"));
+        await ipad.open(baseURL!, document.docID);
+        const tabPoint = (id: string) => ipad.evaluate<{x: number; y: number}>(`(() => {
+            const editor = document.querySelector('.protyle-title[data-node-id="${id}"]').closest('.protyle');
+            const tab = document.querySelector('.layout-tab-bar [data-id="' + editor.dataset.id + '"]');
+            const bar = tab.parentElement;
+            const tr = tab.getBoundingClientRect();
+            const br = bar.getBoundingClientRect();
+            if (tr.left < br.left) { bar.scrollLeft += tr.left - br.left; }
+            if (tr.right > br.right) { bar.scrollLeft += tr.right - br.right; }
+            const r = tab.getBoundingClientRect();
+            return {x:r.left+r.width/2, y:r.top+r.height/2};
+        })()`);
+        const active = () => ipad.evaluate<string>(`Array.from(document.querySelectorAll('.protyle-title[data-node-id]'))
+            .find(e => e.getBoundingClientRect().height > 0)?.dataset.nodeId`, true);
+        await ipad.evaluate(`(() => {
+            document.querySelector('.layout-tab-bar .item--focus').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
+            document.querySelector('[data-href="siyuan://blocks/${destination.docID}"]').click();
+            return true;
+        })()`);
+        await expect.poll(active).toBe(destination.docID);
+        await ipad.evaluate(`(() => {
+            document.querySelector('.layout-tab-bar .item--focus').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
+            return true;
+        })()`);
+        await ipad.tap(await tabPoint(document.docID), testInfo);
+        await expect.poll(active).toBe(document.docID);
+        for (let index = 0; index < 3; index++) {
+            const {content} = await ipad.snapshot();
+            const x = content.left + (content.right-content.left)*0.75;
+            await ipad.drag({x,y:content.top+(content.bottom-content.top)*0.8},
+                {x,y:content.top+(content.bottom-content.top)*0.3},testInfo);
+        }
+        const before = await ipad.snapshot();
+        expect(before.scrollTop).toBeGreaterThan(500);
+        const anchor = before.blocks.find(block => block.rect.bottom > before.content.top);
+        expect(anchor).toBeTruthy();
+        await ipad.tap(await tabPoint(destination.docID), testInfo);
+        await expect.poll(active).toBe(destination.docID);
+        await ipad.tap(returnByHistory ? await ipad.controlPoint("barBack") : await tabPoint(document.docID), testInfo);
+        await expect.poll(active).toBe(document.docID);
+        await expect.poll(async () => {
+            const after = await ipad.snapshot();
+            return Math.abs(after.scrollTop-before.scrollTop);
+        }).toBeLessThan(2);
+        const after = await ipad.snapshot();
+        expect(Math.abs(after.blocks.find(block => block.id === anchor!.id)!.rect.top-anchor!.rect.top)).toBeLessThan(2);
+    });
+}
+
 test("native tab switches preserve cross-document back and forward history without body taps", async ({
     createTestDocument, baseURL, fullEntryVisibility,
 }, testInfo) => {
@@ -34,7 +93,11 @@ test("native tab switches preserve cross-document back and forward history witho
         const point = await ipad.evaluate<{x: number; y: number}>(`(() => {
             const editor = document.querySelector('.protyle-title[data-node-id="${doc.docID}"]').closest('.protyle');
             const tab = document.querySelector('.layout-tab-bar [data-id="' + editor.dataset.id + '"]');
-            tab.scrollIntoView({block:'nearest', inline:'nearest'});
+            const bar = tab.parentElement;
+            const tr = tab.getBoundingClientRect();
+            const br = bar.getBoundingClientRect();
+            if (tr.left < br.left) { bar.scrollLeft += tr.left - br.left; }
+            if (tr.right > br.right) { bar.scrollLeft += tr.right - br.right; }
             const r = tab.getBoundingClientRect();
             return {x:r.left + r.width / 2, y:r.top + r.height / 2};
         })()`);
