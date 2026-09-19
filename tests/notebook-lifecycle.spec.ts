@@ -43,7 +43,7 @@ test.describe("notebook lifecycle", () => {
         const notebook = await createTestNotebook("Reopen");
         const marker = `Notebook reopen ${Date.now()}`;
         const docID = await siyuanAPI.createDocument(notebook.id, "Notebook Reopen Document", marker);
-        await openWorkspace(page, `/?id=${docID}`);
+        await openWorkspace(page, `/stage/build/desktop/?id=${docID}`);
         await expect(await getDocumentEditor(page, docID)).toContainText(marker);
 
         await page.goto("about:blank");
@@ -51,6 +51,10 @@ test.describe("notebook lifecycle", () => {
         await expect.poll(async () => (await siyuanAPI.listNotebooks()).find(
             item => item.id === notebook.id,
         )?.closed).toBe(true);
+        // 关闭配置先于异步索引移除完成，确认旧索引消失后再重新打开，避免把旧路径误判为重建完成。
+        await expect.poll(() => siyuanAPI.findDocumentPath(docID), {
+            timeout: 30000,
+        }).toBeUndefined();
 
         await siyuanAPI.openNotebook(notebook.id);
         await expect.poll(async () => (await siyuanAPI.listNotebooks()).find(
@@ -59,7 +63,7 @@ test.describe("notebook lifecycle", () => {
         await expect.poll(async () => (await siyuanAPI.findDocumentPath(docID))?.notebook, {
             timeout: 30000,
         }).toBe(notebook.id);
-        await openWorkspace(page, `/?id=${docID}`);
+        await openWorkspace(page, `/stage/build/desktop/?id=${docID}`);
         await expect(await getDocumentEditor(page, docID)).toContainText(marker);
         expect((await siyuanAPI.getDocumentPath(docID)).notebook).toBe(notebook.id);
     });
