@@ -451,6 +451,10 @@ test.describe("table cell rich text", () => {
         await expect(table.locator('[data-sy-table-cell-inline], [data-sy-table-cell-rich]')).toHaveCount(0);
         await expect(cells.first()).toHaveText("**literal** updated");
         await expect(cells.first().locator('[data-type~="strong"]')).toHaveCount(0);
+        await expect.poll(async () => {
+            const text = (await getPersistedTableState(siyuanAPI, docID)).text;
+            return [text.includes("**literal** updated"), text.includes("next line")];
+        }, {timeout: 30000}).toEqual([true, true]);
         await page.reload();
         const reloaded = await getDocumentEditor(page, docID);
         await expect(reloaded.locator("tbody td").first()).toHaveText("**literal** updated");
@@ -471,6 +475,8 @@ test.describe("table cell rich text", () => {
         const size = await measure();
         await cell.click();
         const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await expect.poll(() => fragment.evaluate(element => element.contains(document.activeElement))).toBe(true);
         await expect(fragment.locator("[placeholder]")).toHaveCount(0);
         await page.keyboard.type("- first");
         await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(1);
@@ -514,16 +520,23 @@ test.describe("table cell rich text", () => {
         await page.keyboard.type("second");
         await page.keyboard.press("Tab");
         await expect(fragment.locator('[data-type="NodeList"]')).toHaveCount(2);
+        await expect(fragment.locator('[data-type="NodeList"] [data-type="NodeList"]')).toHaveText("second");
         await page.keyboard.press("Escape");
+        await expect(cell).toHaveAttribute("data-sy-table-cell-rich");
+        const saved = [JSON.parse(Buffer.from((await cell.getAttribute("data-sy-table-cell-rich"))!,
+            "base64url").toString("utf8")) as NonNullable<ISyNode["TableCellRich"]>];
+        expect(saved).toEqual([{spec: 1, format: "kramdown", content: expect.stringMatching(/^- first\n\n?[ \t]+- second$/)}]);
+        // 缩进前的列表也包含 second，必须等持久化内容与编辑器提交的完整结构一致后再重载。
         await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
             spec: "4", invalidDescendants: 0,
-            sources: [expect.objectContaining({content: expect.stringContaining("second")})],
+            sources: saved,
         });
-        const saved = (await getRichTableState(siyuanAPI, docID)).sources;
         await page.reload();
         const reloaded = await getDocumentEditor(page, docID);
         await reloaded.locator("tbody td").first().click();
         await expect(reloaded.locator('.table__cell-editor [data-type="NodeList"]')).toHaveCount(2);
+        await expect(reloaded.locator('.table__cell-editor [data-type="NodeList"] [data-type="NodeList"]'))
+            .toHaveText("second");
         await page.keyboard.press("Escape");
         expect((await getRichTableState(siyuanAPI, docID)).sources).toEqual(saved);
     });

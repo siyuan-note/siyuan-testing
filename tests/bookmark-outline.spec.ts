@@ -50,17 +50,28 @@ test.describe("bookmarks and outline", () => {
             const renameResponse = page.waitForResponse(response =>
                 response.url().endsWith("/api/bookmark/renameBookmark") && response.request().method() === "POST");
             const reloaded = page.waitForEvent("framenavigated", frame => frame === page.mainFrame());
+            // 保存布局后页面会立即重载，在交付响应前读取结果，避免导航清除浏览器响应体。
+            let savedLayoutCode: number | undefined;
+            await page.route("**/api/system/setUILayout", async route => {
+                const response = await route.fetch();
+                if (route.request().postDataJSON()?.errorExit === false) {
+                    savedLayoutCode = (await response.json()).code;
+                }
+                await route.fulfill({response});
+            });
             const layoutSaved = page.waitForResponse(response =>
                 response.url().endsWith("/api/system/setUILayout") &&
                 response.request().postDataJSON()?.errorExit === false);
             await renameInput.press("Enter");
             expect((await renameResponse).ok()).toBe(true);
             const savedLayout = await layoutSaved;
-            expect((await savedLayout.json()).code).toBe(0);
+            expect(savedLayout.ok()).toBe(true);
+            expect(savedLayoutCode).toBe(0);
             const layout = savedLayout.request().postDataJSON().layout;
             expect([layout.left, layout.right, layout.bottom].flatMap(dock => dock.data.flat())
                 .find(item => item.type === "bookmark")?.show).toBe(true);
             await reloaded;
+            await page.unroute("**/api/system/setUILayout");
             await expect(page.locator("#barSearch")).toBeVisible();
             await expect.poll(async () => (await siyuanAPI.getBookmarks()).find(
                 item => item.name === renamed,

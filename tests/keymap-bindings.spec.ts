@@ -99,7 +99,7 @@ test("saves a shortcut already assigned to the command palette and marks the con
     await expect(row.locator('[data-index="0"]')).not.toHaveClass(/config-keymap__chip--conflict/);
 });
 
-base("prefers the focused local shortcut and uses a fixed general order after reload", async ({page, siyuanAPI, createTestDocument}) => {
+base("prefers the active document shortcut and uses a fixed general order after reload", async ({page, siyuanAPI, createTestDocument}) => {
     const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
     const original = conf.keymap;
     const keymap = structuredClone(original);
@@ -127,11 +127,18 @@ base("prefers the focused local shortcut and uses a fixed general order after re
             await expect(panel).toHaveCount(0);
             await recordKey(page);
             await expect(protyle).not.toHaveClass(/fullscreen/);
-            // 焦点移出编辑器后，相同按键按通用范围的固定顺序打开命令面板。
+            // 焦点落到页面主体时，文档快捷键继续作用于当前文档。
             await page.evaluate(() => {
                 (document.activeElement as HTMLElement)?.blur();
                 document.getSelection()?.removeAllRanges();
             });
+            await recordKey(page);
+            await expect(protyle).toHaveClass(/fullscreen/);
+            await expect(panel).toHaveCount(0);
+            await recordKey(page);
+            await expect(protyle).not.toHaveClass(/fullscreen/);
+            // 焦点位于非文档控件时，相同按键按通用范围的固定顺序打开命令面板。
+            await page.locator("#barBack").focus();
             await recordKey(page);
             await expect(panel.locator("input")).toBeVisible();
             await panel.locator("input").press("Escape");
@@ -308,8 +315,10 @@ test("adds a binding and preserves both bindings after reload", async ({page, si
         return conf.keymap.general[action].bindings?.keys;
     }).toEqual(["⌘5", addedKey]);
 
+    const docID = new URL(page.url()).searchParams.get("id");
+    expect(docID).toBeTruthy();
     await page.reload();
-    await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
+    await getDocumentEditor(page, docID!);
     const row = await openKeymap(page);
     await expect(row).toHaveAttribute("data-keys", JSON.stringify(["⌘5", addedKey]));
     await expect(row.locator(".config-keymap__text")).toHaveCount(2);
