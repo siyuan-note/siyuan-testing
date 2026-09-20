@@ -43,7 +43,7 @@ const allowClipboard = async (context: BrowserContext, baseURL: string | undefin
     if (!baseURL) {
         throw new Error("playwright.config.ts must define use.baseURL");
     }
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {
         origin: new URL(baseURL).origin,
     });
 };

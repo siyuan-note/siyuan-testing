@@ -109,7 +109,7 @@ for (const format of [
     test(`${format.type}: copies plain text without structural markers`, async ({
         page, context, baseURL, createTestDocument,
     }) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
         const {editor} = await createTestDocument("Inline Boundary Plain Copy E2E", format.markdown + " tail");
         const editable = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
         await editable.focus();
@@ -134,7 +134,7 @@ for (const format of [
     test(`${format.type}: preserves table cell content through editing and reload`, async ({
         page, context, baseURL, createTestDocument, siyuanAPI,
     }) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
         const {editor, docID} = await createTestDocument("Inline Boundary Table E2E",
             `| Header | Next |\n| --- | --- |\n| ${format.markdown} | ordinary<br />line |`);
         const cell = editor.locator("tbody td").first();
@@ -164,7 +164,7 @@ for (const format of [
     test(`${format.type}: copies and pastes without leaking boundary markers`, async ({
         page, context, baseURL, createTestDocument, siyuanAPI,
     }) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
         const {editor, docID} = await createTestDocument("Inline Boundary Clipboard E2E", format.markdown + "\n\nDestination");
         const paragraphs = editor.locator('[data-type="NodeParagraph"] > [contenteditable="true"]');
         const source = paragraphs.first();
@@ -245,7 +245,7 @@ test("keeps adjacent tags separate after deleting their visible separator", asyn
 test("preserves user-authored word joiners during editing and reload", async ({
     page, context, baseURL, createTestDocument, siyuanAPI,
 }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+    await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
     const {editor, docID} = await createTestDocument("Inline Code Literal Joiner E2E",
         "outside\u2060text `co\u2060de`");
     const code = editor.locator('span[data-type~="code"]');

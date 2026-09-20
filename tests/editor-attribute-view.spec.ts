@@ -192,7 +192,7 @@ const readValidDocument = async (api: SiyuanAPI, docID: string) => {
 const focusAtEnd = async (block: Locator) => {
     const editable = block.locator('[contenteditable="true"]').first();
     await expect(editable).toBeVisible();
-    await editable.click();
+    await editable.focus();
     await editable.evaluate(element => {
         element.focus();
         const range = document.createRange();
@@ -205,6 +205,10 @@ const focusAtEnd = async (block: Locator) => {
         selection.removeAllRanges();
         selection.addRange(range);
     });
+    await expect.poll(() => editable.evaluate(element => {
+        const selection = getSelection();
+        return selection?.isCollapsed && element.contains(selection.anchorNode);
+    })).toBe(true);
 };
 
 const waitForResponse = (page: Page, path: string, timeout = 15000) => page.waitForResponse(response =>

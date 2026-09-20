@@ -269,7 +269,7 @@ test.describe("command palette", () => {
 
     for (const key of ["pasteAsPlainText", "pasteEscaped"]) {
         test(`${key} inserts at the original caret`, async ({page, context, baseURL, createTestDocument, siyuanAPI}) => {
-            await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: new URL(baseURL!).origin});
+            await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: new URL(baseURL!).origin});
             const {docID, editor} = await createTestDocument(`Command Palette ${key}`, "Guard\n\nTarget: ");
             const paragraphs = editor.locator(':scope > [data-type="NodeParagraph"]');
             await page.evaluate(() => navigator.clipboard.writeText("**literal** [link](https://example.com)"));
