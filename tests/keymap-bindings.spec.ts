@@ -21,6 +21,8 @@ const replacementKey = "⌥⇧⌘F10";
 const rowSelector = `[data-key="general\u200b${action}"]`;
 
 const openKeymap = async (page: Page) => {
+    // 刷新后等待编辑器初始化完成，避免顶栏出现时菜单事件尚未就绪。
+    await expect(page.locator('.protyle[data-loading="finished"]:visible').first()).toBeVisible({timeout: 15000});
     await page.locator("#barWorkspace").click();
     await page.locator('.b3-menu[data-name="barWorkspace"]:not(.fn__none) [data-id="config"]').click();
     const dialog = page.locator('[data-key="dialog-setting"].b3-dialog--open');

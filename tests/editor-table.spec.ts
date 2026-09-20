@@ -1,5 +1,6 @@
 import {BrowserContext, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {dragSelectTableCells as dragSelectCells} from "./helpers/tableSelection";
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -160,35 +161,6 @@ type TableControlType = "row" | "column" | "cell" | "add-row" | "add-column";
 
 const getVisibleTableControl = (page: Page, type: TableControlType) =>
     page.locator(`.protyle-table-control [data-type="${type}"]:visible`);
-
-// #18537 后单元格多选通过拖拽框选完成（selectCellRange），替代旧版手柄点击累加方式
-const dragSelectCells = async (page: Page, startCell: Locator, endCell: Locator) => {
-    const startBox = await startCell.boundingBox();
-    const endBox = await endCell.boundingBox();
-    expect(startBox).not.toBeNull();
-    expect(endBox).not.toBeNull();
-    await page.mouse.move(startBox!.x + startBox!.width / 2, startBox!.y + startBox!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(endBox!.x + endBox!.width / 2, endBox!.y + endBox!.height / 2, {steps: 8});
-    await page.mouse.up();
-    const selection = page.locator(".protyle-table-control__selection:visible");
-    await expect(selection).toHaveCount(1);
-    await expect.poll(async () => {
-        const selectionBox = await selection.boundingBox();
-        if (!selectionBox) {
-            return false;
-        }
-        const left = Math.min(startBox!.x, endBox!.x);
-        const top = Math.min(startBox!.y, endBox!.y);
-        const right = Math.max(startBox!.x + startBox!.width, endBox!.x + endBox!.width);
-        const bottom = Math.max(startBox!.y + startBox!.height, endBox!.y + endBox!.height);
-        const tolerance = 2;
-        return selectionBox.x <= left + tolerance &&
-            selectionBox.y <= top + tolerance &&
-            selectionBox.x + selectionBox.width >= right - tolerance &&
-            selectionBox.y + selectionBox.height >= bottom - tolerance;
-    }).toBe(true);
-};
 
 const hoverTableControl = async (page: Page, cell: Locator, type: TableControlType) => {
     await expect(cell).toBeVisible();
