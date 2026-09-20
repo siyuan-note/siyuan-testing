@@ -89,15 +89,15 @@ test.describe("inline code wrapping", () => {
                         body: await editor.screenshot({path: testInfo.outputPath(`editor-${width}.png`)}),
                         contentType: "image/png",
                     });
-                    // 前面已有正文时允许元素整体换行；元素位于段首时不能留下空白首行。
+                    // 连续长串利用正文后的剩余空间，列表标记与代码首行保持对齐。
                     expect.soft(geometry.firstTop, `first line at width ${width}`)
-                        .toBeLessThan(geometry.lineHeight * (content.before ? 1.5 : 0.5));
+                        .toBeLessThan(geometry.lineHeight / 2);
                     expect.soft(geometry.lines, `wraps at width ${width}`).toBeGreaterThan(1);
                     expect.soft(geometry.overflow, `no horizontal overflow at width ${width}`).toBeLessThanOrEqual(1);
                     if (content.name === "spaces") {
                         expect.soft(geometry.splitWords, `preserves short words at width ${width}`).toEqual([]);
                     }
-                    if (context.prefix && !content.before) {
+                    if (context.prefix) {
                         expect(geometry.markerOffset).not.toBeNull();
                         expect.soft(geometry.markerOffset!, `marker alignment at width ${width}`)
                             .toBeLessThan(geometry.lineHeight / 2);
@@ -108,6 +108,7 @@ test.describe("inline code wrapping", () => {
                 const saved = JSON.stringify(await siyuanAPI.readDocument(docID));
                 expect(saved).not.toContain("\u2060");
                 expect(saved).not.toContain("data-inline-boundary");
+                expect(saved).not.toContain("data-inline-wrap");
                 await page.reload();
                 const reloaded = await getDocumentEditor(page, docID);
                 const reloadedCode = reloaded.locator('span[data-type~="code"]').first();
@@ -120,7 +121,7 @@ test.describe("inline code wrapping", () => {
                     return (range.getBoundingClientRect().top - editable.getBoundingClientRect().top) /
                         parseFloat(getComputedStyle(editable).lineHeight);
                 });
-                expect(firstLineOffset).toBeLessThan(content.before ? 1.5 : 0.5);
+                expect(firstLineOffset).toBeLessThan(0.5);
             });
         }
     }
