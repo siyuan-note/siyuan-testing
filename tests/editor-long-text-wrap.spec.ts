@@ -102,6 +102,80 @@ const formats = [
 ];
 
 for (const format of formats) {
+    test(`${format.name}: keeps long runs on the first line throughout space input`, async ({
+        page, createTestDocument, siyuanAPI,
+    }, testInfo) => {
+        await page.setViewportSize({width: 800, height: 900});
+        const text = "测试" + "1".repeat(100);
+        const {editor, docID} = await createTestDocument("Long Text Space Flicker E2E",
+            format.format(text) + "\n\nControl " + "9".repeat(100));
+        const inline = editor.locator(format.selector).first();
+        await expect.poll(async () => (await layout(inline, "1".repeat(100))).firstLine).toBeLessThan(0.5);
+        await textRange(inline, format.prefix + 2);
+        await inline.evaluate(element => {
+            const editable = element.closest('[contenteditable="true"]')!;
+            const block = editable.closest("[data-node-id]")!;
+            const editor = block.closest(".protyle-wysiwyg")!;
+            const blockIDs = Array.from(editor.querySelectorAll('[data-type="NodeParagraph"]'),
+                paragraph => paragraph.getAttribute("data-node-id"));
+            const state = {active: true, frames: [] as {source: string, line: number, html?: string}[]};
+            (window as unknown as {longTextFrames: typeof state}).longTextFrames = state;
+            const sample = (source: string) => {
+                for (const blockID of blockIDs) {
+                    const current = editor.querySelector(`[data-node-id="${blockID}"] [contenteditable="true"]`)!;
+                    const walker = document.createTreeWalker(current, NodeFilter.SHOW_TEXT);
+                    const positions: {first?: number, token?: number} = {};
+                    let node: Node | null;
+                    while ((node = walker.nextNode())) {
+                        const content = node.textContent!;
+                        for (const [key, offset] of [["first", content.search(/[^\u200b\u2060\ufeff\s]/u)],
+                            ["token", content.search(/[19]/u)]] as const) {
+                            if (positions[key] === undefined && offset >= 0) {
+                                const range = document.createRange();
+                                range.setStart(node, offset);
+                                range.setEnd(node, offset + 1);
+                                positions[key] = range.getBoundingClientRect().top;
+                            }
+                        }
+                    }
+                    const line = (positions.token! - positions.first!) / parseFloat(getComputedStyle(current).lineHeight);
+                    state.frames.push({source, line, ...(line >= 0.5 ? {html: current.innerHTML} : {})});
+                }
+            };
+            const onInput = () => queueMicrotask(() => sample("input"));
+            editor.addEventListener("input", onInput);
+            const frame = () => {
+                if (state.active) {
+                    sample("frame");
+                    requestAnimationFrame(frame);
+                } else {
+                    editor.removeEventListener("input", onInput);
+                }
+            };
+            requestAnimationFrame(frame);
+        });
+        for (let index = 0; index < 8; index++) {
+            await page.keyboard.press("Space");
+            await page.keyboard.press("Backspace");
+        }
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(JSON.stringify(text));
+        const frames = await page.evaluate(() => {
+            const state = (window as unknown as {
+                longTextFrames: {active: boolean, frames: {source: string, line: number}[]},
+            }).longTextFrames;
+            state.active = false;
+            return state.frames;
+        });
+        await testInfo.attach("input-layout", {body: Buffer.from(JSON.stringify(frames)), contentType: "application/json"});
+        expect(frames.some(frame => frame.source === "input")).toBe(true);
+        expect(frames.some(frame => frame.source === "frame")).toBe(true);
+        expect(frames.filter(frame => !Number.isFinite(frame.line) || frame.line >= 0.5)).toEqual([]);
+        await page.keyboard.type("2");
+        await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID)))
+            .toContain(JSON.stringify("测试2" + "1".repeat(100)));
+        expect(JSON.stringify(await siyuanAPI.readDocument(docID))).not.toContain("data-inline-wrap");
+    });
+
     test(`${format.name}: wraps long runs with spaces while preserving words and copied text`, async ({
         page, context, baseURL, createTestDocument, siyuanAPI,
     }) => {
