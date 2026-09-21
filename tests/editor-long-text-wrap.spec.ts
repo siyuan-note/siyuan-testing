@@ -60,7 +60,7 @@ const layout = (root: Locator, target: string) => root.evaluate((element, token)
 
 const examples = [
     {name: "Chinese and digits", text: "测试" + "1".repeat(94), run: "1".repeat(94)},
-    {name: "Chinese and letters", text: "测试2" + "a".repeat(63), run: "a".repeat(63)},
+    {name: "Chinese and letters", text: "测试2" + "a".repeat(128), run: "a".repeat(128)},
     {name: "English and a space", text: "test 3" + "1".repeat(100), run: "3" + "1".repeat(100)},
     {name: "English without a space", text: "test4" + "1".repeat(100), run: "test4" + "1".repeat(100)},
 ];
