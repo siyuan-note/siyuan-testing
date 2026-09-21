@@ -185,12 +185,18 @@ for (const format of [
         expect(clipboard).not.toContain("\u2060");
         expect(clipboard).not.toContain("data-inline-boundary");
         const destination = paragraphs.last();
-        await destination.click();
-        await page.keyboard.press("Home");
-        await page.keyboard.press("Shift+End");
+        await destination.evaluate(element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            getSelection()!.removeAllRanges();
+            getSelection()!.addRange(range);
+        });
         await page.keyboard.press("ControlOrMeta+V");
         await expect(editor.locator(`span[data-type~="${format.type}"]`)).toHaveCount(2);
-        await expectSemanticInlineText(editor.locator(`span[data-type~="${format.type}"]`).last(), "alpha beta");
+        const pasted = destination.locator(`span[data-type~="${format.type}"]`);
+        await expect(pasted).toHaveCount(1);
+        await expect(editor.locator(`:scope > span[data-type~="${format.type}"]`)).toHaveCount(0);
+        await expectSemanticInlineText(pasted, "alpha beta");
         await expect.poll(async () => {
             const serialized = JSON.stringify(await siyuanAPI.readDocument(docID));
             return serialized.split('"TextMarkTextContent":"alpha beta"').length - 1;
