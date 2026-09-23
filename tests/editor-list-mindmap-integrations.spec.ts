@@ -238,6 +238,8 @@ test("edits an embedded source block through the outer document transaction", as
     const source = await createTestDocument("Mind map embedded source E2E", "Independent source");
     const sourceID = await source.editor.locator(':scope > [data-type="NodeParagraph"]').first().getAttribute("data-node-id");
     expect(sourceID).toBeTruthy();
+    await expect.poll(async () => (await siyuanAPI.querySQL(`SELECT id FROM blocks WHERE id = '${sourceID}'`)).length,
+        {timeout: 30000}).toBe(1);
     const {docID, editor} = await createMindmapDocument(createTestDocument,
         "Mind map embedded edit E2E", `{{select * from blocks where id = '${sourceID}'}}`);
     const {nodeEditor} = await openMindmapNodeEditor(editor);
