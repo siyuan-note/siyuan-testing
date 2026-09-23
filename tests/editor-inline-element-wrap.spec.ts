@@ -85,8 +85,7 @@ for (const item of cases) {
                 body: await editor.screenshot({path: testInfo.outputPath(`editor-${width}.png`)}),
                 contentType: "image/png",
             });
-            // 正文后的长元素可以整体换行，段首元素不能留下空白首行。
-            expect.soft(state.firstLine).toBeLessThan(item.name.endsWith("after prose") ? 1.5 : 0.5);
+            expect.soft(state.firstLine).toBeLessThan(0.5);
             expect.soft(state.lines).toBeGreaterThan(1);
             expect.soft(state.overflow).toBeLessThanOrEqual(1);
             if (item.spaced) {
@@ -97,6 +96,7 @@ for (const item of cases) {
         const saved = JSON.stringify(await siyuanAPI.readDocument(docID));
         expect(saved).not.toContain("\u2060");
         expect(saved).not.toContain("data-inline-boundary");
+        expect(saved).not.toContain("data-inline-wrap");
         await page.reload();
         const reloaded = await getDocumentEditor(page, docID);
         await expectSemanticInlineText(reloaded.locator(`span[data-type~="${item.type}"]`).first(), expected);

@@ -589,11 +589,17 @@ test.describe("table cell rich text", () => {
         await expect(gutter).not.toBeVisible();
         await expect(fragment.locator('[contenteditable="true"]').first()).toHaveText("**literal**");
         await expect(fragment.locator('[data-type~="strong"]')).toHaveCount(0);
+        await fragment.locator('[contenteditable="true"]').first().click();
         await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
         await page.keyboard.press(`${PRIMARY_MODIFIER}+A`);
         await page.keyboard.press("Backspace");
+        await expect(fragment.locator('[contenteditable="true"]').first()).toHaveText("");
         await page.keyboard.type("- first");
+        // 输入后的列表转换异步执行，确认首项已生成后再创建下一项。
+        await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(1);
+        await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveText("first");
         await page.keyboard.press("Enter");
+        await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(2);
         await page.keyboard.type("second");
         await expect(fragment.locator('[data-type="NodeListItem"]')).toHaveCount(2);
         await page.keyboard.press("Tab");
