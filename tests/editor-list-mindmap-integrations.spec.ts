@@ -52,6 +52,8 @@ const blockStructure = (root: ISyNode) => {
     return blocks;
 };
 
+const blockIdentity = (root: ISyNode) => blockStructure(root).map(({id, parentID}) => ({id, parentID}));
+
 const focusAtEnd = async (element: Locator) => {
     await element.evaluate(target => {
         (target as HTMLElement).focus();
@@ -77,11 +79,11 @@ const chooseListConversion = async (page: Page, list: Locator, optionID: string,
 };
 
 const openMindmapNodeEditor = async (editor: Locator) => {
-    const list = editor.locator(':scope > [data-type="NodeList"]');
-    const itemID = await list.locator(':scope > [data-type="NodeListItem"]').first().getAttribute("data-node-id");
+    const list = editor.locator(':scope > [data-type="NodeMindmap"]');
+    const itemID = await list.locator(':scope > [data-type="NodeMindmapItem"]').first().getAttribute("data-node-id");
     expect(itemID).toBeTruthy();
-    const content = list.locator(":scope > .list-mindmap")
-        .locator(`[data-mindmap-id="${itemID}"] > .list-mindmap__content`);
+    const content = list.locator(":scope > .mindmap-view")
+        .locator(`[data-mindmap-id="${itemID}"] > .mindmap-view__content`);
     await content.locator(".p").first().dblclick();
     const nodeEditor = content.locator(".protyle-wysiwyg").first();
     await expect(nodeEditor).toBeVisible();
@@ -105,15 +107,16 @@ test("converts a list to a mind map and back without changing its block IDs or v
     expect(original?.Type).toBe("NodeList");
     const itemIDs = (original?.Children || []).map(item => item.ID);
     expect(itemIDs).toHaveLength(2);
-    const originalStructure = blockStructure(original!);
+    const originalStructure = blockIdentity(original!);
     expect(originalStructure.length).toBeGreaterThan(3);
 
     await chooseListConversion(page, list, "listMindmap",
         list.locator(':scope > [data-type="NodeListItem"] .p').first());
-    await expect(list).toHaveAttribute("custom-sy-list-mindmap", "1");
-    const host = list.locator(":scope > .list-mindmap");
+    const mindmap = editor.locator(`:scope > [data-type="NodeMindmap"][data-node-id="${listID}"]`);
+    await expect(mindmap).toBeVisible();
+    const host = mindmap.locator(":scope > .mindmap-view");
     await expect(host).toBeVisible();
-    const root = host.locator(".list-mindmap__node--virtual > .list-mindmap__content");
+    const root = host.locator(".mindmap-view__node--virtual > .mindmap-view__content");
     await root.dblclick();
     const title = "View configuration survives conversion";
     await root.locator("textarea").fill(title);
@@ -126,30 +129,30 @@ test("converts a list to a mind map and back without changing its block IDs or v
     const configured = (await siyuanAPI.getBlockAttrs(listID!))["custom-sy-list-mindmap-data"];
     expect(configured).toContain(title);
 
-    await chooseListConversion(page, list, "list", host);
-    await expect(list).not.toHaveAttribute("custom-sy-list-mindmap", "1");
+    await chooseListConversion(page, mindmap, "list", host);
+    await expect(list).toBeVisible();
     await expect(host).toHaveCount(0);
     await siyuanAPI.flushTransactions();
     const convertedList = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
-    expect(blockStructure(convertedList!)).toEqual(originalStructure);
+    expect(blockIdentity(convertedList!)).toEqual(originalStructure);
     expect((await siyuanAPI.getBlockAttrs(listID!))["custom-sy-list-mindmap-data"]).toBe(configured);
     await chooseListConversion(page, list, "listMindmap",
         list.locator(':scope > [data-type="NodeListItem"] .p').first());
-    await expect(host.locator(".list-mindmap__node--virtual > .list-mindmap__content")).toHaveText(title);
+    await expect(host.locator(".mindmap-view__node--virtual > .mindmap-view__content")).toHaveText(title);
 
     await siyuanAPI.flushTransactions();
     const persisted = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
-    expect(persisted?.Type).toBe("NodeList");
-    expect(blockStructure(persisted!)).toEqual(originalStructure);
+    expect(persisted?.Type).toBe("NodeMindmap");
+    expect(blockIdentity(persisted!)).toEqual(originalStructure);
     await assertValidListDOM(editor);
     await assertValidSyListTree(siyuanAPI, docID, editor);
     await page.reload();
     const reloaded = await getDocumentEditor(page, docID);
-    await expect(reloaded.locator(`[data-node-id="${listID}"] > .list-mindmap`)).toBeVisible();
-    await expect(reloaded.locator(`[data-node-id="${listID}"] .list-mindmap__node--virtual > .list-mindmap__content`))
+    await expect(reloaded.locator(`[data-node-id="${listID}"] > .mindmap-view`)).toBeVisible();
+    await expect(reloaded.locator(`[data-node-id="${listID}"] .mindmap-view__node--virtual > .mindmap-view__content`))
         .toHaveText(title);
     const reloadedList = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
-    expect(blockStructure(reloadedList!)).toEqual(originalStructure);
+    expect(blockIdentity(reloadedList!)).toEqual(originalStructure);
     await assertValidListDOM(reloaded);
     await assertValidSyListTree(siyuanAPI, docID, reloaded);
 });

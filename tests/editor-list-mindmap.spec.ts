@@ -17,14 +17,14 @@ const setupMindmap = async (createTestDocument: TestDocumentFactory) => {
         "Before mind map", "", "- Alpha", "- Beta",
         '{: custom-sy-list-mindmap="1"}', "", "After mind map",
     ].join("\n"));
-    const list = document.editor.locator(':scope > [data-type="NodeList"]');
-    await expect(list).toHaveAttribute("custom-sy-list-mindmap", "1");
-    const host = list.locator(":scope > .list-mindmap");
+    const list = document.editor.locator(':scope > [data-type="NodeMindmap"]');
+    await expect(list).toBeVisible();
+    const host = list.locator(":scope > .mindmap-view");
     await expect(host).toBeVisible();
     await expect(host.locator("[data-mindmap-id]")).toHaveCount(3);
     const listID = await list.getAttribute("data-node-id");
     expect(listID).toBeTruthy();
-    const itemIDs = await list.locator(':scope > [data-type="NodeListItem"]').evaluateAll(elements =>
+    const itemIDs = await list.locator(':scope > [data-type="NodeMindmapItem"]').evaluateAll(elements =>
         elements.map(element => element.getAttribute("data-node-id")!));
     return {...document, list, host, listID: listID!, itemIDs};
 };
@@ -112,12 +112,12 @@ for (const target of ["canvas", "node"] as const) {
         if (target === "canvas") {
             await page.mouse.click(inside.x, inside.y);
         } else {
-            await host.locator(`[data-mindmap-id="${itemIDs[0]}"] .list-mindmap__content`).click();
+            await host.locator(`[data-mindmap-id="${itemIDs[0]}"] .mindmap-view__content`).click();
         }
         await expectSelected(editor, []);
         await expect(editor.locator(".protyle-wysiwyg--select-mode, [select-start], [select-end]")).toHaveCount(0);
         if (target === "node") {
-            await expect(host.locator(`[data-mindmap-id="${itemIDs[0]}"]`)).toHaveClass(/list-mindmap__node--selected/);
+            await expect(host.locator(`[data-mindmap-id="${itemIDs[0]}"]`)).toHaveClass(/mindmap-view__node--selected/);
         }
     });
 }
@@ -126,9 +126,9 @@ test("editing a new empty node hides the placeholder and preserves its text afte
     page, createTestDocument, siyuanAPI,
 }) => {
     const {editor, host, list, listID, itemIDs, docID} = await setupMindmap(createTestDocument);
-    await host.locator(`[data-mindmap-id="${itemIDs[0]}"] .list-mindmap__content`).click();
+    await host.locator(`[data-mindmap-id="${itemIDs[0]}"] .mindmap-view__content`).click();
     await page.keyboard.press("Enter");
-    const content = host.locator(".list-mindmap__node--editing > .list-mindmap__content");
+    const content = host.locator(".mindmap-view__node--editing > .mindmap-view__content");
     await expect(content).toBeVisible();
     const editable = content.locator('.protyle-wysiwyg [contenteditable="true"]').first();
     // contenteditable 的焦点属于编辑宿主，正文内的光标位置由浏览器选区表示。
@@ -146,19 +146,19 @@ test("editing a new empty node hides the placeholder and preserves its text afte
     await page.keyboard.insertText(text);
     await expect(editable).toHaveText(text);
     await page.keyboard.press("Escape");
-    await expect(host.locator(".list-mindmap__node--editing")).toHaveCount(0);
-    await expect(host.locator(`[data-mindmap-id="${newID}"] .list-mindmap__content`)).toHaveText(text);
+    await expect(host.locator(".mindmap-view__node--editing")).toHaveCount(0);
+    await expect(host.locator(`[data-mindmap-id="${newID}"] .mindmap-view__content`)).toHaveText(text);
     await expect.poll(async () => (await persistedList(siyuanAPI, docID, listID))?.Children?.map(node => ({
         id: node.ID, text: nodeText(node),
     })), {timeout: 30000}).toEqual([
         {id: itemIDs[0], text: "Alpha"}, {id: newID, text}, {id: itemIDs[1], text: "Beta"},
     ]);
-    await expect(list.locator(':scope > [data-type="NodeListItem"]')).toHaveCount(3);
+    await expect(list.locator(':scope > [data-type="NodeMindmapItem"]')).toHaveCount(3);
     await assertValidListDOM(editor);
     await assertValidSyListTree(siyuanAPI, docID, editor);
     await page.reload();
     const reloaded = await getDocumentEditor(page, docID);
-    await expect(reloaded.locator(`[data-mindmap-id="${newID}"] .list-mindmap__content`)).toHaveText(text);
+    await expect(reloaded.locator(`[data-mindmap-id="${newID}"] .mindmap-view__content`)).toHaveText(text);
     await assertValidListDOM(reloaded);
     await assertValidSyListTree(siyuanAPI, docID, reloaded);
 });
@@ -167,10 +167,10 @@ test("the unnamed root is 32 by 32 and edits its title without a placeholder", a
     page, createTestDocument, siyuanAPI,
 }) => {
     const {host, listID, docID} = await setupMindmap(createTestDocument);
-    const root = host.locator(".list-mindmap__node--virtual");
+    const root = host.locator(".mindmap-view__node--virtual");
     await expect(root).toHaveCSS("width", "32px");
     await expect(root).toHaveCSS("height", "32px");
-    await root.locator(".list-mindmap__content").dblclick();
+    await root.locator(".mindmap-view__content").dblclick();
     const input = root.locator("textarea");
     await expect(input).toBeFocused();
     await expect(input).not.toHaveAttribute("placeholder");
@@ -179,7 +179,7 @@ test("the unnamed root is 32 by 32 and edits its title without a placeholder", a
     await expect(input).toHaveValue(title);
     await page.keyboard.press("Enter");
     await expect(root.locator("textarea")).toHaveCount(0);
-    await expect(root.locator(".list-mindmap__content")).toHaveText(title);
+    await expect(root.locator(".mindmap-view__content")).toHaveText(title);
     await expect.poll(async () => {
         const data = (await persistedList(siyuanAPI, docID, listID))?.Properties?.["custom-sy-list-mindmap-data"];
         // .sy 的属性值保留 HTML 实体转义，先按属性的存储形式解码再校验元数据。
@@ -191,5 +191,5 @@ test("the unnamed root is 32 by 32 and edits its title without a placeholder", a
     }, {timeout: 30000}).toBe(title);
     await page.reload();
     const reloaded = await getDocumentEditor(page, docID);
-    await expect(reloaded.locator(".list-mindmap__node--virtual > .list-mindmap__content")).toHaveText(title);
+    await expect(reloaded.locator(".mindmap-view__node--virtual > .mindmap-view__content")).toHaveText(title);
 });

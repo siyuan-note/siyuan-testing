@@ -97,7 +97,7 @@ test.describe("tags", () => {
             const renamedNode = tagPanel.locator(`li[data-treetype="tag"][data-label="${renamedTag}"]`);
             const renamedLabel = renamedNode.locator(":scope > .b3-list-item__text");
             await expect(renamedLabel).toBeVisible({timeout: 15000});
-            await renamedLabel.click();
+            await renamedLabel.click({position: {x: 5, y: 10}});
             const searchInput = page.locator("#searchInput:visible").last();
             await expect(searchInput).toHaveValue(`#${renamedTag}#`, {timeout: 15000});
             const resultItem = page.locator(
