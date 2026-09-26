@@ -38,7 +38,7 @@ for (const format of formats) {
     test(`${format.type}: fills the first line when a mixed long token fits only the next line`, async ({
         page, context, baseURL, createTestDocument, siyuanAPI,
     }, testInfo) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
         await page.setViewportSize({width: 1000, height: 900});
         const {editor, docID} = await createTestDocument("Mixed Inline Wrap E2E", "- [ ] 11111 / " + format.markdown("1"));
         const inline = editor.locator(`span[data-type~="${format.type}"]`);

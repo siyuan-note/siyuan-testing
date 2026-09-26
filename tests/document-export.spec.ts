@@ -230,11 +230,24 @@ test.describe("document export", () => {
         expect(entries.has("stage/protyle/js/lute/lute.min.js")).toBe(true);
         expect(entries.get("index.html")?.toString("utf8")).toContain(marker);
 
-        const rootURL = new URL("/", baseURL).toString();
-        await page.setContent(createStandaloneHTML(exported.name, exported.content, rootURL), {waitUntil: "load"});
-        await expect(page.locator("#preview")).toContainText(marker);
-        await expect(page.locator("#preview .hljs")).toContainText("exportedAnswer", {timeout: 15000});
-        await expect(page.locator('#preview [data-subtype="math"] .katex')).toBeVisible({timeout: 15000});
-        await expect(page.locator('#preview [data-subtype="mermaid"] svg')).toBeVisible({timeout: 30000});
+        const preview = await page.context().newPage();
+        const errors: string[] = [];
+        preview.on("pageerror", error => errors.push(error.message));
+        const previewURL = new URL("/siyuan-export-preview/index.html", baseURL).toString();
+        await preview.route(previewURL, route => route.fulfill({
+            contentType: "text/html",
+            body: createStandaloneHTML(exported.name, exported.content, new URL("/", baseURL).toString()),
+        }));
+        try {
+            await preview.goto(previewURL);
+            expect(errors).toEqual([]);
+            await expect(preview.locator("#preview")).toContainText(marker);
+            await expect(preview.locator("#preview .hljs")).toContainText("exportedAnswer", {timeout: 15000});
+            await expect(preview.locator('#preview [data-subtype="math"] .katex')).toBeVisible({timeout: 15000});
+            await expect(preview.locator('#preview [data-subtype="mermaid"] svg')).toBeVisible({timeout: 30000});
+            expect(errors).toEqual([]);
+        } finally {
+            await preview.close();
+        }
     });
 });

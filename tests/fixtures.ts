@@ -30,6 +30,7 @@ interface ITestFixtures {
     fullEntryVisibility: void;
     testDocumentCleanup: void;
     testNotebookCleanup: void;
+    localNetworkAccess: void;
 }
 
 interface IInternalFixtures {
@@ -38,6 +39,14 @@ interface IInternalFixtures {
 }
 
 export const test = base.extend<ITestFixtures & IInternalFixtures>({
+    localNetworkAccess: [async ({context, baseURL}, use) => {
+        if (!baseURL) {
+            throw new Error("playwright.config.ts must define use.baseURL");
+        }
+        // 桌面入口经路由转发后仍需允许 Chrome 连接目标内核的本地网络和 WebSocket。
+        await context.grantPermissions(["local-network-access"], {origin: new URL(baseURL).origin});
+        await use();
+    }, {auto: true}],
     siyuanAPI: async ({request, baseURL}, use) => {
         if (!baseURL) {
             throw new Error("playwright.config.ts must define use.baseURL");
