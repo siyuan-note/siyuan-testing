@@ -313,6 +313,11 @@ const requestHistoryAction = async (page: Page, editable: Locator, shortcut: str
 
 test.describe("paragraph splitting and merging", () => {
     test.describe.configure({mode: "parallel"});
+    test.beforeEach(async ({context, baseURL}) => {
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {
+            origin: baseURL!,
+        });
+    });
 
     test("splits a paragraph at the caret and restores it with undo and redo", async ({
         page,

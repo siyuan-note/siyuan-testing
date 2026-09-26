@@ -225,7 +225,12 @@ test("keeps adjacent tags separate after deleting their visible separator", asyn
         getSelection()!.removeAllRanges();
         getSelection()!.addRange(range);
     });
-    await page.keyboard.press("Backspace");
+    // 等待删除事务完成，避免后续选区被异步重建的标签节点替换。
+    const [deletion] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === "/api/transactions"),
+        page.keyboard.press("Backspace"),
+    ]);
+    expect((await deletion.json()).code).toBe(0);
     await expect(tags).toHaveCount(2);
     await expectSemanticInlineText(tags.first(), "alpha");
     await expectSemanticInlineText(tags.last(), "beta");
