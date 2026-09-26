@@ -193,9 +193,11 @@ export class IpadSimulator {
         })()`);
     }
 
-    async snapshot(): Promise<ISelectionSnapshot> {
+    async snapshot(active = false): Promise<ISelectionSnapshot> {
         return this.evaluate(`(() => {
-            const title = document.querySelector('.protyle-title[data-node-id="${this.docID}"]');
+            const title = ${active} ? Array.from(document.querySelectorAll('.protyle-title[data-node-id]'))
+                .find(element => element.getBoundingClientRect().height > 0) :
+                document.querySelector('.protyle-title[data-node-id="${this.docID}"]');
             const protyle = title.closest('.protyle');
             const editor = protyle.querySelector('.protyle-wysiwyg');
             const content = protyle.querySelector('.protyle-content');
@@ -277,7 +279,7 @@ export class IpadSimulator {
     private async gesture(kind: "tap" | "drag", start: IPoint, end: IPoint, testInfo: TestInfo) {
         const configuredRun = path.join(path.dirname(this.testRun), "gesture.xctestrun");
         const resultBundle = testInfo.outputPath(`gesture-${Date.now()}.xcresult`);
-        const before = await this.snapshot();
+        const before = await this.snapshot(true);
         await run("python3", [path.join(scripts, "configure-test-run.py"), this.testRun, configuredRun], {
             kind, start, end, viewport: before.viewport,
         });
@@ -290,7 +292,7 @@ export class IpadSimulator {
                 body: Buffer.from(resultBundle), contentType: "text/plain",
             });
         }
-        const state = await this.snapshot();
+        const state = await this.snapshot(true);
         await writeFile(testInfo.outputPath("ipad-selection-state.json"), JSON.stringify(state, null, 2));
         await testInfo.attach("ipad-selection-state", {
             body: Buffer.from(JSON.stringify(state, null, 2)), contentType: "application/json",
