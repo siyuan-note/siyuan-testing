@@ -34,7 +34,7 @@ test.describe("command palette", () => {
         await expect(panel.locator('[data-command-id="core.context.notebook.new"]'),
             "The served desktop bundle must include the contextual command changes").toBeVisible();
         await expect(panel.locator('[data-command-id="core.context.document.export"]')).toHaveCount(0);
-        await expect(panel.locator('[data-command-id="core.context.notebook.new"] .b3-list-item__meta')).toHaveText("");
+        await expect(panel.locator('[data-command-id="core.context.notebook.new"] .b3-list-item__meta')).toHaveCount(0);
         await panel.locator("input").fill("unmatched-command-19047-xyz");
         await expect(panel.locator("[data-command-id]")).toHaveCount(0);
         await panel.locator("input").press("Escape");

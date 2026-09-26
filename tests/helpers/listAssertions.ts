@@ -36,36 +36,41 @@ export const assertValidListDOM = async (editor: Locator) => {
             }
             ids.add(id);
         });
-        element.querySelectorAll<HTMLElement>('[data-type="NodeList"]').forEach(list => {
+        element.querySelectorAll<HTMLElement>('[data-type="NodeList"], [data-type="NodeMindmap"]').forEach(list => {
+            const mindmap = list.dataset.type === "NodeMindmap";
+            const itemType = mindmap ? "NodeMindmapItem" : "NodeListItem";
             if (list.querySelectorAll(":scope > .protyle-attr").length !== 1) {
-                result.push(`NodeList ${list.dataset.nodeId} does not have exactly one attribute element`);
+                result.push(`${list.dataset.type} ${list.dataset.nodeId} does not have exactly one attribute element`);
             }
             Array.from(list.children).filter(child => child.hasAttribute("data-node-id")).forEach(child => {
-                if (child.getAttribute("data-type") !== "NodeListItem") {
-                    result.push(`NodeList ${list.dataset.nodeId} directly contains ${child.getAttribute("data-type")}`);
+                if (child.getAttribute("data-type") !== itemType) {
+                    result.push(`${list.dataset.type} ${list.dataset.nodeId} directly contains ${child.getAttribute("data-type")}`);
                 }
                 if (child.getAttribute("data-subtype") !== list.getAttribute("data-subtype")) {
-                    result.push(`list subtype mismatch at ${child.getAttribute("data-node-id")}`);
+                    result.push(`${list.dataset.type} subtype mismatch at ${child.getAttribute("data-node-id")}`);
                 }
             });
         });
-        element.querySelectorAll<HTMLElement>('[data-type="NodeListItem"]').forEach(item => {
-            if (item.parentElement?.getAttribute("data-type") !== "NodeList") {
-                result.push(`NodeListItem ${item.dataset.nodeId} is not wrapped by NodeList`);
+        element.querySelectorAll<HTMLElement>('[data-type="NodeListItem"], [data-type="NodeMindmapItem"]').forEach(item => {
+            const mindmap = item.dataset.type === "NodeMindmapItem";
+            const branchType = mindmap ? "NodeMindmap" : "NodeList";
+            const itemType = mindmap ? "NodeMindmapItem" : "NodeListItem";
+            if (item.parentElement?.getAttribute("data-type") !== branchType) {
+                result.push(`${item.dataset.type} ${item.dataset.nodeId} is not wrapped by ${branchType}`);
             }
             if (item.querySelectorAll(":scope > .protyle-action").length !== 1) {
-                result.push(`NodeListItem ${item.dataset.nodeId} does not have exactly one action element`);
+                result.push(`${item.dataset.type} ${item.dataset.nodeId} does not have exactly one action element`);
             }
             if (item.querySelectorAll(":scope > .protyle-attr").length !== 1) {
-                result.push(`NodeListItem ${item.dataset.nodeId} does not have exactly one attribute element`);
+                result.push(`${item.dataset.type} ${item.dataset.nodeId} does not have exactly one attribute element`);
             }
             const blocks = Array.from(item.children).filter(child => child.hasAttribute("data-node-id"));
-            if (blocks[0]?.getAttribute("data-type") === "NodeList") {
-                result.push(`NodeListItem ${item.dataset.nodeId} starts with NodeList`);
+            if (blocks[0]?.getAttribute("data-type") === branchType) {
+                result.push(`${item.dataset.type} ${item.dataset.nodeId} starts with ${branchType}`);
             }
             blocks.forEach(child => {
-                if (child.getAttribute("data-type") === "NodeListItem") {
-                    result.push(`NodeListItem ${item.dataset.nodeId} directly contains NodeListItem`);
+                if (child.getAttribute("data-type") === itemType) {
+                    result.push(`${item.dataset.type} ${item.dataset.nodeId} directly contains ${itemType}`);
                 }
                 if (child.getAttribute("data-type") !== "NodeThematicBreak" &&
                     child.querySelectorAll(":scope > .protyle-attr").length !== 1) {
@@ -75,8 +80,8 @@ export const assertValidListDOM = async (editor: Locator) => {
             });
         });
         Array.from(element.children).filter(child => child.hasAttribute("data-node-id")).forEach(child => {
-            if (child.getAttribute("data-type") === "NodeListItem") {
-                result.push(`document directly contains NodeListItem ${child.getAttribute("data-node-id")}`);
+            if (["NodeListItem", "NodeMindmapItem"].includes(child.getAttribute("data-type") || "")) {
+                result.push(`document directly contains ${child.getAttribute("data-type")} ${child.getAttribute("data-node-id")}`);
             }
         });
         return result;
@@ -98,36 +103,39 @@ const validateSyListTree = (root: ISyNode) => {
             }
         }
         const children = node.Children || [];
-        if (node.Type === "NodeDocument" && children.some(child => child.Type === "NodeListItem")) {
-            errors.push("NodeDocument directly contains NodeListItem");
+        if (node.Type === "NodeDocument" && children.some(child => ["NodeListItem", "NodeMindmapItem"].includes(child.Type))) {
+            errors.push("NodeDocument directly contains a list or mind map item");
         }
-        if (node.Type === "NodeList") {
+        if (node.Type === "NodeList" || node.Type === "NodeMindmap") {
+            const itemType = node.Type === "NodeMindmap" ? "NodeMindmapItem" : "NodeListItem";
             const type = node.ListData?.Typ || 0;
             if (![0, 1, 3].includes(type)) {
-                errors.push(`NodeList ${node.ID} has invalid ListData.Typ ${type}`);
+                errors.push(`${node.Type} ${node.ID} has invalid ListData.Typ ${type}`);
             }
             children.forEach(child => {
-                if (child.Type !== "NodeListItem") {
-                    errors.push(`NodeList ${node.ID} directly contains ${child.Type}`);
+                if (child.Type !== itemType) {
+                    errors.push(`${node.Type} ${node.ID} directly contains ${child.Type}`);
                 }
             });
         }
-        if (node.Type === "NodeListItem") {
-            if (parent?.Type !== "NodeList") {
-                errors.push(`NodeListItem ${node.ID} is not wrapped by NodeList`);
+        if (node.Type === "NodeListItem" || node.Type === "NodeMindmapItem") {
+            const mindmap = node.Type === "NodeMindmapItem";
+            const branchType = mindmap ? "NodeMindmap" : "NodeList";
+            if (parent?.Type !== branchType) {
+                errors.push(`${node.Type} ${node.ID} is not wrapped by ${branchType}`);
             }
-            if (children.some(child => child.Type === "NodeListItem")) {
-                errors.push(`NodeListItem ${node.ID} directly contains NodeListItem`);
+            if (children.some(child => child.Type === node.Type)) {
+                errors.push(`${node.Type} ${node.ID} directly contains ${node.Type}`);
             }
-            if (children.find(child => child.ID)?.Type === "NodeList") {
-                errors.push(`NodeListItem ${node.ID} starts with NodeList`);
+            if (children.find(child => child.ID)?.Type === branchType) {
+                errors.push(`${node.Type} ${node.ID} starts with ${branchType}`);
             }
             const type = node.ListData?.Typ || parent?.ListData?.Typ || 0;
             if (![0, 1, 3].includes(type)) {
-                errors.push(`NodeListItem ${node.ID} has invalid ListData.Typ ${type}`);
+                errors.push(`${node.Type} ${node.ID} has invalid ListData.Typ ${type}`);
             }
             if (node.ListData?.Typ !== undefined && node.ListData.Typ !== (parent?.ListData?.Typ || 0)) {
-                errors.push(`NodeListItem ${node.ID} does not match its parent list type`);
+                errors.push(`${node.Type} ${node.ID} does not match its parent list type`);
             }
             if (type === 3) {
                 const marker = children[0];
@@ -166,7 +174,7 @@ export const assertValidSyListTree = async (api: SiyuanAPI, docID: string, edito
                 .filter(child => child.hasAttribute("data-node-id"))
                 .map(child => child.getAttribute("data-node-id") as string),
         }];
-        element.querySelectorAll<HTMLElement>('[data-type="NodeList"], [data-type="NodeListItem"]').forEach(node => {
+        element.querySelectorAll<HTMLElement>('[data-type="NodeList"], [data-type="NodeListItem"], [data-type="NodeMindmap"], [data-type="NodeMindmapItem"]').forEach(node => {
             nodes.push({
                 id: node.dataset.nodeId as string,
                 childIDs: Array.from(node.children)

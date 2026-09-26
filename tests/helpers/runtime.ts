@@ -68,8 +68,13 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
 };
 
 export const openWorkspace = async (page: Page, path = "/") => {
-    await page.goto(path);
+    await page.goto(path === "/" || path.startsWith("/?") ? `/stage/build/desktop/${path.slice(1)}` : path);
     await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
+    await expect.poll(() => page.evaluate(() => {
+        const runtime = window.siyuan as typeof window.siyuan & {ws?: {ws?: WebSocket}};
+        return runtime.ws?.ws?.readyState;
+    }), {message: "waiting for the main kernel WebSocket", timeout: 15000}).toBe(1);
+    await expect(page.locator("#errorLog")).toHaveCount(0);
     const dialog = page.locator('[data-key="dialog-changelog"]');
     if (await dialog.isVisible()) {
         await dialog.locator(".b3-dialog__scrim").click({force: true});

@@ -112,7 +112,7 @@ for (const format of formats) {
         const inline = editor.locator(format.selector).first();
         await expect.poll(async () => (await layout(inline, "1".repeat(100))).firstLine).toBeLessThan(0.5);
         await textRange(inline, format.prefix + 2);
-        await inline.evaluate(element => {
+        await inline.evaluate(async element => {
             const editable = element.closest('[contenteditable="true"]')!;
             const block = editable.closest("[data-node-id]")!;
             const editor = block.closest(".protyle-wysiwyg")!;
@@ -152,11 +152,16 @@ for (const format of formats) {
                     editor.removeEventListener("input", onInput);
                 }
             };
-            requestAnimationFrame(frame);
+            await new Promise<void>(resolve => requestAnimationFrame(() => {
+                frame();
+                resolve();
+            }));
         });
         for (let index = 0; index < 8; index++) {
             await page.keyboard.press("Space");
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
             await page.keyboard.press("Backspace");
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
         }
         await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(docID))).toContain(JSON.stringify(text));
         const frames = await page.evaluate(() => {
@@ -179,7 +184,7 @@ for (const format of formats) {
     test(`${format.name}: wraps long runs with spaces while preserving words and copied text`, async ({
         page, context, baseURL, createTestDocument, siyuanAPI,
     }) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: baseURL!});
+        await context.grantPermissions(["clipboard-read", "clipboard-write", "local-network-access"], {origin: baseURL!});
         const run = "1".repeat(100);
         const text = "测试 ordinary " + run + " ordinary words remain intact " + "a".repeat(80) + " ending";
         const {editor, docID} = await createTestDocument("Spaced Long Text Wrap E2E", "- [ ] " + format.format(text));

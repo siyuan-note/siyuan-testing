@@ -6,7 +6,7 @@ export const useDesktopFrontend = async (page: Page) => {
         const url = new URL(route.request().url());
         if (route.request().isNavigationRequest() && url.pathname === "/") {
             url.pathname = "/stage/build/desktop/";
-            await route.fulfill({response: await route.fetch({url: url.toString()})});
+            await route.fulfill({status: 302, headers: {location: url.toString()}});
         } else {
             await route.continue();
         }

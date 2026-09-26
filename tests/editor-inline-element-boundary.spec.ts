@@ -229,8 +229,9 @@ test("keeps adjacent tags separate after deleting their visible separator", asyn
     await expect(tags).toHaveCount(2);
     await expectSemanticInlineText(tags.first(), "alpha");
     await expectSemanticInlineText(tags.last(), "beta");
+    await editable.focus();
     await selectTextRange(tags.last(), tags.last(), 1, 1);
-    await page.keyboard.insertText("X");
+    await page.keyboard.type("X");
     await expectSemanticInlineText(tags.last(), "Xbeta");
     await expect.poll(async () => {
         const serialized = JSON.stringify(await siyuanAPI.readDocument(docID));
