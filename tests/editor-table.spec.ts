@@ -514,8 +514,9 @@ test.describe("table cell rich text", () => {
     });
 
     test("keeps paragraph, list, heading, quote, and code layout consistent when leaving the editor", async ({
-        createTestDocument, page,
+        createTestDocument, page, context, baseURL,
     }) => {
+        await allowClipboard(context, baseURL);
         const {editor} = await createTestDocument("Table Rich Layout E2E",
             "| First | Second | Rich |\n| --- | --- | --- |\n| untouched | ordinary | text |");
         const table = editor.locator(':scope > [data-type="NodeTable"]');

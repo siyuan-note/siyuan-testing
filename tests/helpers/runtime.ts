@@ -109,8 +109,9 @@ export const showFileTree = async (page: Page) => {
     const fileDockItem = page.locator('.dock__item[data-type="file"]').first();
     const initiallyVisible = await fileTreeLogo.isVisible();
     const dockItems = fileDockItem.locator("xpath=parent::*");
-    const activeDockItem = dockItems.locator(".dock__item--activefocus").first();
-    const previousDockType = await activeDockItem.count() > 0 ? await activeDockItem.getAttribute("data-type") : null;
+    // 在同一次 DOM 读取中获取可选的活动项，避免焦点变化后继续等待已消失的节点。
+    const previousDockType = await dockItems.evaluate(element =>
+        element.querySelector(".dock__item--activefocus")?.getAttribute("data-type") ?? null);
     if (!initiallyVisible) {
         await fileDockItem.click();
         if (!await fileTreeLogo.isVisible()) {
