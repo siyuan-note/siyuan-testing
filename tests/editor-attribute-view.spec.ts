@@ -2487,9 +2487,19 @@ test.describe("attribute views", () => {
         const firstMatch = block.locator(`.av__row[data-id="${rowIDs["First match"]}"]`);
         await firstMatch.locator(".av__firstcol").click();
         await expect(firstMatch).toHaveClass(/av__row--select/);
+        const searchBeforeRemoval = await block.locator('[data-type="av-search"]').elementHandle();
         const removeTransaction = waitForTransactionAction(page, "removeAttrViewBlock");
         await page.keyboard.press("Backspace");
         await removeTransaction;
+        // 行会先在本地移除，事务后的异步刷新还会重建搜索框，必须等待新控件就绪。
+        try {
+            await expect.poll(() => searchBeforeRemoval!.evaluate(element => element.isConnected), {
+                timeout: 30000,
+            }).toBe(false);
+        } finally {
+            await searchBeforeRemoval?.dispose();
+        }
+        await expect(block).toHaveAttribute("data-render", "true");
         await expect(block.locator('[data-type="av-search"]')).toHaveText("shared needle");
         rows = block.locator(".av__body .av__row[data-id]");
         await expect.poll(() => rows.evaluateAll(items =>

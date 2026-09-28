@@ -41,7 +41,18 @@ const enterCell = async (page: Page, table: Locator, index: number, column = 1) 
     const cell = rowAt(table, index).locator("td").nth(column);
     await cell.click({position: {x: 3, y: 3}});
     await expect(cell.locator(".table__cell-editor")).toBeVisible();
-    await page.keyboard.press("End");
+    // macOS 的 End 滚动到文档末尾，使用平台对应的行尾快捷键定位光标。
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowRight" : "End");
+    await expect.poll(() => fragment(table).evaluate(element => {
+        const selection = getSelection();
+        if (!selection?.isCollapsed || !element.contains(selection.anchorNode)) {
+            return false;
+        }
+        const trailing = document.createRange();
+        trailing.selectNodeContents(element);
+        trailing.setStart(selection.anchorNode!, selection.anchorOffset);
+        return trailing.toString().replace(/\u200b/g, "") === "";
+    })).toBe(true);
     await expectVirtual(table);
     return cell;
 };
