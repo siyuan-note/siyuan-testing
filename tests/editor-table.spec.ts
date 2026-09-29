@@ -387,7 +387,7 @@ test.describe("table cell rich text", () => {
             expect(await measure()).toEqual(size);
         }
         const edit = cell.locator('.table__cell-editor .p > [contenteditable="true"]').first();
-        expect(await edit.evaluate(element => [getComputedStyle(element, "::before").content,
+        await expect.poll(() => edit.evaluate(element => [getComputedStyle(element, "::before").content,
             getComputedStyle(element, "::after").content])).toEqual(["none", "none"]);
         await page.keyboard.press("Escape");
         expect(await measure()).toEqual(size);
