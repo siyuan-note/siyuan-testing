@@ -473,6 +473,19 @@ const configureRollupColumn = async (page: Page, cell: Locator, relationColumnID
     await expect(panel).toHaveCount(0);
 };
 
+const openRelationCell = async (page: Page, cell: Locator) => {
+    const block = cell.locator("xpath=ancestor::*[@data-type='NodeAttributeView'][1]");
+    const panel = page.locator(".av__panel");
+    await expect(async () => {
+        await expect(block).not.toHaveAttribute("data-rendering", "true");
+        if (!await panel.isVisible()) {
+            await cell.click();
+        }
+        await expect(panel.locator(".av__relation")).toBeVisible({timeout: 2000});
+    }).toPass({timeout: AV_RENDER_TIMEOUT});
+    return panel;
+};
+
 const editCell = async (page: Page, cell: Locator, value: string) => {
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
@@ -3296,9 +3309,7 @@ test.describe("attribute views", () => {
         const relationCell = sourceBlock.locator(
             `.av__row[data-id="${sourceRow.id}"] [data-col-id="${relationColumn.id}"]`,
         );
-        await relationCell.click();
-
-        const relationPanel = page.locator(".av__panel");
+        const relationPanel = await openRelationCell(page, relationCell);
         const candidate = relationPanel.locator(
             `[data-type="setRelationCell"][data-relation-type="candidate"][data-row-id="${targetRow.id}"]`,
         );
@@ -3359,8 +3370,7 @@ test.describe("attribute views", () => {
         const relationCell = source.block.locator(
             `.av__row[data-id="${sourceRow.id}"] [data-col-id="${relationColumn.id}"]`,
         );
-        await relationCell.click();
-        const relationPanel = page.locator(".av__panel");
+        const relationPanel = await openRelationCell(page, relationCell);
         for (const targetRow of [firstTarget, secondTarget]) {
             const candidate = relationPanel.locator(
                 `[data-type="setRelationCell"][data-relation-type="candidate"]` +
@@ -3409,7 +3419,7 @@ test.describe("attribute views", () => {
         await expect(reloadedTextRollup).toContainText("Beta");
         await expect(reloadedNumberRollup).toHaveText("35");
 
-        await reloadedRelationCell.click();
+        await openRelationCell(page, reloadedRelationCell);
         const selectedSecondTarget = page.locator(".av__panel").locator(
             `[data-type="setRelationCell"][data-relation-type="selected"]` +
             `[data-row-id="${secondTarget.id}"]`,

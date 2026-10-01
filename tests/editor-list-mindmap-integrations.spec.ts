@@ -95,7 +95,7 @@ const createMindmapDocument = (createTestDocument: TestDocumentFactory, title: s
         ...content.split("\n").map(line => `  ${line}`), "", "  Tail text", "",
         '{: custom-sy-list-mindmap="1"}', "", "After mind map"].join("\n"));
 
-test("converts a list to a mind map and back without changing its block IDs or view configuration", async ({
+test("materializes a mind map title while preserving existing blocks through conversion and reload", async ({
     page, createTestDocument, siyuanAPI,
 }) => {
     const {docID, editor} = await createTestDocument("Mind map list view conversion E2E",
@@ -134,25 +134,51 @@ test("converts a list to a mind map and back without changing its block IDs or v
     await expect(host).toHaveCount(0);
     await siyuanAPI.flushTransactions();
     const convertedList = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
-    expect(blockIdentity(convertedList!)).toEqual(originalStructure);
-    expect((await siyuanAPI.getBlockAttrs(listID!))["custom-sy-list-mindmap-data"]).toBe(configured);
+    expect(convertedList?.Type).toBe("NodeList");
+    const titleItem = convertedList!.Children!.filter(node => node.ID);
+    expect(titleItem).toHaveLength(1);
+    expect(titleItem[0].Type).toBe("NodeListItem");
+    const titleChildren = titleItem[0].Children!.filter(node => node.ID);
+    expect(titleChildren.map(node => node.Type)).toEqual(["NodeParagraph", "NodeList"]);
+    expect(nodeText(titleChildren[0])).toBe(title);
+    const nestedList = titleChildren[1];
+    expect(nestedList.Children!.filter(node => node.ID)).toEqual(original!.Children!.filter(node => node.ID));
+    const convertedStructure = blockIdentity(convertedList!);
+    expect(convertedStructure).toEqual([
+        originalStructure[0],
+        {id: titleItem[0].ID, parentID: listID},
+        {id: titleChildren[0].ID, parentID: titleItem[0].ID},
+        {id: nestedList.ID, parentID: titleItem[0].ID},
+        ...originalStructure.slice(1).map(node => ({...node,
+            parentID: node.parentID === listID ? nestedList.ID : node.parentID})),
+    ]);
+    expect(new Set(convertedStructure.map(node => node.id)).size).toBe(originalStructure.length + 3);
+    const convertedConfiguration = (await siyuanAPI.getBlockAttrs(listID!))["custom-sy-list-mindmap-data"];
+    const expectedConfiguration = JSON.parse(configured);
+    delete expectedConfiguration.rootTitle;
+    expect(JSON.parse(convertedConfiguration)).toEqual(expectedConfiguration);
+    await assertValidListDOM(editor);
+    await assertValidSyListTree(siyuanAPI, docID, editor);
     await chooseListConversion(page, list, "listMindmap",
         list.locator(':scope > [data-type="NodeListItem"] .p').first());
-    await expect(host.locator(".mindmap-view__node--virtual > .mindmap-view__content")).toHaveText(title);
+    const realRoot = host.locator(`[data-mindmap-id="${titleItem[0].ID}"] > .mindmap-view__content`);
+    await expect(realRoot).toHaveText(title);
+    await expect(host.locator(".mindmap-view__node--virtual")).toHaveCount(0);
 
     await siyuanAPI.flushTransactions();
     const persisted = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
     expect(persisted?.Type).toBe("NodeMindmap");
-    expect(blockIdentity(persisted!)).toEqual(originalStructure);
+    expect(blockIdentity(persisted!)).toEqual(convertedStructure);
     await assertValidListDOM(editor);
     await assertValidSyListTree(siyuanAPI, docID, editor);
     await page.reload();
     const reloaded = await getDocumentEditor(page, docID);
     await expect(reloaded.locator(`[data-node-id="${listID}"] > .mindmap-view`)).toBeVisible();
-    await expect(reloaded.locator(`[data-node-id="${listID}"] .mindmap-view__node--virtual > .mindmap-view__content`))
+    await expect(reloaded.locator(`[data-node-id="${listID}"] [data-mindmap-id="${titleItem[0].ID}"] > .mindmap-view__content`))
         .toHaveText(title);
     const reloadedList = findNode(await siyuanAPI.readDocument<ISyNode>(docID), listID!);
-    expect(blockIdentity(reloadedList!)).toEqual(originalStructure);
+    expect(blockIdentity(reloadedList!)).toEqual(convertedStructure);
+    expect((await siyuanAPI.getBlockAttrs(listID!))["custom-sy-list-mindmap-data"]).toBe(convertedConfiguration);
     await assertValidListDOM(reloaded);
     await assertValidSyListTree(siyuanAPI, docID, reloaded);
 });
