@@ -9,6 +9,7 @@ import {SiyuanAPI} from "./helpers/siyuanAPI";
 interface ISyNode {
     Children?: ISyNode[];
     Data?: string;
+    TextMarkTextContent?: string;
     ID?: string;
     Properties?: Record<string, string>;
     Type: string;
@@ -38,7 +39,8 @@ const findNode = (node: ISyNode, id: string): ISyNode | undefined => {
 };
 
 const nodeText = (node: ISyNode): string =>
-    (node.Data || "") + (node.Children || []).map(nodeText).join("");
+    (node.Type === "NodeTextMark" ? node.TextMarkTextContent || "" : node.Data || "") +
+    (node.Children || []).map(nodeText).join("");
 
 const blockStructure = (root: ISyNode) => {
     const blocks: Array<{id: string; parentID: string | undefined; type: string}> = [];
