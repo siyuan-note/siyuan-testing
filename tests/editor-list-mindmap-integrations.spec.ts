@@ -315,6 +315,8 @@ test("persists and undoes a block split inside an embedded mind map source", asy
     const source = await createTestDocument("Mind map embedded structure source E2E", "> Embedded source text");
     const sourceID = await source.editor.locator(':scope > [data-type="NodeBlockquote"]').getAttribute("data-node-id");
     expect(sourceID).toBeTruthy();
+    await expect.poll(async () => (await siyuanAPI.querySQL(`SELECT id FROM blocks WHERE id = '${sourceID}'`)).length,
+        {timeout: 30000}).toBe(1);
     const sourceChildren = async () => {
         const block = findNode(await siyuanAPI.readDocument<ISyNode>(source.docID), sourceID!);
         return (block?.Children || []).filter(child => child.ID).map(child => ({id: child.ID!, text: nodeText(child)}));
