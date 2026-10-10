@@ -90,7 +90,7 @@ test("shows the rectangle menu after dragging and restores the annotation after 
     expect(pdf.errors).toEqual([]);
 });
 
-test("copies text using the rendered glyph boundaries", async ({page, pdf}) => {
+test("copies text using the rendered glyph boundaries", async ({page, pdf}, testInfo) => {
     await pdf.open();
     await page.evaluate(() => navigator.clipboard.writeText("PDF copy regression sentinel"));
     const canvas = pdf.panel.locator('.page[data-page-number="1"] canvas').first();
@@ -102,7 +102,56 @@ test("copies text using the rendered glyph boundaries", async ({page, pdf}) => {
     await page.mouse.move(box.x + 171.68 * scale - 0.5, box.y + 96 * scale, {steps: 20});
     await page.mouse.up();
     await page.keyboard.press("ControlOrMeta+C");
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("by asymmetrically texturing");
+    try {
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("by asymmetrically texturing");
+    } catch (error) {
+        // 只在断言失败后读取几何信息，不改变拖选坐标或复制时序。
+        try {
+            const diagnostics = await pdf.panel.locator('.page[data-page-number="1"]').evaluate(element => {
+                const selection = window.getSelection();
+                const describeNode = (node: Node | null) => node ? {
+                    name: node.nodeName, text: node.textContent?.slice(0, 256),
+                    parent: node.parentElement?.outerHTML.slice(0, 1024),
+                } : null;
+                const spans = Array.from(element.querySelectorAll(".textLayer span")).slice(0, 64).map(span => {
+                    const style = getComputedStyle(span);
+                    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+                    const glyphs = [];
+                    let node: Node | null;
+                    while ((node = walker.nextNode()) && glyphs.length < 128) {
+                        for (let offset = 0; offset < (node.textContent?.length || 0) && glyphs.length < 128; offset++) {
+                            const range = document.createRange();
+                            range.setStart(node, offset);
+                            range.setEnd(node, offset + 1);
+                            glyphs.push({text: range.toString(), rect: range.getBoundingClientRect().toJSON()});
+                        }
+                    }
+                    return {text: span.textContent, rect: span.getBoundingClientRect().toJSON(),
+                        font: style.font, transform: style.transform, letterSpacing: style.letterSpacing,
+                        textRendering: style.textRendering, glyphs};
+                });
+                return {
+                    selection: {text: selection?.toString(), anchor: describeNode(selection?.anchorNode || null),
+                        anchorOffset: selection?.anchorOffset, focus: describeNode(selection?.focusNode || null),
+                        focusOffset: selection?.focusOffset, collapsed: selection?.isCollapsed},
+                    canvas: element.querySelector("canvas")?.getBoundingClientRect().toJSON(),
+                    scaleFactor: getComputedStyle(element).getPropertyValue("--scale-factor"),
+                    totalScaleFactor: getComputedStyle(element).getPropertyValue("--total-scale-factor"),
+                    devicePixelRatio: window.devicePixelRatio, fontsStatus: document.fonts.status, spans,
+                };
+            });
+            await testInfo.attach("pdf-copy-selection-geometry", {
+                body: JSON.stringify({drag: {canvas: box, scale, start: {x: box.x + 25 * scale + 0.5,
+                    y: box.y + 96 * scale}, end: {x: box.x + 171.68 * scale - 0.5, y: box.y + 96 * scale}},
+                ...diagnostics}, null, 2),
+                contentType: "application/json",
+            });
+        } catch {
+            testInfo.annotations.push({type: "diagnostic-unavailable",
+                description: "PDF selection geometry could not be collected; the original assertion is preserved"});
+        }
+        throw error;
+    }
     expect(pdf.errors).toEqual([]);
 });
 

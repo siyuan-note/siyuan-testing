@@ -405,10 +405,23 @@ test.describe("command palette", () => {
             await expect(page.locator("#confirmDialogConfirmBtn")).toBeVisible();
             await page.locator("#cancelDialogConfirmBtn").click();
             await expect(page.locator("#cancelDialogConfirmBtn")).toHaveCount(0);
-            expect(await siyuanAPI.findDocumentPath(docID)).toBeDefined();
+            const location = await siyuanAPI.findDocumentPath(docID);
+            expect(location).toBeDefined();
             await focusCommandTarget(editor.locator('[data-type="NodeParagraph"]'));
             await runPaletteCommand(page, "core.context.document.delete");
-            await page.locator("#confirmDialogConfirmBtn").click();
+            const [removed] = await Promise.all([
+                page.waitForResponse(response => {
+                    if (new URL(response.url()).pathname !== "/api/filetree/removeDoc" ||
+                        response.request().method() !== "POST") {
+                        return false;
+                    }
+                    const payload = response.request().postDataJSON() as {notebook: string; path: string};
+                    return payload.notebook === location!.notebook && payload.path === location!.path;
+                }),
+                page.locator("#confirmDialogConfirmBtn").click(),
+            ]);
+            expect(removed.ok()).toBe(true);
+            expect(await removed.json()).toMatchObject({code: 0});
             await expect.poll(() => siyuanAPI.findDocumentPath(docID), {timeout: 30000}).toBeUndefined();
         } finally {
             await siyuanAPI.setFileTree(original);

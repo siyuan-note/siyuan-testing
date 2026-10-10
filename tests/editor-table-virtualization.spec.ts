@@ -208,8 +208,10 @@ test.describe("large table virtualization", () => {
         await expect(rowAt(table, 330).locator("td").nth(0).locator(".table__cell-editor")).toBeVisible();
         await page.keyboard.press("Shift+Tab");
         await expect(rowAt(table, 329).locator("td").nth(2).locator(".table__cell-editor")).toBeVisible();
-        await page.keyboard.press("Enter");
-        await expect(rowAt(table, 330).locator("td").nth(2).locator(".table__cell-editor")).toBeVisible();
+        for (let column = 0; column < 3; column++) {
+            await page.keyboard.press("Tab");
+            await expect(rowAt(table, 330).locator("td").nth(column).locator(".table__cell-editor")).toBeVisible();
+        }
         await page.keyboard.press("Escape");
         await scrollToRow(page, table, ROW_COUNT - 1);
         await enterCell(page, table, ROW_COUNT - 1, 2);

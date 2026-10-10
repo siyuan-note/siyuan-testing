@@ -4,6 +4,7 @@ import {dragSelectTableCells as dragSelectCells} from "./helpers/tableSelection"
 import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
+import {assertValidTableDOM} from "./helpers/tableAssertions";
 
 interface ISyNode {
     Spec?: string;
@@ -410,7 +411,9 @@ test.describe("table cell rich text", () => {
         await expect(cells.nth(1).locator(".table__cell-editor")).toBeVisible();
         await expect(cells.nth(1).locator(".table__cell-editor .protyle-wysiwyg [data-type~=\"strong\"]"))
             .toHaveText("bold");
-        await page.keyboard.press("Enter");
+        await page.keyboard.press("Tab");
+        await expect(cells.nth(2).locator(".table__cell-editor")).toBeVisible();
+        await page.keyboard.press("Tab");
         await expect(cells.nth(3).locator(".table__cell-editor")).toBeVisible();
         await page.keyboard.press("Shift+Tab");
         await expect(cells.nth(2).locator(".table__cell-editor")).toBeVisible();
@@ -475,6 +478,47 @@ test.describe("table cell rich text", () => {
         const reloaded = await getDocumentEditor(page, docID);
         await reloaded.locator("tbody td").first().click();
         await expect(reloaded.locator(".table__cell-editor .protyle-wysiwyg [placeholder]")).toHaveCount(0);
+    });
+
+    test("Enter creates and persists a paragraph inside the current ordinary cell", async ({
+        createTestDocument, page, siyuanAPI,
+    }) => {
+        const {docID, editor} = await createTestDocument("Table Cell Enter Paragraph E2E",
+            "| Header | Next |\n| --- | --- |\n| first | right guard |\n| below guard | last guard |");
+        const table = editor.locator(':scope > [data-type="NodeTable"]');
+        const cell = table.locator("tbody td").first();
+        await cell.click();
+        const fragment = cell.locator(".table__cell-editor .protyle-wysiwyg");
+        await expect(fragment).toBeVisible();
+        await focusAtEnd(fragment);
+        await page.keyboard.press("Enter");
+        await expect(fragment.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(2);
+        await expect(table.locator(".table__cell-editor")).toHaveCount(1);
+        await page.keyboard.type("second");
+        await expect(fragment.locator(':scope > [data-type="NodeParagraph"]')).toHaveText(["first", "second"]);
+        await page.keyboard.press("Escape");
+        await expect(fragment).toHaveCount(0);
+        await expect(table.locator("tbody tr")).toHaveCount(2);
+        await expect(table.locator("tbody td").nth(1)).toHaveText("right guard");
+        await expect(table.locator("tbody td").nth(2)).toHaveText("below guard");
+        await expect(table.locator("tbody td").nth(3)).toHaveText("last guard");
+        await assertValidTableDOM(table);
+        const expected = {
+            spec: "4", invalidDescendants: 0,
+            sources: [{spec: 1, format: "kramdown", content: "first\n\nsecond"}],
+        };
+        await expect.poll(() => getRichTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject(expected);
+        await expect.poll(() => getPersistedTableState(siyuanAPI, docID), {timeout: 30000}).toMatchObject({
+            columns: [2, 2, 2], duplicateIDs: 0, mismatchedPropertyIDs: 0, tableCount: 1,
+        });
+        await page.reload();
+        const reloaded = (await getDocumentEditor(page, docID)).locator(':scope > [data-type="NodeTable"]');
+        await assertValidTableDOM(reloaded);
+        await reloaded.locator("tbody td").first().click();
+        await expect(reloaded.locator("tbody td").first()
+            .locator('.table__cell-editor .protyle-wysiwyg > [data-type="NodeParagraph"]')).toHaveText(["first", "second"]);
+        await page.keyboard.press("Escape");
+        expect(await getRichTableState(siyuanAPI, docID)).toMatchObject(expected);
     });
 
     test("creates and indents a list by typing in an ordinary empty cell", async ({
