@@ -146,9 +146,52 @@ test("copies text using the rendered glyph boundaries", async ({page, pdf}, test
                 ...diagnostics}, null, 2),
                 contentType: "application/json",
             });
+            const end = {x: box.x + 171.68 * scale - 0.5, y: box.y + 96 * scale};
+            const start = {x: box.x + 25 * scale + 0.5, y: end.y};
+            const penultimate = {x: start.x + (end.x - start.x) * 19 / 20, y: end.y};
+            const lastGlyph = diagnostics.spans.find(span => span.text === "texturing")?.glyphs.slice(-1)[0];
+            const readSelection = (point: {x: number; y: number}) => page.evaluate(({x, y}) => {
+                const selection = window.getSelection();
+                const caret = document.caretRangeFromPoint(x, y);
+                return {text: selection?.toString(), anchorText: selection?.anchorNode?.textContent,
+                    anchorOffset: selection?.anchorOffset, focusText: selection?.focusNode?.textContent,
+                    focusOffset: selection?.focusOffset, caretText: caret?.startContainer.textContent,
+                    caretOffset: caret?.startOffset,
+                    hit: document.elementFromPoint(x, y)?.outerHTML.slice(0, 1024)};
+            }, point);
+            const probes = [];
+            // 原断言已失败；对照只补充证据，不能用对照结果替代验收。
+            for (const includeGlyphSample of [false, true]) {
+                if (includeGlyphSample && !lastGlyph) continue;
+                await page.evaluate(() => window.getSelection()?.removeAllRanges());
+                await page.mouse.move(start.x, start.y);
+                await page.mouse.down();
+                let released = false;
+                try {
+                    await page.mouse.move(penultimate.x, penultimate.y, {steps: 19});
+                    const beforeLastMove = await readSelection(penultimate);
+                    let insideGlyph;
+                    if (includeGlyphSample && lastGlyph) {
+                        const point = {x: lastGlyph.rect.left + lastGlyph.rect.width * 0.75, y: end.y};
+                        await page.mouse.move(point.x, point.y);
+                        insideGlyph = {point, selection: await readSelection(point)};
+                    }
+                    await page.mouse.move(end.x, end.y);
+                    const beforeRelease = await readSelection(end);
+                    await page.mouse.up();
+                    released = true;
+                    probes.push({includeGlyphSample, beforeLastMove, insideGlyph, beforeRelease,
+                        afterRelease: await readSelection(end)});
+                } finally {
+                    if (!released) await page.mouse.up();
+                }
+            }
+            await testInfo.attach("pdf-copy-same-endpoint-probes", {
+                body: JSON.stringify({start, penultimate, end, probes}, null, 2), contentType: "application/json",
+            });
         } catch {
             testInfo.annotations.push({type: "diagnostic-unavailable",
-                description: "PDF selection geometry could not be collected; the original assertion is preserved"});
+                description: "PDF selection diagnostics could not be fully collected; the original assertion is preserved"});
         }
         throw error;
     }
