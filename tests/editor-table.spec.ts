@@ -814,7 +814,7 @@ test.describe("table cell rich text", () => {
         await expect(reloaded.locator(".table__cell-rich .code-block .hljs")).toContainText("c < d && e");
     });
 
-    test("exports rich formatting to HTML and a readable inline projection to Markdown", async ({
+    test("exports rich formatting to HTML and preserves code structure in Markdown", async ({
         baseURL, context, createTestDocument, page, siyuanAPI,
     }) => {
         await allowClipboard(context, baseURL);
@@ -826,7 +826,9 @@ test.describe("table cell rich text", () => {
         const original = await waitForRichCellSource(siyuanAPI, docID);
         const markdown = await siyuanAPI.post<{content: string}>("/api/export/exportMdContent", {id: docID});
         expect(markdown.content).toContain("first");
-        expect(markdown.content).toContain("<code>a &#124; b<br />c &lt; d &amp;&amp; e</code>");
+        expect(markdown.content.match(/<pre><code\b[^>]*>[\s\S]*?<\/code><\/pre>/g)).toEqual([
+            '<pre><code class="language-go">a &#124; b&#10;c &lt; d &amp;&amp; e&#10;</code></pre>',
+        ]);
         expect(markdown.content).not.toContain("data-sy-table-cell-rich");
         expect(markdown.content).not.toContain("table-cell-rich=");
         expect(markdown.content).not.toContain("```go");
