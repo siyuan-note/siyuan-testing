@@ -4,6 +4,14 @@ import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {waitForTransactionAction} from "./helpers/transactions";
+import {
+    IAttributeViewIdentity,
+    readAttributeViewSnapshot,
+    renderedAttributeViewIdentity,
+    resolveAttributeView,
+    storedAttributeViewIdentity,
+} from "./helpers/attributeViewContract";
+import {attachAttributeViewFailure, observeAttributeViewResponses} from "./helpers/attributeViewResponses";
 
 const AV_RENDER_TIMEOUT = 15000;
 
@@ -257,17 +265,21 @@ const getCurrentViewID = async (api: SiyuanAPI, docID: string, blockID: string) 
     return node?.Properties?.["custom-sy-av-view"];
 };
 
-const requireCurrentViewID = async (api: SiyuanAPI, docID: string, blockID: string) => {
-    const viewID = await getCurrentViewID(api, docID, blockID);
-    expect(viewID).toBeTruthy();
-    return viewID!;
+// Read the effective initial view separately from getCurrentViewID, which must
+// remain a raw persisted-selector check for explicit switch/add/duplicate actions.
+const getCurrentView = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) => {
+    const {document, stored} = await readAttributeViewSnapshot(
+        () => readValidDocument(api, docID),
+        () => api.readWorkspaceFile<IAttributeView>(`/data/storage/av/${avID}.json`),
+    );
+    const node = flattenNodes(document).find(item => item.ID === blockID);
+    expect(node?.AttributeViewID).toBe(avID);
+    expect(stored.id).toBe(avID);
+    return resolveAttributeView(stored.views, node?.Properties?.["custom-sy-av-view"]);
 };
 
-const getCurrentView = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) => {
-    const attributeView = await getAttributeView(api, avID);
-    const viewID = await getCurrentViewID(api, docID, blockID);
-    return attributeView.views.find(item => item.id === viewID);
-};
+const requireCurrentViewID = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) =>
+    (await getCurrentView(api, docID, blockID, avID)).id;
 
 const getOrderedBlockContents = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) => {
     const attributeView = await getAttributeView(api, avID);
@@ -281,35 +293,39 @@ const getOrderedBlockContents = async (api: SiyuanAPI, docID: string, blockID: s
     };
 };
 
-const expectPersistedAttributeView = async (api: SiyuanAPI, docID: string, blockID: string, avID: string) => {
-    await expect.poll(async () => {
-        const document = await readValidDocument(api, docID);
-        const node = flattenNodes(document).find(item => item.ID === blockID);
-        return node && {
+const expectPersistedAttributeView = async (api: SiyuanAPI, docID: string, blockID: string, avID: string,
+                                           identity?: IAttributeViewIdentity, expectedViewID?: string) => {
+    let stored: IAttributeView | undefined;
+    await expect(async () => {
+        const snapshot = await readAttributeViewSnapshot(
+            () => readValidDocument(api, docID),
+            () => api.readWorkspaceFile<IAttributeView>(`/data/storage/av/${avID}.json`),
+        );
+        stored = snapshot.stored;
+        const node = flattenNodes(snapshot.document).find(item => item.ID === blockID);
+        expect(node && {
             attributeViewID: node.AttributeViewID,
             attributeViewType: node.AttributeViewType,
             id: node.Properties?.id,
             type: node.Type,
-        };
-    }, {timeout: 30000}).toEqual({
-        attributeViewID: avID,
-        attributeViewType: "table",
-        id: blockID,
-        type: "NodeAttributeView",
-    });
-
-    const stored = await api.readWorkspaceFile<IAttributeView>(`/data/storage/av/${avID}.json`);
-    expect(stored.id).toBe(avID);
-    expect(stored.keyValues.length).toBeGreaterThan(0);
-    expect(stored.keyValues[0].key.type).toBe("block");
-    await expect.poll(async () => {
-        const currentViewID = await getCurrentViewID(api, docID, blockID);
-        return stored.views.some(view => view.id === currentViewID && view.type === "table");
-    }, {timeout: 30000}).toBe(true);
-    return stored;
+        }).toEqual({attributeViewID: avID, attributeViewType: "table", id: blockID, type: "NodeAttributeView"});
+        expect(stored.id).toBe(avID);
+        expect(stored.keyValues.length).toBeGreaterThan(0);
+        expect(stored.keyValues[0].key.type).toBe("block");
+        const current = storedAttributeViewIdentity(stored, node?.Properties?.["custom-sy-av-view"], expectedViewID);
+        expect(current.viewType).toBe("table");
+        if (identity) {
+            // identity is fixed by the first render response, never refreshed by
+            // a later file read that could hide a recreated view or field ID.
+            expect(current).toEqual(identity);
+        }
+    }).toPass({timeout: 30000});
+    return stored!;
 };
 
-const expectRenderedAttributeView = async (block: Locator, stored: IAttributeView) => {
+const expectRenderedAttributeView = async (block: Locator, stored: IAttributeView, viewID = stored.views[0].id) => {
+    await expect(block).toHaveAttribute("custom-sy-av-view", viewID);
+    await expect(block.locator(`.av__views .item[data-id="${viewID}"]`)).toHaveClass(/item--focus/);
     await expect(block.locator(".av__container")).toBeVisible({timeout: 15000});
     await expect(block.locator(".av__title")).toHaveAttribute("data-title", stored.name);
     const headers = await block.locator(".av__row--header .av__cell--header").evaluateAll(elements =>
@@ -325,7 +341,36 @@ const expectRenderedAttributeView = async (block: Locator, stored: IAttributeVie
     })));
 };
 
-const insertAttributeView = async (page: Page, editor: Locator) => {
+const switchAttributeView = async (page: Page, block: Locator, viewID: string) => {
+    const target = {avID: (await block.getAttribute("data-av-id"))!,
+        blockID: (await block.getAttribute("data-node-id"))!};
+    const responses = observeAttributeViewResponses(page);
+    try {
+        await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
+        const [, render] = await Promise.all([
+            responses.transaction(target, "setAttrViewBlockView", viewID), responses.render(target, viewID),
+        ]);
+        expect(render.viewID).toBe(viewID);
+    } finally {
+        await responses.stop();
+    }
+};
+
+const expectSelectedAttributeView = async (api: SiyuanAPI, docID: string, blockID: string,
+                                         avID: string, viewID: string) => {
+    await expect(async () => {
+        const {document, stored} = await readAttributeViewSnapshot(
+            () => readValidDocument(api, docID),
+            () => api.readWorkspaceFile<IAttributeView>(`/data/storage/av/${avID}.json`),
+        );
+        const node = flattenNodes(document).find(item => item.ID === blockID);
+        expect(node?.AttributeViewID).toBe(avID);
+        expect(stored.id).toBe(avID);
+        resolveAttributeView(stored.views, node?.Properties?.["custom-sy-av-view"], viewID);
+    }).toPass({timeout: 30000});
+};
+
+const insertAttributeView = async (page: Page, editor: Locator, api: SiyuanAPI, docID: string) => {
     const protyle = editor.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
     );
@@ -342,19 +387,31 @@ const insertAttributeView = async (page: Page, editor: Locator) => {
     const databaseOption = hint.locator('button[data-id="database"]').first();
     await expect(databaseOption).toBeVisible({timeout: 15000});
 
-    const transaction = waitForResponse(page, "/api/transactions");
-    const render = waitForResponse(page, "/api/av/renderAttributeView");
-    await databaseOption.click();
-    await Promise.all([transaction, render]);
-
-    const block = editor.locator(':scope > [data-type="NodeAttributeView"]');
-    await expect(block).toHaveCount(1);
-    await expect(block).toHaveAttribute("data-av-type", "table");
-    const blockID = await block.getAttribute("data-node-id");
-    const avID = await block.getAttribute("data-av-id");
-    expect(blockID).toBeTruthy();
-    expect(avID).toBeTruthy();
-    return {avID: avID!, block, blockID: blockID!};
+    const responses = observeAttributeViewResponses(page);
+    try {
+        await databaseOption.click();
+        const block = editor.locator(':scope > [data-type="NodeAttributeView"]');
+        await expect(block).toHaveCount(1);
+        await expect(block).toHaveAttribute("data-av-type", "table");
+        const blockID = await block.getAttribute("data-node-id");
+        const avID = await block.getAttribute("data-av-id");
+        expect(blockID).toBeTruthy();
+        expect(avID).toBeTruthy();
+        const target = {avID: avID!, blockID: blockID!};
+        const [, render] = await Promise.all([
+            responses.transaction(target, "update"), responses.render(target),
+        ]);
+        const identity = renderedAttributeViewIdentity(render);
+        expect(identity.id).toBe(avID);
+        expect(identity.viewType).toBe("table");
+        expect(render.views).toHaveLength(1);
+        expect(render.views[0]).toMatchObject({id: identity.viewID, type: "table"});
+        const stored = await expectPersistedAttributeView(api, docID, target.blockID, target.avID, identity);
+        await expectRenderedAttributeView(block, stored, identity.viewID);
+        return {...target, block, identity};
+    } finally {
+        await responses.stop();
+    }
 };
 
 const addColumn = async (page: Page, block: Locator, type: string, name: string, menuID = type) => {
@@ -972,7 +1029,7 @@ const setAttributeViewPageSize = async (page: Page, block: Locator, size: "5" | 
 
 const prepareKanban = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
                              rows: Array<{content: string; status: string}>) => {
-    const inserted = await insertAttributeView(page, editor);
+    const inserted = await insertAttributeView(page, editor, siyuanAPI, docID);
     const {avID, blockID} = inserted;
     let block = inserted.block;
     const statusColumn = await addColumn(page, block, "select", "Status");
@@ -1019,7 +1076,7 @@ const prepareKanban = async (page: Page, editor: Locator, docID: string, siyuanA
 
 const prepareSearchTable = async (page: Page, editor: Locator, docID: string, siyuanAPI: SiyuanAPI,
                                   rows: Array<{content: string; notes?: string}>) => {
-    const inserted = await insertAttributeView(page, editor);
+    const inserted = await insertAttributeView(page, editor, siyuanAPI, docID);
     const {avID, blockID} = inserted;
     const notesColumn = await addColumn(page, inserted.block, "text", "Notes");
     await expectPersistedAttributeView(siyuanAPI, docID, blockID, avID);
@@ -1121,30 +1178,54 @@ const expectRowOrder = async (block: Locator, ids: string[]) => {
     ).evaluateAll(rows => rows.map(row => row.getAttribute("data-id"))), {timeout: 30000}).toEqual(ids);
 };
 
+// retries=0 still needs the first failing attempt's trace. This worker-scoped
+// option is file-local; Playwright does not allow setting trace inside describe.
+test.use({trace: "retain-on-failure"});
+
 test.describe("attribute views", () => {
+    test.afterEach(async ({page, request, baseURL, createdTestDocuments}, testInfo) => {
+        if (testInfo.status !== "passed" && baseURL) {
+            try {
+                await attachAttributeViewFailure(page, request, baseURL, createdTestDocuments, testInfo);
+            } catch (error) {
+                console.warn(`Unable to collect attribute view diagnostics: ${String(error)}`);
+            }
+        }
+    });
     test("creates a table database and restores it after reload", async ({
         createTestDocument,
         page,
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Lifecycle E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         let block = inserted.block;
 
         const stored = await expectPersistedAttributeView(
-            siyuanAPI, document.docID, inserted.blockID, inserted.avID,
+            siyuanAPI, document.docID, inserted.blockID, inserted.avID, inserted.identity,
         );
         const apiAttributeView = await getAttributeView(siyuanAPI, inserted.avID);
         expectApiAttributeView(apiAttributeView, stored);
         await expectRenderedAttributeView(block, stored);
 
-        await page.reload();
-        const reloadedEditor = await getDocumentEditor(page, document.docID);
-        block = reloadedEditor.locator(`:scope > [data-node-id="${inserted.blockID}"]`);
-        await expect(block).toHaveAttribute("data-type", "NodeAttributeView");
-        await expect(block).toHaveAttribute("data-av-id", inserted.avID);
-        await expectRenderedAttributeView(block, stored);
-        expectApiAttributeView(await getAttributeView(siyuanAPI, inserted.avID), stored);
+        const responses = observeAttributeViewResponses(page);
+        try {
+            await page.reload();
+            const reloadedEditor = await getDocumentEditor(page, document.docID);
+            block = reloadedEditor.locator(`:scope > [data-node-id="${inserted.blockID}"]`);
+            const render = await responses.render(inserted);
+            expect(renderedAttributeViewIdentity(render)).toEqual(inserted.identity);
+            await expect(block).toHaveAttribute("data-type", "NodeAttributeView");
+            await expect(block).toHaveAttribute("data-av-id", inserted.avID);
+            await expectRenderedAttributeView(block, stored, inserted.identity.viewID);
+            const reloadedStored = await expectPersistedAttributeView(
+                siyuanAPI, document.docID, inserted.blockID, inserted.avID, inserted.identity,
+            );
+            expect(reloadedStored).toEqual(stored);
+            expectApiAttributeView(await getAttributeView(siyuanAPI, inserted.avID), reloadedStored);
+        } finally {
+            await responses.stop();
+        }
     });
 
     test("creates, renames, duplicates, switches, and deletes views", async ({
@@ -1153,26 +1234,22 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Views E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const initial = await getAttributeView(siyuanAPI, avID);
-        // 新建数据库后 custom-sy-av-view 由内核异步写入块属性，需要轮询等待
-        let initialViewID = "";
-        await expect.poll(async () => {
-            initialViewID = await getCurrentViewID(siyuanAPI, document.docID, blockID) || "";
-            return initialViewID;
-        }, {timeout: 30000}).toBeTruthy();
+        // Initial .sy may legally omit the selector; insertion already verified
+        // the first response, DOM and persisted view/field identities together.
+        const initialViewID = inserted.identity.viewID;
         expect(initial.views).toHaveLength(1);
         expect(initial.views[0].type).toBe("table");
         const switchView = async (viewID: string, layout: "gallery" | "table") => {
-            await requestTransaction(page, () => block.locator(
-                `.av__views .layout-tab-bar .item[data-id="${viewID}"]`,
-            ).click());
+            await switchAttributeView(page, block, viewID);
             await expect.poll(async () => getCurrentViewID(siyuanAPI, document.docID, blockID), {
                 timeout: 30000,
             }).toBe(viewID);
             await page.reload();
+            await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, viewID);
             const editor = await getDocumentEditor(page, document.docID);
             block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
             await expect(block.locator(
@@ -1195,6 +1272,7 @@ test.describe("attribute views", () => {
             viewIDs: [initialViewID, galleryViewID],
         });
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, galleryViewID);
         const galleryEditor = await getDocumentEditor(page, document.docID);
         block = galleryEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1215,6 +1293,7 @@ test.describe("attribute views", () => {
             return av.views.find(view => view.id === galleryViewID)?.name;
         }, {timeout: 30000}).toBe(galleryName);
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, galleryViewID);
         const renamedEditor = await getDocumentEditor(page, document.docID);
         block = renamedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1239,6 +1318,7 @@ test.describe("attribute views", () => {
             viewIDs: [initialViewID, galleryViewID, duplicateViewID],
         });
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, duplicateViewID);
         const duplicateEditor = await getDocumentEditor(page, document.docID);
         block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1261,6 +1341,7 @@ test.describe("attribute views", () => {
             viewIDs: [initialViewID, duplicateViewID],
         });
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, initialViewID);
         const firstDeleteEditor = await getDocumentEditor(page, document.docID);
         block = firstDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1285,6 +1366,7 @@ test.describe("attribute views", () => {
             viewIDs: [initialViewID],
         });
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, initialViewID);
         const secondDeleteEditor = await getDocumentEditor(page, document.docID);
         block = secondDeleteEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(".av__views .layout-tab-bar .item")).toHaveCount(1);
@@ -1308,6 +1390,7 @@ test.describe("attribute views", () => {
         });
 
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, initialViewID);
         const reloadedEditor = await getDocumentEditor(page, document.docID);
         const reloadedBlock = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(reloadedBlock).toHaveAttribute("data-av-type", "table");
@@ -1315,7 +1398,7 @@ test.describe("attribute views", () => {
         await expect(reloadedBlock.locator(
             `.av__views .layout-tab-bar .item[data-id="${initialViewID}"]`,
         )).toHaveClass(/item--focus/);
-        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
+        await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID, undefined, initialViewID);
     });
 
     test("persists field visibility, order, width, pin, and wrap per view", async ({
@@ -1324,7 +1407,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Field Display E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const notesColumn = await addColumn(page, block, "text", "Notes");
@@ -1334,7 +1417,7 @@ test.describe("attribute views", () => {
         await expect(editPanel).toHaveCount(0);
 
         const initial = await getAttributeView(siyuanAPI, avID);
-        const sourceViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID);
+        const sourceViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID, avID);
         const sourceColumns = initial.views.find(view => view.id === sourceViewID)?.table?.columns;
         expect(sourceColumns).toBeTruthy();
         const baselineColumns = sourceColumns!.map(column => ({...column}));
@@ -1344,6 +1427,7 @@ test.describe("attribute views", () => {
             timeout: 30000,
         }).toBe(duplicateViewID);
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, duplicateViewID);
         const duplicateEditor = await getDocumentEditor(page, document.docID);
         block = duplicateEditor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1351,13 +1435,12 @@ test.describe("attribute views", () => {
         )).toHaveClass(/item--focus/);
 
         const switchView = async (viewID: string) => {
-            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
-            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
-            await transaction;
+            await switchAttributeView(page, block, viewID);
             await expect.poll(async () => getCurrentViewID(siyuanAPI, document.docID, blockID), {
                 timeout: 30000,
             }).toBe(viewID);
             await page.reload();
+            await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, viewID);
             const editor = await getDocumentEditor(page, document.docID);
             block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
             await expect(block.locator(
@@ -1562,7 +1645,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Gallery Settings E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const row = await addRow(page, block, "Gallery item");
@@ -1617,6 +1700,7 @@ test.describe("attribute views", () => {
             type: "gallery",
         });
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, sourceViewID);
         let editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block).toHaveAttribute("data-av-type", "gallery");
@@ -1626,6 +1710,7 @@ test.describe("attribute views", () => {
             timeout: 30000,
         }).toBe(duplicateViewID);
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, duplicateViewID);
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1652,13 +1737,12 @@ test.describe("attribute views", () => {
             wrapField: duplicateBaseline!.wrapField,
         };
         const switchView = async (viewID: string) => {
-            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
-            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
-            await transaction;
+            await switchAttributeView(page, block, viewID);
             await expect.poll(async () => getCurrentViewID(siyuanAPI, document.docID, blockID), {
                 timeout: 30000,
             }).toBe(viewID);
             await page.reload();
+            await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, viewID);
             const reloadedEditor = await getDocumentEditor(page, document.docID);
             block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
             await expect(block.locator(
@@ -1812,7 +1896,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Kanban Settings E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const planned = await addRow(page, block, "Planned card");
@@ -1848,7 +1932,7 @@ test.describe("attribute views", () => {
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
 
-        const sourceViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID);
+        const sourceViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID, avID);
         expect(sourceViewID).toBeTruthy();
         const setupPanel = await openAttributeViewConfig(page, block);
         await setupPanel.locator('[data-type="goGroups"]').click();
@@ -1866,7 +1950,7 @@ test.describe("attribute views", () => {
             const av = await getAttributeView(siyuanAPI, avID);
             const source = av.views.find(view => view.id === sourceViewID);
             return {
-                current: await getCurrentViewID(siyuanAPI, document.docID, blockID),
+                current: await requireCurrentViewID(siyuanAPI, document.docID, blockID, avID),
                 group: source?.group && {
                     field: source.group.field,
                     hideEmpty: source.group.hideEmpty,
@@ -1918,6 +2002,7 @@ test.describe("attribute views", () => {
             timeout: 30000,
         }).toBe(duplicateViewID);
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, duplicateViewID);
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expect(block.locator(
@@ -1945,13 +2030,12 @@ test.describe("attribute views", () => {
             wrapField: duplicateBaseline!.wrapField,
         };
         const switchView = async (viewID: string) => {
-            const transaction = waitForTransactionAction(page, "setAttrViewBlockView");
-            await block.locator(`.av__views .layout-tab-bar .item[data-id="${viewID}"]`).click();
-            await transaction;
+            await switchAttributeView(page, block, viewID);
             await expect.poll(async () => getCurrentViewID(siyuanAPI, document.docID, blockID), {
                 timeout: 30000,
             }).toBe(viewID);
             await page.reload();
+            await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, viewID);
             const reloadedEditor = await getDocumentEditor(page, document.docID);
             block = reloadedEditor.locator(`:scope > [data-node-id="${blockID}"]`);
             await expect(block.locator(
@@ -2266,7 +2350,7 @@ test.describe("attribute views", () => {
         });
         expect(newRowID).toBeTruthy();
         const state = await getAttributeView(siyuanAPI, avID);
-        const currentViewID = await getCurrentViewID(siyuanAPI, document.docID, blockID);
+        const currentViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID, avID);
         expect(state.views.find(item => item.id === currentViewID)?.groups?.find(group =>
             group.groupVal?.mSelect?.[0]?.content === "Planned")?.groupItemIds?.[0]).toBe(newRowID);
 
@@ -2285,7 +2369,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Gallery Pagination E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
         const initial = await getAttributeView(siyuanAPI, avID);
@@ -2311,6 +2395,7 @@ test.describe("attribute views", () => {
         await expect(block).toBeVisible({timeout: 30000});
         const galleryViewID = await addAttributeViewView(page, block, "gallery");
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, galleryViewID);
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-av-id="${avID}"]`);
         await setAttributeViewPageSize(page, block, "5");
@@ -2553,7 +2638,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Editing E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const databaseName = `Project tracker ${Date.now()}`;
         const title = block.locator(".av__title");
         await requestTransaction(page, () => title.fill(databaseName));
@@ -2612,7 +2697,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Number Format E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const negativeRow = await addRow(page, block, "Negative amount");
         const zeroRow = await addRow(page, block, "Zero amount");
         const column = await addColumn(page, block, "number", "Amount");
@@ -2727,7 +2812,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Special Fields E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "Special field item");
         const selectColumn = await addColumn(page, block, "select", "Status");
         const multiSelectColumn = await addColumn(page, block, "mSelect", "Labels", "multiSelect");
@@ -2805,7 +2890,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Date Range E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "Scheduled item");
         const column = await addColumn(page, block, "date", "Schedule");
         const cell = row.row.locator(`[data-col-id="${column.id}"]`);
@@ -2906,7 +2991,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Select Options E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const first = await addRow(page, block, "First status item");
         const second = await addRow(page, block, "Second status item");
         const column = await addColumn(page, block, "select", "Status");
@@ -2965,7 +3050,7 @@ test.describe("attribute views", () => {
         const document = await createTestDocument(
             "Attribute View Multi Select Options E2E", "Database seed",
         );
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const first = await addRow(page, block, "First label item");
         const second = await addRow(page, block, "Second label item");
         const column = await addColumn(page, block, "mSelect", "Labels", "multiSelect");
@@ -3019,7 +3104,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Link Fields E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "Link field item");
         const urlColumn = await addColumn(page, block, "url", "Project URL", "link");
         const emailColumn = await addColumn(page, block, "email", "Contact email");
@@ -3086,7 +3171,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Asset Field E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "Asset field item");
         const assetColumn = await addColumn(page, block, "mAsset", "Attachments", "assets");
         const assetCell = row.row.locator(`[data-col-id="${assetColumn.id}"]`);
@@ -3142,7 +3227,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Template Field E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "Template field item");
         const notesColumn = await addColumn(page, block, "text", "Notes");
         let notesCell = row.row.locator(`[data-col-id="${notesColumn.id}"]`);
@@ -3200,7 +3285,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Automatic Fields E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const first = await addRow(page, block, "First automatic item");
         const second = await addRow(page, block, "Second automatic item");
         const notesColumn = await addColumn(page, block, "text", "Notes");
@@ -3295,11 +3380,11 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const sourceDocument = await createTestDocument("Attribute View Relation Source E2E", "Source seed");
-        const source = await insertAttributeView(page, sourceDocument.editor);
+        const source = await insertAttributeView(page, sourceDocument.editor, siyuanAPI, sourceDocument.docID);
         const sourceRow = await addRow(page, source.block, "Source item");
 
         const targetDocument = await createTestDocument("Attribute View Relation Target E2E", "Target seed");
-        const target = await insertAttributeView(page, targetDocument.editor);
+        const target = await insertAttributeView(page, targetDocument.editor, siyuanAPI, targetDocument.docID);
         const targetRow = await addRow(page, target.block, "Target item");
 
         await page.goto(`/?id=${sourceDocument.docID}`);
@@ -3353,7 +3438,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const targetDocument = await createTestDocument("Attribute View Rollup Target E2E", "Target seed");
-        const target = await insertAttributeView(page, targetDocument.editor);
+        const target = await insertAttributeView(page, targetDocument.editor, siyuanAPI, targetDocument.docID);
         const firstTarget = await addRow(page, target.block, "First target");
         const secondTarget = await addRow(page, target.block, "Second target");
         const textColumn = await addColumn(page, target.block, "text", "Label");
@@ -3364,7 +3449,7 @@ test.describe("attribute views", () => {
         await editCell(page, secondTarget.row.locator(`[data-col-id="${numberColumn.id}"]`), "20");
 
         const sourceDocument = await createTestDocument("Attribute View Rollup Source E2E", "Source seed");
-        const source = await insertAttributeView(page, sourceDocument.editor);
+        const source = await insertAttributeView(page, sourceDocument.editor, siyuanAPI, sourceDocument.docID);
         const sourceRow = await addRow(page, source.block, "Source item");
         const relationColumn = await addRelationColumn(page, source.block, target.avID, "Related items");
         const relationCell = source.block.locator(
@@ -3512,7 +3597,7 @@ test.describe("attribute views", () => {
             return result.blocks.some(item => item.id === targetBlockID);
         }, {timeout: 30000}).toBe(true);
 
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, targetText);
         const primaryCell = row.row.locator('[data-dtype="block"]');
         const labels = await page.evaluate(() => ({
@@ -3563,7 +3648,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View History E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {id: rowID, row} = await addRow(page, block, "History item");
 
         const textColumn = await addColumn(page, block, "text", "Temporary");
@@ -3618,8 +3703,8 @@ test.describe("attribute views", () => {
             siyuanAPI, document.docID, await block.getAttribute("data-node-id") || "", avID,
         );
         expect(final.keyValues.some(item => item.key.id === textColumn.id)).toBe(false);
-        const finalViewID = await getCurrentViewID(siyuanAPI, document.docID, blockID);
-        expect(final.views.find(view => view.id === finalViewID)?.itemIds?.includes(rowID) ?? false).toBe(false);
+        const finalView = await getCurrentView(siyuanAPI, document.docID, blockID, avID);
+        expect(finalView.itemIds || []).not.toContain(rowID);
 
         await page.reload();
         const reloadedEditor = await getDocumentEditor(page, document.docID);
@@ -3636,7 +3721,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Rollback E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "History row");
         const textColumn = await addColumn(page, block, "text", "Recoverable");
         const cell = row.row.locator(`[data-col-id="${textColumn.id}"]`);
@@ -3695,7 +3780,7 @@ test.describe("attribute views", () => {
     }) => {
         test.slow();
         const document = await createTestDocument("Attribute View Sort Filter E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const charlie = await addRow(page, block, "Charlie");
         const alpha = await addRow(page, block, "Alpha");
         const bravo = await addRow(page, block, "Bravo");
@@ -3764,10 +3849,10 @@ test.describe("attribute views", () => {
     });
 
     test("keeps filters open when a delayed cell render restores a filtered-out selection", async ({
-        createTestDocument, page,
+        createTestDocument, page, siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Filter Selection E2E", "Database seed");
-        const {avID, block} = await insertAttributeView(page, document.editor);
+        const {avID, block} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         // 新增行事务返回后仍会异步重绘，先等准备阶段的真实行数据和界面完成更新。
         const initialRender = page.waitForResponse(async response => {
             if (!response.url().endsWith("/api/av/renderAttributeView")) {
@@ -3848,7 +3933,7 @@ test.describe("attribute views", () => {
     }) => {
         test.slow();
         const document = await createTestDocument("Attribute View Advanced Rules E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const alphaLow = await addRow(page, block, "Alpha");
@@ -3940,10 +4025,10 @@ test.describe("attribute views", () => {
                     value: filter.value?.block?.content,
                 })),
                 sorts: view?.sorts,
-                viewID: await getCurrentViewID(siyuanAPI, document.docID, blockID),
+                viewID: view.id,
             };
         };
-        const originalViewID = await getCurrentViewID(siyuanAPI, document.docID, blockID);
+        const originalViewID = await requireCurrentViewID(siyuanAPI, document.docID, blockID, avID);
         await expect.poll(readCurrentRules, {timeout: 30000}).toEqual({
             combination: "or",
             filters: [
@@ -3981,12 +4066,11 @@ test.describe("attribute views", () => {
         });
 
         await page.reload();
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, isolatedViewID);
         editor = await getDocumentEditor(page, document.docID);
         block = editor.locator(`:scope > [data-node-id="${blockID}"]`);
         await expectRowOrder(block, [alphaLow.id, alphaHigh.id, bravo.id, charlie.id]);
-        await requestTransaction(page, () => block.locator(
-            `.av__views .layout-tab-bar .item[data-id="${originalViewID}"]`,
-        ).click());
+        await switchAttributeView(page, block, originalViewID);
         await expect.poll(async () => getCurrentViewID(siyuanAPI, document.docID, blockID), {
             timeout: 30000,
         }).toBe(originalViewID);
@@ -3997,6 +4081,7 @@ test.describe("attribute views", () => {
         await expect(block.locator('[data-type="av-sort"]')).toHaveClass(/block__icon--active/);
         await expect(block.locator('[data-type="av-filter"]')).toHaveClass(/block__icon--active/);
         await expectRowOrder(block, [alphaHigh.id, alphaLow.id, bravo.id]);
+        await expectSelectedAttributeView(siyuanAPI, document.docID, blockID, avID, originalViewID);
         await expect.poll(readCurrentRules, {timeout: 30000}).toMatchObject({
             combination: "or",
             viewID: originalViewID,
@@ -4009,7 +4094,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Group Layout E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         await addRow(page, block, "First group item");
         await addRow(page, block, "Second group item");
         const checkboxColumn = await addColumn(page, block, "checkbox", "Done");
@@ -4069,7 +4154,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Group State E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         let block = inserted.block;
         const planned = await addRow(page, block, "Planned item");
@@ -4238,7 +4323,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Virtual Paste E2E", "Database seed");
-        const {avID, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
         const blockKey = (await getAttributeView(siyuanAPI, avID)).keyValues.find(item => item.key.type === "block");
         expect(blockKey).toBeTruthy();
@@ -4332,7 +4417,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View HTML Table Paste E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const row = await addRow(page, block, "0");
         const selectColumnID = await block.locator('.av__cell--header[data-dtype="select"]').getAttribute("data-col-id");
         expect(selectColumnID).toBeTruthy();
@@ -4418,7 +4503,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Boundary E2E", "Database seed");
-        const {avID, block, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, block, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const rowNames = [
             "Item 00",
             "Item 01",
@@ -4490,7 +4575,7 @@ test.describe("attribute views", () => {
         siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Range Selection Virtual E2E", "Database seed");
-        const {avID, blockID} = await insertAttributeView(page, document.editor);
+        const {avID, blockID} = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
         const blockKey = (await getAttributeView(siyuanAPI, avID)).keyValues.find(item => item.key.type === "block");
         expect(blockKey).toBeTruthy();
@@ -4588,7 +4673,7 @@ test.describe("attribute views", () => {
     }) => {
         const document = await createTestDocument("Attribute View Range Selection Grouped Gallery E2E",
             "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const {avID, blockID} = inserted;
         const statusColumn = await addColumn(page, inserted.block, "mSelect", "Status", "multiSelect");
         await expectPersistedAttributeView(siyuanAPI, document.docID, blockID, avID);
@@ -4672,9 +4757,10 @@ test.describe("attribute views", () => {
     test("collapses a database cell range to its anchor after fields are reordered", async ({
         createTestDocument,
         page,
+        siyuanAPI,
     }) => {
         const document = await createTestDocument("Attribute View Range Selection Column Sort E2E", "Database seed");
-        const inserted = await insertAttributeView(page, document.editor);
+        const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         const notesColumn = await addColumn(page, inserted.block, "text", "Range notes");
         const extraColumn = await addColumn(page, inserted.block, "text", "Reordered field");
         const rows = [
