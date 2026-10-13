@@ -627,11 +627,14 @@ test.describe("table cell rich text", () => {
         await expect(fragment).toHaveCSS("box-shadow", "none");
         const tableID = await table.getAttribute("data-node-id");
         const gutter = page.locator(`.protyle-gutters button[data-node-id="${tableID}"]`);
-        await expect(gutter).not.toBeVisible();
+        await expect(gutter).toBeVisible();
         await table.locator("tbody td").nth(1).hover();
         await expect(gutter).toBeVisible();
         await fragment.locator('[contenteditable="true"]').first().hover();
-        await expect(gutter).not.toBeVisible();
+        await expect(gutter).toBeVisible();
+        await expect(fragment.locator(".protyle-gutters button[data-node-id]")).toHaveCount(0);
+        await expect(gutter.locator("..").locator('button[data-node-id]:not([data-type="fold"])'))
+            .toHaveAttribute("data-node-id", tableID!);
         await expect(fragment.locator('[contenteditable="true"]').first()).toHaveText("**literal**");
         await expect(fragment.locator('[data-type~="strong"]')).toHaveCount(0);
         await fragment.locator('[contenteditable="true"]').first().click();
