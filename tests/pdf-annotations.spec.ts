@@ -1,6 +1,7 @@
 import {Locator} from "@playwright/test";
 import {expect, test as base} from "./fixtures";
 import {createPdfFixture} from "./helpers/pdfFixture";
+import {readPdfSettings, withPdfSettingsRestored} from "./helpers/pdfSettings";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 interface PdfFixture {
@@ -23,7 +24,7 @@ const test = base.extend<{pdf: PdfFixture}>({
                 message.text() + message.location().url)) errors.push(message.text());
         });
         const document = await createTestDocument("PDF Annotation E2E", "PDF fixture");
-        const originalPdfSettings = await page.evaluate(() => window.siyuan.storage["local-pdftheme"]);
+        const originalPdfSettings = await readPdfSettings(siyuanAPI);
         const filename = `pdf-annotations-${document.docID}.pdf`;
         const upload = await siyuanAPI.uploadAsset(document.docID, filename, "application/pdf", createPdfFixture(document.docID));
         expect(upload.errFiles || []).toEqual([]);
@@ -45,7 +46,7 @@ const test = base.extend<{pdf: PdfFixture}>({
             await page.locator(`.layout-tab-bar [data-id="${id}"] .item__close`).click();
             await expect(page.locator(`.layout-tab-container > [data-id="${id}"]`)).toHaveCount(0);
         };
-        try {
+        await withPdfSettingsRestored(siyuanAPI, originalPdfSettings, testInfo, async () => {
             await use({assetPath, link, panel, documentTab, errors, close, open: async () => {
                 await link.click({modifiers: ["Alt"]});
                 await expect(panel.locator('.page[data-page-number="1"] .textLayer')).toContainText("asymmetrically");
@@ -61,11 +62,7 @@ const test = base.extend<{pdf: PdfFixture}>({
                 await siyuanAPI.removeWorkspaceFile(`/data/${assetPath}.sya`, {ignoreNotFound: true});
                 await siyuanAPI.removeWorkspaceFile(`/data/${assetPath}`);
             }
-        } finally {
-            await siyuanAPI.post("/api/storage/setLocalStorageVal", {
-                key: "local-pdftheme", val: originalPdfSettings,
-            });
-        }
+        });
     },
 });
 
@@ -211,7 +208,21 @@ test("joins a hyphenated word when annotating search-highlighted text", async ({
     await page.mouse.move(box.x + 60 * scale, box.y + 174 * scale, {steps: 20});
     await page.mouse.up();
     await expect(pdf.panel.locator(".pdf__util")).toBeVisible();
-    await pdf.panel.locator(".pdf__util .color__square").first().click();
+    // Wait for the preference write as well as the annotation; otherwise a late
+    // color save could overwrite the fixture's restored settings during teardown.
+    const [colorSave] = await Promise.all([
+        page.waitForResponse(response => {
+            const path = new URL(response.url()).pathname;
+            if (path === "/api/setting/patch") {
+                return response.request().postDataJSON()?.appearance?.pdfTheme?.annoColor !== undefined;
+            }
+            return path === "/api/storage/setLocalStorageVal" &&
+                response.request().postDataJSON()?.key === "local-pdftheme";
+        }),
+        pdf.panel.locator(".pdf__util .color__square").first().click(),
+    ]);
+    expect(colorSave.ok()).toBeTruthy();
+    expect((await colorSave.json()).code).toBe(0);
     await expect(pdf.panel.locator('.pdf__rect[data-mode="text"]')).toHaveAttribute("data-content", "Following");
     const id = await pdf.panel.locator('.pdf__rect[data-mode="text"]').getAttribute("data-node-id");
     await expect.poll(async () => {
