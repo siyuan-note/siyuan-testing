@@ -87,18 +87,30 @@ const requestHistoryAction = async (page: Page, table: Locator, action: "undo" |
     await response;
 };
 
-const chooseTableCellAction = async (page: Page, cell: Locator, action: string) => {
+const chooseTableStructureAction = async (page: Page, cell: Locator,
+    action: "insertRowBelow" | "insertColumnRight" | "deleteRow" | "deleteColumn") => {
     await page.keyboard.press("Escape");
     if (await cell.locator(".table__cell-editor").count()) {
         await page.keyboard.press("Escape");
         await expect(cell.locator(".table__cell-editor")).toHaveCount(0);
     }
-    await selectCellContents(cell, true);
-    await cell.click({button: "right"});
-    const menu = page.locator("#commonMenu:not(.fn__none)");
-    await expect(menu).toBeVisible();
-    const item = menu.locator(`[data-id="${action}"]`).first();
+    const actions = {
+        insertRowBelow: {type: "row", label: "insertRowAfter"},
+        insertColumnRight: {type: "column", label: "insertColumnRight1"},
+        deleteRow: {type: "cell", label: "delete-row"},
+        deleteColumn: {type: "cell", label: "delete-column"},
+    } as const;
+    const {type, label: labelKey} = actions[action];
+    if (type === "cell") {
+        // 单元格菜单只删除目标行列，不像行列手柄那样扩展到整个合并范围。
+        await cell.click();
+    }
+    const menu = await openTableControlMenu(page, cell, type);
+    await expect(menu).toHaveAttribute("data-name", `table-${type}`);
+    const label = await page.evaluate(key => window.siyuan.languages[key].replace("${x}", ""), labelKey);
+    const item = getMenuItemByLabel(page, menu, label);
     await expect(item).toBeVisible();
+    await expect(item).toBeEnabled();
     await requestTransaction(page, () => item.click({position: {x: 12, y: 12}}));
     await expect(menu).toBeHidden();
 };
@@ -1611,14 +1623,14 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
 
-        await chooseTableCellAction(page, table.locator("tbody tr").first().locator("td").nth(1), "insertRowBelow");
+        await chooseTableStructureAction(page, table.locator("tbody tr").first().locator("td").nth(1), "insertRowBelow");
         await expect.poll(() => getDOMTableState(table)).toEqual({
             body: [["Alpha", "1", "Ready"], ["", "", ""], ["Beta", "2", "Done"]],
             duplicateIDs: 0,
             head: [["Item", "Quantity", "Status"]],
         });
 
-        await chooseTableCellAction(page, table.locator("thead th").nth(1), "insertColumnRight");
+        await chooseTableStructureAction(page, table.locator("thead th").nth(1), "insertColumnRight");
         const expandedState = {
             body: [["Alpha", "1", "", "Ready"], ["", "", "", ""], ["Beta", "2", "", "Done"]],
             duplicateIDs: 0,
@@ -1674,14 +1686,14 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
 
-        await chooseTableCellAction(page, table.locator("tbody tr").nth(1).locator("td").nth(1), "deleteRow");
+        await chooseTableStructureAction(page, table.locator("tbody tr").nth(1).locator("td").nth(1), "deleteRow");
         await expect.poll(() => getDOMTableState(table)).toEqual({
             body: [["Alpha", "1", "Ready"], ["Gamma", "3", "Waiting"]],
             duplicateIDs: 0,
             head: [["Item", "Quantity", "Status"]],
         });
 
-        await chooseTableCellAction(page, table.locator("thead th").nth(1), "deleteColumn");
+        await chooseTableStructureAction(page, table.locator("thead th").nth(1), "deleteColumn");
         const reducedState = {
             body: [["Alpha", "Ready"], ["Gamma", "Waiting"]],
             duplicateIDs: 0,
@@ -1744,7 +1756,7 @@ test.describe("table editing", () => {
             {colspan: 2, column: 0, row: 1, rowspan: 1},
         ]);
 
-        await chooseTableCellAction(page, table.locator("tbody tr").nth(1).locator("td").first(), "deleteColumn");
+        await chooseTableStructureAction(page, table.locator("tbody tr").nth(1).locator("td").first(), "deleteColumn");
         const reducedState = {
             body: [["HorizontalCovered", "Ready"], ["1", "Done"]],
             duplicateIDs: 0,
@@ -1804,7 +1816,7 @@ test.describe("table editing", () => {
             {colspan: 1, column: 2, row: 1, rowspan: 2},
         ]);
 
-        await chooseTableCellAction(page, bodyRows.first().locator("td").first(), "deleteRow");
+        await chooseTableStructureAction(page, bodyRows.first().locator("td").first(), "deleteRow");
         const reducedState = {
             body: [["Beta", "2", "ReadyDone"], ["Gamma", "3", "Waiting"]],
             duplicateIDs: 0,
