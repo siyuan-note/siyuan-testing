@@ -409,9 +409,20 @@ export class SiyuanAPI {
     }
 
     async getDocumentPaths(notebook: string, ids: string[]) {
-        return this.post<{documents: IDocumentPath[]; missingIDs: string[]}>("/api/filetree/getDocPaths", {
-            notebook, ids,
-        });
+        const path = "/api/filetree/getDocPaths";
+        const deadline = Date.now() + 30000;
+        while (true) {
+            const result = await this.postResult<{documents: IDocumentPath[]; missingIDs: string[]}>(path, {
+                notebook, ids,
+            });
+            if (result.code === 0) {
+                return result.data;
+            }
+            if (result.code !== -1 || result.msg !== "document metadata is not ready" || Date.now() >= deadline) {
+                throw new Error(`${path} failed with code ${result.code}: ${result.msg}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
     }
 
     async resolveDocumentPath(notebook: string, segments: string[]) {
