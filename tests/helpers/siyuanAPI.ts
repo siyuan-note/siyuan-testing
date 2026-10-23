@@ -1,4 +1,5 @@
-import {APIRequestContext} from "@playwright/test";
+import {APIRequestContext, expect} from "@playwright/test";
+import {randomInt} from "node:crypto";
 
 export interface ISiyuanResponse<T> {
     code: number;
@@ -42,6 +43,17 @@ export interface IDocumentEntry {
 export interface IDocumentLocation {
     notebook: string;
     path: string;
+}
+
+export interface IDocumentPath extends IDocumentLocation {
+    id: string;
+    parentID: string | null;
+    title: {format: "plain"; text: string; empty: boolean};
+    segments: Array<{id: string; text: string; empty: boolean}>;
+    depth: number;
+    displayPath: string;
+    revision: string;
+    addressingVersion: number;
 }
 
 export interface IDuplicatedDocument extends IDocumentLocation {
@@ -328,7 +340,12 @@ export class SiyuanAPI {
     }
 
     async getNotebookConf(notebook: string) {
-        return this.post<{box: string; name: string; conf: INotebookConf}>("/api/notebook/getNotebookConf", {
+        return this.post<{box: string; name: string; conf: INotebookConf; documentCapabilities?: {
+            addressingVersion: number;
+            modeState: string;
+            indexState: string;
+            literalSlash: boolean;
+        }}>("/api/notebook/getNotebookConf", {
             notebook,
         });
     }
@@ -370,12 +387,36 @@ export class SiyuanAPI {
         return [...documents.values()];
     }
 
-    async createDocument(notebook: string, title: string, markdown = "") {
-        return this.post<string>("/api/filetree/createDocWithMd", {
+    async createDocument(notebook: string, title: string, markdown = "", parentID: string | null = null) {
+        await expect.poll(async () => (await this.getNotebookConf(notebook)).documentCapabilities?.indexState, {
+            message: `waiting for document metadata in notebook ${notebook}`,
+            timeout: 30000,
+        }).toBe("ready");
+        const now = new Date();
+        const timestamp = [now.getFullYear(), now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes(),
+            now.getSeconds()].map(value => String(value).padStart(2, "0")).join("");
+        const id = `${timestamp}-` +
+            randomInt(36 ** 7).toString(36).padStart(7, "0");
+        const created = await this.post<{id: string; document: IDocumentPath}>("/api/filetree/createDocByParent", {
             notebook,
-            path: `/${title}`,
+            parentID,
+            id,
+            title: {format: "plain", text: title},
             markdown,
         }, 30000);
+        expect(created.id).toBe(id);
+        return created.id;
+    }
+
+    async getDocumentPaths(notebook: string, ids: string[]) {
+        return this.post<{documents: IDocumentPath[]; missingIDs: string[]}>("/api/filetree/getDocPaths", {
+            notebook, ids,
+        });
+    }
+
+    async resolveDocumentPath(notebook: string, segments: string[]) {
+        return this.post<{status: string; resolved: IDocumentPath | null; candidates: IDocumentPath[]}>(
+            "/api/filetree/resolveDocPath", {notebook, start: {kind: "root"}, segments});
     }
 
     async removeDocument(id: string) {

@@ -47,21 +47,23 @@ test.describe("document creation templates", () => {
                 await notebookRoot.hover();
                 const createAction = notebookRoot.locator(':scope > [data-type="new"]');
                 await expect(createAction).toBeVisible();
-                const savePathResponsePromise = page.waitForResponse(response =>
-                    new URL(response.url()).pathname === "/api/filetree/getDocCreateSavePath");
+                const planResponsePromise = page.waitForResponse(response =>
+                    new URL(response.url()).pathname === "/api/filetree/planDocCreate");
                 const createResponsePromise = page.waitForResponse(response => {
-                    if (new URL(response.url()).pathname !== "/api/filetree/createDoc") {
+                    if (new URL(response.url()).pathname !== "/api/filetree/createDocByParent") {
                         return false;
                     }
                     const request = response.request().postDataJSON() as {docCreateTemplatePath?: string};
                     return request.docCreateTemplatePath === `/${templateName}`;
                 });
                 await createAction.click();
-                const savePathResponse = await savePathResponsePromise;
-                const savePathResult = await savePathResponse.json() as ISiyuanResponse<{
-                    docCreateTemplatePath: string;
+                const planResponse = await planResponsePromise;
+                const planResult = await planResponse.json() as ISiyuanResponse<{
+                    steps: Array<{docCreateTemplatePath: string}>;
                 }>;
-                expect(savePathResult.data.docCreateTemplatePath).toBe(`/${templateName}`);
+                expect(planResult.code).toBe(0);
+                expect(planResult.data.steps[planResult.data.steps.length - 1].docCreateTemplatePath)
+                    .toBe(`/${templateName}`);
                 const response = await createResponsePromise;
                 const result = await response.json() as ISiyuanResponse<{id: string}>;
                 expect(result.code).toBe(0);

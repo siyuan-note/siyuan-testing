@@ -104,6 +104,38 @@ const createStandaloneHTML = (title: string, content: string, servePath = "") =>
 </html>`;
 
 test.describe("document export", () => {
+    test("exports colliding display paths without losing literal slash titles or content", async ({
+        createTestDocument, siyuanAPI, trackTestDocument,
+    }) => {
+        const marker = `Slash export ${Date.now()}`;
+        const root = await createTestDocument("Structured Title Export", `${marker} root`);
+        const create = async (title: string, content: string, parentID = root.docID) => {
+            const id = await siyuanAPI.createDocument(root.notebookID, title, content, parentID);
+            trackTestDocument({id, notebookID: root.notebookID, title});
+            return id;
+        };
+        const parent = await create("A", `${marker} parent`);
+        await create("B", `${marker} child`, parent);
+        await create("A/B", `${marker} literal`);
+        const exported = await siyuanAPI.post<{name: string; zip: string}>("/api/export/exportMd", {
+            id: root.docID, addTitle: true, includeSubDocs: true, includeRelatedDocs: false, markdownYFM: false,
+        });
+        const entries = readZipEntries(await siyuanAPI.downloadFile(exported.zip));
+        const documents = [...entries].filter(([name]) => name.endsWith(".md"));
+        expect(documents).toHaveLength(4);
+        expect(new Set(documents.map(([name]) => name.toLocaleLowerCase())).size).toBe(4);
+        for (const suffix of ["root", "parent", "child", "literal"]) {
+            expect(documents.filter(([, content]) => content.toString("utf8").includes(`${marker} ${suffix}`)))
+                .toHaveLength(1);
+        }
+        const literal = documents.find(([, content]) => content.toString("utf8").includes(`${marker} literal`));
+        expect(literal?.[1].toString("utf8")).toContain("# A/B");
+        for (const [name] of documents) {
+            expect(name.startsWith("/")).toBe(false);
+            expect(name.split("/")).not.toContain("..");
+        }
+    });
+
     test("exports rich content as a Markdown ZIP from the document menu", async ({
         createTestDocument,
         page,
