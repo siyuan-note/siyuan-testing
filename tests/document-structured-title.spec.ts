@@ -151,7 +151,16 @@ test.describe("structured document titles", () => {
         const childID = await siyuanAPI.createDocument(parent.notebookID, childTitle, "Referenced content", parent.docID);
         trackTestDocument({id: childID, notebookID: parent.notebookID, title: childTitle});
         const reference = await createTestDocument("Structured Title Reference");
-        await reference.editor.locator('[contenteditable="true"]').first().click();
+        const paragraph = reference.editor.locator(':scope > [data-type="NodeParagraph"]').first();
+        const paragraphID = await paragraph.getAttribute("data-node-id");
+        // 文档创建与引用搜索索引异步完成，候选就绪后再触发编辑器搜索。
+        await expect.poll(async () => {
+            const result = await siyuanAPI.post<{blocks: Array<{id: string}> | null}>("/api/search/searchRefBlock", {
+                id: paragraphID, rootID: reference.docID, k: query, beforeLen: 48,
+            });
+            return result.blocks?.some(block => block.id === childID) ?? false;
+        }, {message: "waiting for the child document reference candidate", timeout: 30000}).toBe(true);
+        await paragraph.locator('[contenteditable="true"]').click();
         await page.keyboard.type(`((${query}`, {delay: 10});
         const option = page.locator(`.protyle-hint:not(.fn__none) button:has([data-node-id="${childID}"])`).first();
         await expect(option).toBeVisible({timeout: 15000});
