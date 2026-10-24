@@ -489,15 +489,19 @@ test.describe("command palette", () => {
                 await expect(page.locator(`.sy__file li[data-node-id="${target.docID}"]`)).toHaveCount(1);
                 const before = (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id);
                 await focusCommandTarget(editor.locator('[data-type="NodeParagraph"]'));
-                const response = page.waitForResponse(item => new URL(item.url()).pathname === "/api/filetree/createDoc");
-                await runPaletteCommand(page, `core.context.document.${key}`);
-                const createdResponse = await response;
-                const payload = createdResponse.request().postDataJSON() as {path: string; notebook: string};
-                const createdID = payload.path.split("/").pop()!.replace(/\.sy$/, "");
+                const [createdResponse] = await Promise.all([
+                    page.waitForResponse(item => new URL(item.url()).pathname === "/api/filetree/createDocByParent" &&
+                        item.request().method() === "POST" && item.request().postDataJSON().notebook === target.notebookID),
+                    runPaletteCommand(page, `core.context.document.${key}`),
+                ]);
+                const payload = createdResponse.request().postDataJSON() as {id: string; parentID: string | null; notebook: string};
+                const result = await createdResponse.json();
+                const createdID = payload.id;
                 trackTestDocument({id: createdID, notebookID: payload.notebook, title: `Command Palette ${key} generated`});
-                expect((await createdResponse.json()).code).toBe(0);
+                expect(result).toMatchObject({code: 0, data: {id: createdID}});
                 expect(payload.notebook).toBe(target.notebookID);
-                expect(payload.path).toBe(`/${createdID}.sy`);
+                expect(payload.parentID).toBeNull();
+                expect(await siyuanAPI.findDocumentPath(createdID)).toMatchObject({notebook: target.notebookID, path: `/${createdID}.sy`});
                 const expected = [...before];
                 expected.splice(before.indexOf(target.docID) + (key === "newDocBelow" ? 1 : 0), 0, createdID);
                 await expect.poll(async () => (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id),

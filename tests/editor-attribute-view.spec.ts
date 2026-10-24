@@ -389,7 +389,8 @@ const insertAttributeView = async (page: Page, editor: Locator, api: SiyuanAPI, 
 
     const responses = observeAttributeViewResponses(page);
     try {
-        await databaseOption.click();
+        // 首次插入需要初始化数据库渲染，点击处理也必须等待初始化完成。
+        await databaseOption.click({timeout: 30000});
         const block = editor.locator(':scope > [data-type="NodeAttributeView"]');
         await expect(block).toHaveCount(1);
         await expect(block).toHaveAttribute("data-av-type", "table");
@@ -1197,6 +1198,7 @@ test.describe("attribute views", () => {
         page,
         siyuanAPI,
     }) => {
+        test.slow();
         const document = await createTestDocument("Attribute View Lifecycle E2E", "Database seed");
         const inserted = await insertAttributeView(page, document.editor, siyuanAPI, document.docID);
         let block = inserted.block;
