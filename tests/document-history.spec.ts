@@ -47,11 +47,12 @@ test.describe("document history", () => {
         await historyMenuItem.click();
 
         const historyDialog = page.locator('[data-key="dialog-historydoc"]');
+        await expect(historyDialog).toHaveClass(/\bb3-dialog--open\b/);
         await expect(historyDialog.locator(".b3-dialog__header")).toHaveText(document.title);
         await expect(historyDialog.locator(".b3-dialog__header em")).toHaveCount(0);
         const snapshot = historyDialog.locator(`.history__side .b3-list-item[data-created="${created}"]`);
         await expect(snapshot).toBeVisible({timeout: 15000});
-        await snapshot.click();
+        await snapshot.locator(".b3-list-item__text").click();
         const preview = historyDialog.locator('.history__text[data-type="docPanel"]');
         await expect(preview).toBeVisible({timeout: 15000});
         await expect(preview).toContainText(original);
