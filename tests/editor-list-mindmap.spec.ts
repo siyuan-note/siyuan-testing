@@ -122,13 +122,24 @@ for (const target of ["canvas", "node"] as const) {
     });
 }
 
-test("editing a new empty node hides the placeholder and preserves its text after reload", async ({
+test("a new empty node stays selected and hides its placeholder when edited, preserving text after reload", async ({
     page, createTestDocument, siyuanAPI,
 }) => {
     const {editor, host, list, listID, itemIDs, docID} = await setupMindmap(createTestDocument);
     await host.locator(`[data-mindmap-id="${itemIDs[0]}"] .mindmap-view__content`).click();
     await page.keyboard.press("Enter");
-    const content = host.locator(".mindmap-view__node--editing > .mindmap-view__content");
+    const items = list.locator(':scope > [data-type="NodeMindmapItem"]');
+    await expect(items).toHaveCount(3);
+    const newID = await items.nth(1).getAttribute("data-node-id");
+    expect(newID).toBeTruthy();
+    expect(itemIDs).not.toContain(newID);
+    const node = host.locator(`[data-mindmap-id="${newID}"]`);
+    await expect(node).toHaveClass(/mindmap-view__node--selected/);
+    await expect(host).toBeFocused();
+    await expect(host.locator(".mindmap-view__node--editing")).toHaveCount(0);
+    await page.keyboard.press("Space");
+    await expect(node).toHaveClass(/mindmap-view__node--editing/);
+    const content = node.locator(":scope > .mindmap-view__content");
     await expect(content).toBeVisible();
     const editable = content.locator('.protyle-wysiwyg [contenteditable="true"]').first();
     // contenteditable 的焦点属于编辑宿主，正文内的光标位置由浏览器选区表示。
@@ -140,8 +151,6 @@ test("editing a new empty node hides the placeholder and preserves its text afte
     expect(await content.evaluate(element => element.contains(document.activeElement))).toBe(true);
     expect(await content.evaluate(element => getComputedStyle(element, "::before").content)).toBe("none");
     await expect(content.locator("[placeholder]:not([placeholder=''])")).toHaveCount(0);
-    const newID = await content.locator("..").getAttribute("data-mindmap-id");
-    expect(newID).toBeTruthy();
     const text = "A complete new mind map node";
     await page.keyboard.insertText(text);
     await expect(editable).toHaveText(text);
