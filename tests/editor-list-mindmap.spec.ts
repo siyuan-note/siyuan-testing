@@ -135,7 +135,8 @@ test("a new empty node stays selected and hides its placeholder when edited, pre
     expect(itemIDs).not.toContain(newID);
     const node = host.locator(`[data-mindmap-id="${newID}"]`);
     await expect(node).toHaveClass(/mindmap-view__node--selected/);
-    await expect(host).toBeFocused();
+    // 选中态由输入层接收原生输入法文本，空格仍用于进入节点正文编辑。
+    await expect(host.locator('.mindmap-view__selection-input[contenteditable="plaintext-only"]')).toBeFocused();
     await expect(host.locator(".mindmap-view__node--editing")).toHaveCount(0);
     await page.keyboard.press("Space");
     await expect(node).toHaveClass(/mindmap-view__node--editing/);
