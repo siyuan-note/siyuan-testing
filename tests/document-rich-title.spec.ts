@@ -79,6 +79,23 @@ test("rich title preserves inline styles and body through paste, reload and undo
     await expect(getTitle(page, document.docID).locator('[data-type~="strong"]')).toHaveText("Bold");
     expect((await readTitle(siyuanAPI, document.docID)).source).toEqual(saved.source);
     expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(before.Children);
+    const restoredTitle = getTitle(page, document.docID);
+    const bodyParagraph = (await getDocumentEditor(page, document.docID))
+        .locator('[data-type="NodeParagraph"] > [contenteditable]').first();
+    const titleBounds = await restoredTitle.boundingBox();
+    const bodyBounds = await bodyParagraph.boundingBox();
+    expect(Math.abs(titleBounds!.x - bodyBounds!.x), "title and body share the same text start").toBeLessThan(8);
+    const titleWysiwyg = restoredTitle.locator("xpath=ancestor::*[contains(@class, 'protyle-wysiwyg')][1]");
+    await titleWysiwyg.evaluate(element => {
+        const last = element.lastElementChild!.getBoundingClientRect();
+        element.dispatchEvent(new MouseEvent("click", {
+            bubbles: true, clientX: last.left + 10, clientY: last.bottom + 8,
+        }));
+    });
+    await expect(titleWysiwyg.locator(':scope > [data-type="NodeParagraph"]')).toHaveCount(1);
+    await expect.poll(() => restoredTitle.evaluate(element => element.contains(getSelection()?.anchorNode || null)))
+        .toBe(true);
+    expect((await readTitle(siyuanAPI, document.docID)).source).toEqual(saved.source);
 });
 
 test("title block references create a root backlink and follow target renames", async ({
