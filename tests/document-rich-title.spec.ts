@@ -2,6 +2,7 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {showDock} from "./helpers/runtime";
 
 interface ITitleSource {
     text: string;
@@ -173,4 +174,56 @@ test("title block references create a root backlink and follow target renames", 
     await getDocumentEditor(page, sourceID);
     await expect(getTitle(page, sourceID).locator(`[data-type~="block-ref"][data-id="${target.docID}"]`))
         .toHaveText(renamed);
+});
+
+test("outline document title renders rich inline content and refreshes style-only edits", async ({
+    page, createTestDocument, siyuanAPI,
+}) => {
+    const document = await createTestDocument("Rich Title Outline E2E",
+        "**Bold** *Italic* ~~Strike~~ ==Mark== `Code` [Link](https://example.com) $x^2$ #Tag#\n\n## Child heading");
+    const title = getTitle(page, document.docID);
+    await pasteParagraphIntoTitle(document.editor.locator('[data-type="NodeParagraph"] > [contenteditable]').first(), title);
+    await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).source !== null).toBe(true);
+    const restoreDock = await showDock(page);
+    const dockItem = page.locator('.dock__item[data-type="outline"]').first();
+    const panel = page.locator(".sy__outline:visible").last();
+    const originallyVisible = await panel.locator(".block__logo").isVisible();
+    const previousDock = await dockItem.locator("xpath=parent::*").evaluate(element =>
+        element.querySelector(".dock__item--activefocus")?.getAttribute("data-type"));
+    try {
+        if (!originallyVisible) {
+            await dockItem.click();
+            if (!await panel.locator(".block__logo").isVisible()) await dockItem.click();
+        }
+        const label = panel.locator(":scope > .b3-list-item > .b3-list-item__text");
+        await expect(label.locator('[data-type~="strong"]')).toHaveText("Bold");
+        await expect(label.locator('[data-type="inline-math"] .katex')).toBeVisible();
+        for (const type of ["em", "s", "mark", "code", "a", "tag"]) {
+            await expect(label.locator(`[data-type~="${type}"]`)).toHaveCount(1);
+        }
+        await expect(panel.locator(":scope > .b3-list-item > .counter")).toHaveText("1");
+        const before = await readTitle(siyuanAPI, document.docID);
+        await title.focus();
+        await title.locator('[data-type~="strong"]').evaluate(element => {
+            const range = window.document.createRange();
+            range.selectNodeContents(element);
+            getSelection()!.removeAllRanges();
+            getSelection()!.addRange(range);
+        });
+        await page.keyboard.press("ControlOrMeta+i");
+        await title.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).revision).not.toBe(before.revision);
+        expect((await readTitle(siyuanAPI, document.docID)).text).toBe(before.text);
+        await expect(label.locator('[data-type~="strong"][data-type~="em"]')).toHaveText("Bold");
+        await label.click();
+        await expect(title).toBeVisible();
+    } finally {
+        if (!originallyVisible && await panel.locator(".block__logo").isVisible()) {
+            await dockItem.click();
+            if (previousDock && previousDock !== "outline") {
+                await dockItem.locator("xpath=parent::*").locator(`.dock__item[data-type="${previousDock}"]`).click();
+            }
+        }
+        await restoreDock();
+    }
 });
