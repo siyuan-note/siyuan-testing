@@ -106,7 +106,10 @@ require(${JSON.stringify(path.join(appDir, "electron", "main.js"))});
                 })]);
             } catch (error) {
                 console.warn(`[siyuan-testing] Electron cleanup fallback: ${String(error)}`);
-                await app.evaluate(({app}) => app.exit(0)).catch(() => app.process().kill());
+                clearTimeout(deadline);
+                await Promise.race([app.evaluate(({app}) => app.exit(0)), new Promise<never>((_resolve, reject) => {
+                    deadline = setTimeout(() => reject(new Error("Managed Electron exit timed out")), 5000);
+                })]).catch(() => app.process().kill());
             } finally {
                 clearTimeout(deadline);
                 await stopKernel();

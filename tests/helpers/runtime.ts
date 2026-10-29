@@ -73,10 +73,17 @@ export const openWorkspace = async (page: Page, path = "/") => {
     await page.goto(process.env.SIYUAN_ELECTRON_ORIGIN ?
         new URL(target, process.env.SIYUAN_ELECTRON_ORIGIN).href : target);
     await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
-    await expect.poll(() => page.evaluate(() => {
-        const runtime = window.siyuan as typeof window.siyuan & {ws?: {ws?: WebSocket}};
-        return runtime.ws?.ws?.readyState;
-    }), {message: "waiting for the main kernel WebSocket", timeout: 15000}).toBe(1);
+    await expect.poll(async () => {
+        try {
+            return await page.evaluate(() => {
+                const runtime = window.siyuan as typeof window.siyuan & {ws?: {ws?: WebSocket}};
+                return runtime.ws?.ws?.readyState;
+            });
+        } catch (error) {
+            if (error instanceof Error && error.message.includes("Execution context was destroyed")) return undefined;
+            throw error;
+        }
+    }, {message: "waiting for the main kernel WebSocket", timeout: 15000}).toBe(1);
     await expect(page.locator("#errorLog")).toHaveCount(0);
     const dialog = page.locator('[data-key="dialog-changelog"]');
     if (await dialog.isVisible()) {

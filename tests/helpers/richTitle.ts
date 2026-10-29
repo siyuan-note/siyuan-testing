@@ -3,6 +3,7 @@ import {SiyuanAPI} from "./siyuanAPI";
 
 export interface ITitleSource {
     text: string;
+    empty: boolean;
     revision: string;
     blockDOM: string;
     source: {spec: number; format: string; content: string} | null;
@@ -13,6 +14,18 @@ export const getTitle = (page: Page, id: string) => page.locator(
 ).last();
 
 export const readTitle = (api: SiyuanAPI, id: string) => api.post<ITitleSource>("/api/block/getDocTitle", {id});
+
+export const setTitleSource = async (api: SiyuanAPI, id: string, nodes: Array<Record<string, unknown>>) => {
+    const before = await readTitle(api, id);
+    await api.post("/api/transactions", {
+        app: "siyuan-testing", session: id, reqId: Date.now(),
+        transactions: [{doOperations: [{action: "setDocTitle", id, data: {
+            source: {spec: 1, format: "inline-ast", content: JSON.stringify(nodes)},
+            expectedRevision: before.revision,
+        }}]}],
+    });
+    return readTitle(api, id);
+};
 
 export const pasteParagraphIntoTitle = async (source: Locator, title: Locator, clear = false) => {
     await source.focus();

@@ -3,11 +3,13 @@ import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
+import {getTitle, readTitle} from "./helpers/richTitle";
 
 interface ISyDocument {
     ID: string;
     Spec: string;
     Properties: Record<string, string>;
+    Children: unknown[];
 }
 
 const renameInEditor = async (page: Page, api: SiyuanAPI, id: string, title: string) => {
@@ -30,7 +32,7 @@ const renameInEditor = async (page: Page, api: SiyuanAPI, id: string, title: str
 };
 
 test.describe("structured document titles", () => {
-    test("uses Unicode characters consistently at the editor title length boundary", async ({
+    test("preserves Unicode title source beyond the legacy plain-text length boundary", async ({
         page, createTestDocument, siyuanAPI,
     }) => {
         const document = await createTestDocument("Structured Title Unicode Limit");
@@ -38,16 +40,21 @@ test.describe("structured document titles", () => {
         await renameInEditor(page, siyuanAPI, document.docID, title);
         const input = page.locator(`.protyle-title[data-node-id="${document.docID}"]:visible .protyle-title__input`).last();
         await input.fill(`${title}😀`);
-        await expect(input).toHaveText(title);
+        await input.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe(`${title}😀`);
+        await page.reload();
+        await getDocumentEditor(page, document.docID);
+        await expect(input).toHaveText(`${title}😀`);
         const source = await siyuanAPI.readDocument<ISyDocument>(document.docID);
-        expect(source.Properties.title).toBe(title);
-        expect(Array.from(source.Properties.title)).toHaveLength(512);
+        expect(source.Properties.title).toBe(`${title}😀`);
+        expect(Array.from(source.Properties.title)).toHaveLength(513);
+        expect((await readTitle(siyuanAPI, document.docID)).source!.content).toContain(`${title}😀`);
     });
 
     test("preserves title characters through editor input and reload", async ({page, createTestDocument, siyuanAPI}) => {
         test.setTimeout(120000);
         const document = await createTestDocument("Structured Title Characters", "Title character fixture");
-        for (const title of ["A/B", "A//B", "A／B", "A%2FB", ".", "..", "文档/测试 🚀", "**Title** / [text](link)", ""]) {
+        for (const title of ["A/B", "A//B", "A／B", "A%2FB", ".", "..", "文档/测试 🚀", ""]) {
             await test.step(JSON.stringify(title), async () => {
                 await renameInEditor(page, siyuanAPI, document.docID, title);
                 const source = await siyuanAPI.readDocument<ISyDocument>(document.docID);
@@ -59,6 +66,52 @@ test.describe("structured document titles", () => {
                 expect(path.title.text).toBe(source.Properties.title);
             });
         }
+    });
+
+    test("parses newly entered inline Markdown without changing the document body", async ({
+        page, createTestDocument, siyuanAPI,
+    }) => {
+        const document = await createTestDocument("Structured Title Markdown", "Markdown title body fixture");
+        const before = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+        const input = getTitle(page, document.docID);
+        await input.fill("**Title** / [text](link)");
+        await input.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe("Title / text");
+        await page.reload();
+        await getDocumentEditor(page, document.docID);
+        await expect(input.locator('[data-type~="strong"]')).toHaveText("Title");
+        await expect(input.locator('[data-type~="a"]')).toHaveText("text");
+        await expect(input.locator('[data-type~="a"]')).toHaveAttribute("data-href", "link");
+        expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(before.Children);
+    });
+
+    test("keeps legacy literal Markdown titles literal when editing and reloading", async ({
+        page, createTestDocument, siyuanAPI,
+    }) => {
+        const document = await createTestDocument("**Title** / [text](link) Legacy Title", "Legacy title body fixture");
+        const before = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+        expect((await readTitle(siyuanAPI, document.docID)).source).toBeNull();
+        const input = getTitle(page, document.docID);
+        await expect(input).toHaveText(document.title);
+        await expect(input.locator('[data-type~="strong"], [data-type~="a"]')).toHaveCount(0);
+        await input.evaluate(element => {
+            element.focus();
+            const range = window.document.createRange();
+            range.selectNodeContents(element);
+            range.collapse(false);
+            const selection = window.getSelection()!;
+            selection.removeAllRanges();
+            selection.addRange(range);
+        });
+        await page.keyboard.insertText(" appended");
+        await input.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text)
+            .toBe(`${document.title} appended`);
+        await page.reload();
+        await getDocumentEditor(page, document.docID);
+        await expect(input).toHaveText(`${document.title} appended`);
+        await expect(input.locator('[data-type~="strong"], [data-type~="a"]')).toHaveCount(0);
+        expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(before.Children);
     });
 
     test("distinguishes a literal slash title from a parent and child with the same display path", async ({
@@ -115,11 +168,11 @@ test.describe("structured document titles", () => {
         await renameInEditor(page, siyuanAPI, parent.docID, parentTitle);
         const restoreFileTree = await showFileTree(page);
         try {
-            const item = page.locator(`li[data-type="navigation-file"][data-node-id="${parent.docID}"]`);
-            if (!await item.isVisible()) {
-                const root = page.locator(`ul[data-url="${parent.notebookID}"] > li[data-type="navigation-root"]`);
-                await root.locator(":scope > .b3-list-item__toggle").click();
-            }
+            // Locate the open document through the public UI: virtualized rows need not exist before locating.
+            const tree = page.locator(".sy__file:visible");
+            await tree.locator(".block__logo").hover();
+            await tree.locator('[data-type="focus"]').click();
+            const item = tree.locator(`li[data-type="navigation-file"][data-node-id="${parent.docID}"]`);
             await expect(item).toBeVisible();
             await item.hover();
             const responsePromise = page.waitForResponse(response =>
@@ -167,6 +220,11 @@ test.describe("structured document titles", () => {
         await option.click();
         await expect(reference.editor.locator(`[data-type~="block-ref"][data-id="${childID}"]`))
             .toHaveText(childTitle);
+        // Commit the editor interaction before moving the target and navigating to another document.
+        await getTitle(page, reference.docID).click();
+        await expect.poll(async () => JSON.stringify(
+            (await siyuanAPI.readDocument<ISyDocument>(reference.docID)).Children,
+        ), {message: "waiting for the inserted reference to persist", timeout: 15000}).toContain(childID);
         await siyuanAPI.moveDocuments([parent.docID], destination.docID);
         await renameInEditor(page, siyuanAPI, parent.docID, "Moved/Parent");
         await expect.poll(async () => {
