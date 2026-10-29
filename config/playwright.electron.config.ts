@@ -6,7 +6,7 @@ if (!process.env.SIYUAN_ELECTRON_APP_DIR) {
 
 export default defineConfig({
     testDir: "../tests",
-    testMatch: "document-rich-title.spec.ts",
+    testMatch: ["document-rich-title.spec.ts", "document-title-backlinks.spec.ts"],
     workers: 1,
     retries: 0,
     timeout: 120000,

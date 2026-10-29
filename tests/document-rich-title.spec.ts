@@ -1,16 +1,8 @@
-import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
-import {SiyuanAPI} from "./helpers/siyuanAPI";
 import {openWorkspace, showDock} from "./helpers/runtime";
 import {readZipEntries} from "./helpers/zip";
-
-interface ITitleSource {
-    text: string;
-    revision: string;
-    blockDOM: string;
-    source: {spec: number; format: string; content: string} | null;
-}
+import {getTitle, pasteParagraphIntoTitle, readTitle} from "./helpers/richTitle";
 
 interface ISyNode {
     ID?: string;
@@ -26,12 +18,6 @@ interface ISyDocument {
     Children: ISyNode[];
 }
 
-const getTitle = (page: Page, id: string) => page.locator(
-    `.protyle-title[data-node-id="${id}"]:visible .protyle-title__rich .protyle-title__input`,
-).last();
-
-const readTitle = (api: SiyuanAPI, id: string) => api.post<ITitleSource>("/api/block/getDocTitle", {id});
-
 // A trailing tag gains a caret placeholder in the editor. It is not title text;
 // compare all other inline fields exactly, including real whitespace and marks.
 const withoutTagCaretPlaceholder = (nodes: ISyNode[] | undefined) => nodes?.map((node, index) => {
@@ -42,33 +28,6 @@ const withoutTagCaretPlaceholder = (nodes: ISyNode[] | undefined) => nodes?.map(
     }
     return node;
 });
-
-const pasteParagraphIntoTitle = async (source: Locator, title: Locator, clear = false) => {
-    await source.focus();
-    const clipboard = await source.evaluate(element => {
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        getSelection()!.removeAllRanges();
-        getSelection()!.addRange(range);
-        const data = new DataTransfer();
-        element.dispatchEvent(new ClipboardEvent("copy", {bubbles: true, cancelable: true, clipboardData: data}));
-        return Object.fromEntries(Array.from(data.types, type => [type, data.getData(type)]));
-    });
-    expect(clipboard["text/html"]).toBeTruthy();
-    // 选中文字后粘贴单个引用会按原生规则创建静态锚文本；先清空才能验证动态引用。
-    if (clear) await title.fill("");
-    await title.focus();
-    await title.evaluate((element, clipboard) => {
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        getSelection()!.removeAllRanges();
-        getSelection()!.addRange(range);
-        const data = new DataTransfer();
-        Object.entries(clipboard).forEach(([type, value]) => data.setData(type, value));
-        element.dispatchEvent(new ClipboardEvent("paste", {bubbles: true, cancelable: true, clipboardData: data}));
-    }, clipboard);
-    await title.press("Tab");
-};
 
 test("rich title preserves inline styles and body through paste, reload and undo", async ({
     page, createTestDocument, siyuanAPI,
