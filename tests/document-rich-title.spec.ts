@@ -85,6 +85,15 @@ test("rich title preserves inline styles and body through paste, reload and undo
     const titleBounds = await restoredTitle.boundingBox();
     const bodyBounds = await bodyParagraph.boundingBox();
     expect(Math.abs(titleBounds!.x - bodyBounds!.x), "title and body share the same text start").toBeLessThan(8);
+    const titleHost = restoredTitle.locator("xpath=ancestor::*[contains(@class, 'protyle-title__rich')][1]");
+    for (const width of [1440, 900, 1440]) {
+        await page.setViewportSize({width, height: 900});
+        await getDocumentEditor(page, document.docID);
+        const contentBounds = await restoredTitle.boundingBox();
+        const hostBounds = await titleHost.boundingBox();
+        expect(hostBounds!.height - contentBounds!.height, "title host follows single or wrapped content height")
+            .toBeLessThanOrEqual(8);
+    }
     const titleWysiwyg = restoredTitle.locator("xpath=ancestor::*[contains(@class, 'protyle-wysiwyg')][1]");
     await titleWysiwyg.evaluate(element => {
         const last = element.lastElementChild!.getBoundingClientRect();
@@ -96,6 +105,39 @@ test("rich title preserves inline styles and body through paste, reload and undo
     await expect.poll(() => restoredTitle.evaluate(element => element.contains(getSelection()?.anchorNode || null)))
         .toBe(true);
     expect((await readTitle(siyuanAPI, document.docID)).source).toEqual(saved.source);
+    await titleWysiwyg.evaluate(element => {
+        const blanks: string[] = [];
+        const observer = new MutationObserver(records => {
+            records.forEach(record => record.addedNodes.forEach(node => {
+                if (node instanceof HTMLElement) {
+                    node.querySelectorAll<HTMLElement>('[data-type="inline-math"]').forEach(math => {
+                        if (math.dataset.render !== "true") blanks.push(math.outerHTML);
+                    });
+                }
+            }));
+        });
+        observer.observe(element, {childList: true, subtree: true});
+        (window as unknown as {titleInputObservation: {blanks: string[], stop: () => void}})
+            .titleInputObservation = {blanks, stop: () => observer.disconnect()};
+    });
+    await restoredTitle.focus();
+    await restoredTitle.evaluate(element => {
+        const range = window.document.createRange();
+        range.selectNodeContents(element);
+        range.collapse(false);
+        getSelection()!.removeAllRanges();
+        getSelection()!.addRange(range);
+    });
+    await page.keyboard.type("123", {delay: 300});
+    await restoredTitle.press("Tab");
+    await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toContain("123");
+    expect(await page.evaluate(() => {
+        const observation = (window as unknown as {titleInputObservation: {blanks: string[], stop: () => void}})
+            .titleInputObservation;
+        observation.stop();
+        return observation.blanks;
+    }),
+        "unchanged formulas stay rendered while typing adjacent text").toEqual([]);
 });
 
 test("title block references create a root backlink and follow target renames", async ({
