@@ -49,7 +49,7 @@ export const getDocumentEditor = async (page: Page, docID: string) => {
     const tabID = await visibleProtyle.getAttribute("data-id");
     const protyle = tabID ? page.locator(`.protyle[data-id="${tabID}"]`) : visibleProtyle;
     await expect(protyle).toHaveAttribute("data-loading", "finished", {timeout: 15000});
-    const editor = protyle.locator(".protyle-wysiwyg").first();
+    const editor = protyle.locator(".protyle-wysiwyg:not(.protyle-title .protyle-wysiwyg)").first();
     await expect(editor).toBeVisible({timeout: 10000});
     // 字体和侧栏宽度影响正文布局，连续采样正文边界，避免无关动画阻塞编辑器就绪。
     await editor.evaluate(() => document.fonts.ready.then(() => undefined));
