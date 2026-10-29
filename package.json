@@ -8,6 +8,7 @@
     "test": "node scripts/start-siyuan.mjs --run-tests",
     "test:smoke": "node scripts/start-siyuan.mjs --run-tests --config=config/playwright.focused.config.ts --grep @smoke",
     "test:focused": "node scripts/start-siyuan.mjs --run-tests --config=config/playwright.focused.config.ts",
+    "test:electron": "playwright test --config=config/playwright.electron.config.ts",
     "test:ipad": "node scripts/start-siyuan.mjs --run-tests --config=config/playwright.ipad.config.ts",
     "test:editor": "node scripts/start-siyuan.mjs --run-tests --config=config/playwright.focused.config.ts tests/editor",
     "test:navigation": "node scripts/start-siyuan.mjs --run-tests --config=config/playwright.focused.config.ts tests/document-lifecycle.spec.ts tests/file-tree.spec.ts tests/notebook-lifecycle.spec.ts tests/tag.spec.ts tests/bookmark-outline.spec.ts tests/dock-filter.spec.ts tests/backlink.spec.ts",

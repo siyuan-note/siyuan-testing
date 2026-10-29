@@ -68,7 +68,10 @@ export const validateTestTarget = async (api: SiyuanAPI, baseURL: string) => {
 };
 
 export const openWorkspace = async (page: Page, path = "/") => {
-    await page.goto(path === "/" || path.startsWith("/?") ? `/stage/build/desktop/${path.slice(1)}` : path);
+    const frontend = process.env.SIYUAN_ELECTRON_APP_DIR ? "app" : "desktop";
+    const target = path === "/" || path.startsWith("/?") ? `/stage/build/${frontend}/${path.slice(1)}` : path;
+    await page.goto(process.env.SIYUAN_ELECTRON_ORIGIN ?
+        new URL(target, process.env.SIYUAN_ELECTRON_ORIGIN).href : target);
     await expect(page.locator("#barSearch")).toBeVisible({timeout: 30000});
     await expect.poll(() => page.evaluate(() => {
         const runtime = window.siyuan as typeof window.siyuan & {ws?: {ws?: WebSocket}};

@@ -15,6 +15,7 @@ import {
 } from "./helpers/testNotebook";
 import {IAppearanceSettings, SiyuanAPI} from "./helpers/siyuanAPI";
 import {openWorkspace} from "./helpers/runtime";
+import {IElectronRuntime, launchElectronRuntime} from "./helpers/electronRuntime";
 
 interface IGlobalSettings {
     appearance: IAppearanceSettings;
@@ -38,7 +39,23 @@ interface IInternalFixtures {
     createdTestNotebooks: ICreatedTestNotebook[];
 }
 
-export const test = base.extend<ITestFixtures & IInternalFixtures>({
+export const test = base.extend<ITestFixtures & IInternalFixtures, {electronRuntime: IElectronRuntime}>({
+    electronRuntime: [async ({}, use) => {
+        const runtime = await launchElectronRuntime();
+        try {
+            await use(runtime);
+        } finally {
+            await runtime.close();
+        }
+    }, {scope: "worker"}],
+    ...(process.env.SIYUAN_ELECTRON_APP_DIR ? {
+        context: async ({electronRuntime}, use) => {
+            await use(electronRuntime.app.context());
+        },
+        page: async ({electronRuntime}, use) => {
+            await use(electronRuntime.page);
+        },
+    } : {}),
     localNetworkAccess: [async ({context, baseURL}, use) => {
         if (!baseURL) {
             throw new Error("playwright.config.ts must define use.baseURL");

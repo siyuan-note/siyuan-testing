@@ -2,7 +2,8 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
-import {showDock} from "./helpers/runtime";
+import {openWorkspace, showDock} from "./helpers/runtime";
+import {readZipEntries} from "./helpers/zip";
 
 interface ITitleSource {
     text: string;
@@ -11,10 +12,18 @@ interface ITitleSource {
     source: {spec: number; format: string; content: string} | null;
 }
 
+interface ISyNode {
+    ID?: string;
+    Type: string;
+    Data?: string;
+    HeadingLevel?: number;
+    Children?: ISyNode[];
+}
+
 interface ISyDocument {
     ID: string;
     DocumentTitle?: unknown;
-    Children: unknown[];
+    Children: ISyNode[];
 }
 
 const getTitle = (page: Page, id: string) => page.locator(
@@ -22,6 +31,17 @@ const getTitle = (page: Page, id: string) => page.locator(
 ).last();
 
 const readTitle = (api: SiyuanAPI, id: string) => api.post<ITitleSource>("/api/block/getDocTitle", {id});
+
+// A trailing tag gains a caret placeholder in the editor. It is not title text;
+// compare all other inline fields exactly, including real whitespace and marks.
+const withoutTagCaretPlaceholder = (nodes: ISyNode[] | undefined) => nodes?.map((node, index) => {
+    if (index === nodes.length - 1 && node.Type === "NodeText" && node.Data === "\u200b"
+        && (nodes[index - 1] as ISyNode & {TextMarkType?: string})?.TextMarkType === "tag") {
+        const {Data, ...rest} = node;
+        return rest;
+    }
+    return node;
+});
 
 const pasteParagraphIntoTitle = async (source: Locator, title: Locator, clear = false) => {
     await source.focus();
@@ -141,6 +161,138 @@ test("rich title preserves inline styles and body through paste, reload and undo
         "unchanged formulas stay rendered while typing adjacent text").toEqual([]);
 });
 
+for (const level of [1, 2, 3, 4, 5, 6]) {
+    test(`rich heading level ${level} round-trips through a document without losing source or block identity`, async ({
+        page, createTestDocument, siyuanAPI, trackTestDocument,
+    }) => {
+        const prefix = "#".repeat(level);
+        const document = await createTestDocument(`Rich Title Conversion H${level} E2E`,
+            `Before\n\n${prefix} **Bold** *Italic* ~~Strike~~ ==Mark== \`Code\` [Link](https://example.com) $x^2$ #Tag#\n\nMoved body\n\n${prefix} Stop\n\nAfter`);
+        const before = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+        const heading = before.Children.find(node => node.Type === "NodeHeading")!;
+        const headingID = heading.ID!;
+        const headingIndex = before.Children.indexOf(heading);
+        const body = before.Children[headingIndex + 1];
+        const stop = before.Children[headingIndex + 2];
+        await siyuanAPI.post<null>("/api/filetree/heading2Doc", {
+            srcHeadingID: headingID, targetNoteBook: document.notebookID, targetPath: "/",
+        });
+        trackTestDocument({id: headingID, notebookID: document.notebookID, title: `Converted H${level}`});
+        const source = await readTitle(siyuanAPI, headingID);
+        expect(withoutTagCaretPlaceholder(JSON.parse(source.source!.content)))
+            .toEqual(withoutTagCaretPlaceholder(heading.Children));
+        const converted = await siyuanAPI.readDocument<ISyDocument>(headingID);
+        expect(converted.ID).toBe(headingID);
+        expect(converted.Children.map(node => node.ID)).toContain(body.ID);
+        expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children.map(node => node.ID))
+            .not.toContain(headingID);
+        await openWorkspace(page, `/?id=${headingID}`);
+        await getDocumentEditor(page, headingID);
+        await expect(getTitle(page, headingID).locator('[data-type~="strong"]')).toHaveText("Bold");
+        await siyuanAPI.post("/api/filetree/doc2Heading", {srcID: headingID, targetID: stop.ID, after: false});
+        await openWorkspace(page, `/?id=${document.docID}`);
+        const editor = await getDocumentEditor(page, document.docID);
+        const restored = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+        expect(restored.Children.map(node => node.ID)).toEqual(before.Children.map(node => node.ID));
+        const restoredHeading = restored.Children.find(node => node.ID === headingID)!;
+        expect(restoredHeading.HeadingLevel).toBe(level);
+        expect(withoutTagCaretPlaceholder(restoredHeading.Children))
+            .toEqual(withoutTagCaretPlaceholder(heading.Children));
+        await expect(editor.locator(`[data-node-id="${headingID}"][data-type="NodeHeading"]`)).toHaveCount(1);
+        await expect(editor.locator(`[data-node-id="${body.ID}"]`)).toHaveCount(1);
+    });
+}
+
+test("title-only images stay referenced through native import and native and Markdown exports", async ({
+    page, createTestDocument, siyuanAPI, trackTestDocument,
+}) => {
+    const document = await createTestDocument("Rich Title Asset Export E2E", "Source paragraph");
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8bUAAAAASUVORK5CYII=", "base64");
+    const uploaded = await siyuanAPI.uploadAsset(document.docID, `title-${Date.now()}.png`, "image/png", png);
+    const asset = Object.values(uploaded.succMap)[0];
+    expect(asset).toBeTruthy();
+    const paragraph = document.editor.locator('[data-type="NodeParagraph"]').first();
+    const paragraphID = await paragraph.getAttribute("data-node-id");
+    await siyuanAPI.post("/api/block/updateBlock", {
+        id: paragraphID, dataType: "markdown", data: `**Image title** ![Title picture](${asset} "Picture metadata")`,
+    });
+    await page.reload();
+    const editor = await getDocumentEditor(page, document.docID);
+    await pasteParagraphIntoTitle(editor.locator('[data-type="NodeParagraph"] > [contenteditable]').first(),
+        getTitle(page, document.docID));
+    await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).source?.content || "").toContain(asset);
+    await siyuanAPI.post("/api/block/updateBlock", {id: paragraphID, dataType: "markdown", data: "Body without an asset"});
+    await siyuanAPI.flushTransactions();
+    const saved = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+    expect(JSON.stringify(saved.Children)).not.toContain(asset);
+    const titleSource = (await readTitle(siyuanAPI, document.docID)).source;
+    const unused = await siyuanAPI.post<unknown[]>("/api/asset/getUnusedAssets", {});
+    expect(JSON.stringify(unused)).not.toContain(asset);
+    let nativeArchive: Buffer | undefined;
+    for (const endpoint of ["/api/export/exportSY", "/api/export/exportMd"]) {
+        const exported = await siyuanAPI.post<{name: string; zip: string}>(endpoint, {
+            id: document.docID, addTitle: true, includeSubDocs: false, includeRelatedDocs: false, markdownYFM: false,
+        });
+        const archive = await siyuanAPI.downloadFile(exported.zip);
+        const entries = readZipEntries(archive);
+        expect([...entries.keys()].some(name => name.endsWith(asset.split("/").pop()!))).toBe(true);
+        if (endpoint.endsWith("exportSY")) {
+            nativeArchive = archive;
+            const source = [...entries].find(([name]) => name.endsWith(`${document.docID}.sy`))!;
+            expect(JSON.parse(source[1].toString("utf8")).DocumentTitle).toEqual(titleSource);
+        } else {
+            const markdown = [...entries].find(([name]) => name.endsWith(".md"))![1].toString("utf8");
+            expect(markdown).toContain("**Image title**");
+            expect(markdown).toContain("Title picture");
+        }
+    }
+    await page.reload();
+    await getDocumentEditor(page, document.docID);
+    await expect(getTitle(page, document.docID).locator("img")).toHaveAttribute("src", asset);
+    const existingIDs = new Set((await siyuanAPI.listAllDocuments(document.notebookID)).map(doc => doc.id));
+    await siyuanAPI.importArchive("/api/import/importSY", nativeArchive!, "rich-title.sy.zip", document.notebookID);
+    let importedID = "";
+    await expect.poll(async () => {
+        importedID = (await siyuanAPI.listAllDocuments(document.notebookID))
+            .find(doc => !existingIDs.has(doc.id))?.id || "";
+        return importedID;
+    }, {timeout: 30000}).not.toBe("");
+    trackTestDocument({id: importedID, notebookID: document.notebookID, title: "Imported rich title"});
+    expect((await readTitle(siyuanAPI, importedID)).source).toEqual(titleSource);
+    await openWorkspace(page, `/?id=${importedID}`);
+    await getDocumentEditor(page, importedID);
+    await expect(getTitle(page, importedID).locator("img")).toHaveAttribute("src", asset);
+    await expect(getTitle(page, importedID).locator('[data-type~="strong"]')).toHaveText("Image title");
+});
+
+test("history rollback restores the complete rich title source and its rendering", async ({
+    page, createTestDocument, siyuanAPI,
+}) => {
+    const document = await createTestDocument("Rich Title History E2E", "**Historical title** $x^2$");
+    await pasteParagraphIntoTitle(document.editor.locator('[data-type="NodeParagraph"] > [contenteditable]').first(),
+        getTitle(page, document.docID));
+    await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).source !== null).toBe(true);
+    const saved = await readTitle(siyuanAPI, document.docID);
+    await siyuanAPI.createDocumentHistory(document.docID);
+    let historyPath = "";
+    await expect.poll(async () => {
+        const history = await siyuanAPI.searchDocumentHistory(document.docID, document.notebookID, "update");
+        if (!history.histories[0]) return "";
+        const items = await siyuanAPI.getDocumentHistoryItems(document.docID, history.histories[0], "update");
+        historyPath = items.find(item => item.path.endsWith(`/${document.docID}.sy`))?.path || "";
+        return historyPath;
+    }, {timeout: 15000}).not.toBe("");
+    await getTitle(page, document.docID).fill("Replacement title");
+    await getTitle(page, document.docID).press("Tab");
+    await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe("Replacement title");
+    await siyuanAPI.rollbackDocumentHistory(historyPath);
+    await openWorkspace(page, `/?id=${document.docID}`);
+    await getDocumentEditor(page, document.docID);
+    expect((await readTitle(siyuanAPI, document.docID)).source).toEqual(saved.source);
+    await expect(getTitle(page, document.docID).locator('[data-type~="strong"]')).toHaveText("Historical title");
+    await expect(getTitle(page, document.docID).locator('[data-type="inline-math"] .katex')).toBeVisible();
+});
+
 test("title block references create a root backlink and follow target renames", async ({
     page, createTestDocument, siyuanAPI, trackTestDocument,
 }) => {
@@ -148,7 +300,7 @@ test("title block references create a root backlink and follow target renames", 
     const sourceID = await siyuanAPI.createDocument(target.notebookID, `Rich Title Ref E2E ${Date.now()}`,
         `((${target.docID} '${target.title}'))`);
     trackTestDocument({id: sourceID, notebookID: target.notebookID, title: "Rich Title Ref E2E"});
-    await page.goto(`/stage/build/desktop/?id=${sourceID}`);
+    await openWorkspace(page, `/?id=${sourceID}`);
     const editor = await getDocumentEditor(page, sourceID);
     await pasteParagraphIntoTitle(editor.locator('[data-type="NodeParagraph"] > [contenteditable]').first(),
         getTitle(page, sourceID), true);
@@ -164,13 +316,13 @@ test("title block references create a root backlink and follow target renames", 
         id: target.docID, notebook: target.notebookID, k: "", mk: "", includeMentions: false,
     });
     expect(JSON.stringify(backlinks.backlinks)).toContain(sourceID);
-    await page.goto(`/stage/build/desktop/?id=${target.docID}`);
+    await openWorkspace(page, `/?id=${target.docID}`);
     await getDocumentEditor(page, target.docID);
     const renamed = `${target.title} renamed`;
     await getTitle(page, target.docID).fill(renamed);
     await getTitle(page, target.docID).press("Tab");
     await expect.poll(async () => (await readTitle(siyuanAPI, sourceID)).text, {timeout: 30000}).toBe(renamed);
-    await page.goto(`/stage/build/desktop/?id=${sourceID}`);
+    await openWorkspace(page, `/?id=${sourceID}`);
     await getDocumentEditor(page, sourceID);
     await expect(getTitle(page, sourceID).locator(`[data-type~="block-ref"][data-id="${target.docID}"]`))
         .toHaveText(renamed);

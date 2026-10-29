@@ -22,6 +22,7 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test`: start the managed local instance, run all tests in headless mode, and stop the instance; API robustness and pure log-audit checks use two workers, while UI projects run serially.
 - `pnpm test:smoke`: run the tagged startup, document, editor, import, flashcard, and WebSocket checks in about one to two minutes.
 - `pnpm test:focused -- tests/<feature>.spec.ts`: run one spec with a managed local instance.
+- `pnpm test:electron`: run rich document title acceptance in the real Electron application with a managed test kernel.
 - `pnpm test:ipad`: run native iPad side-selection gestures with XCTest and the browser touch-cancellation regression.
 - `pnpm test:editor`: run all editor specs serially.
 - `pnpm test:navigation`: run document, notebook, file-tree, tag, bookmark, outline, and backlink specs serially.
@@ -33,9 +34,15 @@ The encrypted-notebook lifecycle test is opt-in because creating its isolated no
 - `pnpm test:repeat`: repeat the suite ten times to find synchronization problems.
 - `pnpm typecheck`: type-check the configuration, fixtures, helpers, and specs.
 - `pnpm test:focused -- tests/<feature>.spec.ts --grep "<test name>"`: run one matching test while developing or diagnosing a failure.
-- `pnpm exec playwright test ...`: run Playwright against an instance started separately; direct commands do not manage the kernel or desktop compiler lifecycle.
+- `pnpm exec playwright test ...`: ordinary browser configurations use an instance started separately; the Electron configuration manages its own kernel and application, but does not compile them.
 
 During development, start with `pnpm test:smoke`, run only the changed spec or the relevant feature command while iterating, and reserve `pnpm test` for the final regression pass. Managed commands always close their kernel and compiler before returning. Focused commands use one worker and retain target validation, test-data cleanup, and kernel-log auditing. Direct Playwright commands that operate the SiYuan UI must use `--workers=1`; only tests that avoid shared UI and global application state are safe to run concurrently.
+
+## Electron document title acceptance
+
+Build the kernel and Electron app frontend from the same SiYuan checkout first. Set `SIYUAN_ELECTRON_APP_DIR` to its absolute `app/` directory and `SIYUAN_BASE_URL` to `http://127.0.0.1:6806`, then run `pnpm test:electron`. The development Electron main process uses port 6806; the command refuses to start when that port is occupied. It starts its own kernel in `~/SiYuan-Testing`, uses an isolated temporary home and Electron profile, verifies the workspace, and closes both managed processes afterward. It does not compile the application or reuse a running user instance.
+
+The Electron configuration currently selects `document-rich-title.spec.ts`. These tests load `/stage/build/app/` and cover editor persistence, undo/redo, formula rendering while typing, outline updates, title backlinks, heading conversion APIs, title-only assets, native import, exports, and history rollback. Conversion and archive operations use public APIs and check the persisted tree and reloaded native editor; they do not validate every conversion or export menu gesture. The ordinary focused command continues to load the browser desktop frontend.
 
 ## iPad touch regression
 
