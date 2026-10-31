@@ -27,12 +27,12 @@ const openAssetUpload = async (page: Page, editor: Locator) => {
     const protyle = editor.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
     );
-    const title = protyle.locator(".protyle-title__input");
-    await expect.poll(() => title.evaluate(element => element === element.ownerDocument.activeElement), {
-        timeout: 15000,
-    }).toBe(true);
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     await focusAtEnd(paragraph);
+    await expect.poll(() => paragraph.evaluate(element => {
+        const selection = element.ownerDocument.getSelection();
+        return selection?.isCollapsed && element.contains(selection.anchorNode);
+    })).toBe(true);
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.type("/upload", {delay: 10});
     const input = protyle.locator(
