@@ -48,15 +48,13 @@ const revealDocument = async (page: Page, notebookID: string, docID: string) => 
     const documentItem = fileTree.locator(`li.b3-list-item[data-type="navigation-file"][data-node-id="${docID}"]`);
     const treeItems = fileTree.locator(".file-tree__items");
     const initialScrollTop = await treeItems.evaluate(element => element.scrollTop);
-    if (!await documentItem.isVisible()) {
-        await treeItems.evaluate(element => element.scrollTop = 0);
-        const notebookRoot = fileTree.locator(
-            `li[data-type="navigation-root"][data-notebook-id="${notebookID}"]`,
-        );
-        await expect(notebookRoot).toBeVisible();
-        if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
-            await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
-        }
+    await treeItems.evaluate(element => element.scrollTop = 0);
+    const notebookRoot = fileTree.locator(
+        `li[data-type="navigation-root"][data-tree-key="notebook:${notebookID}"]`,
+    );
+    await expect(notebookRoot).toBeVisible();
+    if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
+        await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
     }
     // 虚拟化目录只挂载可视区附近的行，逐屏滚动等待目标行进入 DOM。
     await expect.poll(async () => {
