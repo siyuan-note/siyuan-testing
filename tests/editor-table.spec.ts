@@ -1535,11 +1535,12 @@ test.describe("table editing", () => {
         await expect(menu.locator(":scope > .b3-menu__items > .b3-menu__separator")).toHaveCount(4);
     });
 
-    test("explains why table header and body cells cannot be merged", async ({
+    test("merges header and body cells into a persistent multi-row header", async ({
         createTestDocument,
         page,
+        siyuanAPI,
     }) => {
-        const {editor} = await createTestDocument(
+        const {docID, editor} = await createTestDocument(
             "Table Header Body Merge State E2E",
             [
                 "| Item | Quantity | Status |",
@@ -1556,13 +1557,25 @@ test.describe("table editing", () => {
 
         const menu = page.locator("#commonMenu:not(.fn__none)");
         await expect(menu).toBeVisible();
-        const labels = await page.evaluate(() => ({
-            merge: window.siyuan.languages.mergeCell,
-            reason: window.siyuan.languages.tableHeaderBodyMergeUnsupported,
-        }));
-        const mergeItem = getMenuItemByLabel(page, menu, labels.merge);
-        await expect(mergeItem).toBeDisabled();
-        await expect(mergeItem.locator(":scope > .b3-menu__action")).toHaveAttribute("aria-label", labels.reason);
+        const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
+        const mergeItem = getMenuItemByLabel(page, menu, mergeLabel);
+        await expect(mergeItem).toBeEnabled();
+        await requestTransaction(page, () => mergeItem.click());
+        const expected = {
+            body: [["Beta", "2", "Done"]],
+            duplicateIDs: 0,
+            head: [["ItemAlpha", "Quantity", "Status"], ["", "1", "Ready"]],
+        };
+        await expect.poll(() => getDOMTableState(table)).toEqual(expected);
+        await expect(table.locator("thead th").first()).toHaveAttribute("rowspan", "2");
+        await expect.poll(() => getPersistedMergedCells(siyuanAPI, docID), {timeout: 30000}).toEqual([
+            {colspan: 1, column: 0, row: 0, rowspan: 2},
+        ]);
+        await page.reload();
+        const reloadedTable = (await getDocumentEditor(page, docID)).locator(':scope > [data-type="NodeTable"]');
+        await expect.poll(() => getDOMTableState(reloadedTable)).toEqual(expected);
+        await expect(reloadedTable.locator("thead th").first()).toHaveAttribute("rowspan", "2");
+        await assertValidTableDOM(reloadedTable);
     });
 
     test("clears rectangle-selected cells and persists the result", async ({

@@ -1,6 +1,10 @@
 import {spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
 import {createRequire} from "node:module";
+import {closeSync, mkdtempSync, openSync, readFileSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {parseTestList} from "./shard-list.mjs";
 
 const require = createRequire(import.meta.url);
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -38,19 +42,31 @@ const listTests = (shard) => {
         args.push("--config=config/playwright.focused.config.ts");
         env.SIYUAN_E2E_SHARD = shard;
     }
-    const result = spawnSync(process.execPath, args, {
-        cwd: projectRoot,
-        encoding: "utf8",
-        env,
-    });
-    if (result.status !== 0) {
-        process.stderr.write(result.stdout);
-        process.stderr.write(result.stderr);
-        throw new Error(`Unable to list ${shard ?? "default"} tests`);
+    const directory = mkdtempSync(join(tmpdir(), "siyuan-test-list-"));
+    const outputPath = join(directory, "list.txt");
+    try {
+        const output = openSync(outputPath, "w");
+        let result;
+        try {
+            result = spawnSync(process.execPath, args, {
+                cwd: projectRoot,
+                encoding: "utf8",
+                env,
+                stdio: ["ignore", output, "pipe"],
+            });
+        } finally {
+            closeSync(output);
+        }
+        const listing = readFileSync(outputPath, "utf8");
+        if (result.error || result.status !== 0) {
+            process.stderr.write(listing);
+            process.stderr.write(result.stderr || "");
+            throw new Error(`Unable to list ${shard ?? "default"} tests`, {cause: result.error});
+        }
+        return parseTestList(listing);
+    } finally {
+        rmSync(directory, {recursive: true, force: true});
     }
-    return result.stdout.split(/\r?\n/)
-        .map(line => line.match(/^\s+\[[^\]]+\] › (.+)$/)?.[1])
-        .filter(testID => testID && !/^global\.(setup|teardown)\.ts:/.test(testID));
 };
 
 const difference = (left, right) => [...left].filter(testID => !right.has(testID));
