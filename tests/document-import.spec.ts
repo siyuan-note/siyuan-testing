@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -98,9 +99,7 @@ test.describe("document import", () => {
         await openWorkspace(page);
         const restoreFileTree = await showFileTree(page);
         try {
-            const notebookRoot = page.locator(
-                `ul.b3-list[data-url="${source.notebookID}"] > li[data-type="navigation-root"]`,
-            );
+            const notebookRoot = getNotebookTreeItem(page, source.notebookID);
             await expect(notebookRoot).toBeVisible();
             // 长文件树加载后会平滑滚动恢复位置，滚动动画期间坐标会漂移导致点击落空，
             // 这里等待滚动稳定后再交互

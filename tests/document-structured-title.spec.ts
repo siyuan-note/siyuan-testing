@@ -10,6 +10,7 @@ interface ISyDocument {
     Spec: string;
     Properties: Record<string, string>;
     Children: unknown[];
+    DocumentTitle?: unknown;
 }
 
 const renameInEditor = async (page: Page, api: SiyuanAPI, id: string, title: string) => {
@@ -32,7 +33,7 @@ const renameInEditor = async (page: Page, api: SiyuanAPI, id: string, title: str
 };
 
 test.describe("structured document titles", () => {
-    test("preserves Unicode title source beyond the legacy plain-text length boundary", async ({
+    test("preserves Unicode plain titles beyond the legacy length boundary", async ({
         page, createTestDocument, siyuanAPI,
     }) => {
         const document = await createTestDocument("Structured Title Unicode Limit");
@@ -48,7 +49,10 @@ test.describe("structured document titles", () => {
         const source = await siyuanAPI.readDocument<ISyDocument>(document.docID);
         expect(source.Properties.title).toBe(`${title}😀`);
         expect(Array.from(source.Properties.title)).toHaveLength(513);
-        expect((await readTitle(siyuanAPI, document.docID)).source!.content).toContain(`${title}😀`);
+        expect(await readTitle(siyuanAPI, document.docID)).toMatchObject({
+            text: `${title}😀`, empty: false, format: "plain", source: null,
+        });
+        expect(source.DocumentTitle).toBeUndefined();
     });
 
     test("preserves title characters through editor input and reload", async ({page, createTestDocument, siyuanAPI}) => {

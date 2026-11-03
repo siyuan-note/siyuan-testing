@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor, TEMP_TEST_NOTEBOOK_PREFIX} from "./helpers/testNotebook";
@@ -12,9 +13,7 @@ test.describe("notebook lifecycle", () => {
         await openWorkspace(page);
         const restoreFileTree = await showFileTree(page);
         try {
-            const notebookRoot = page.locator(
-                `ul.b3-list[data-url="${notebook.id}"] > li[data-type="navigation-root"]`,
-            );
+            const notebookRoot = getNotebookTreeItem(page, notebook.id);
             await expect(notebookRoot).toBeVisible({timeout: 15000});
             await expect(notebookRoot.locator(":scope > .b3-list-item__text")).toHaveText(notebook.name);
 
@@ -26,9 +25,7 @@ test.describe("notebook lifecycle", () => {
             await expect(notebookRoot.locator(":scope > .b3-list-item__text")).toHaveText(renamed);
 
             await page.reload();
-            const reloadedRoot = page.locator(
-                `ul.b3-list[data-url="${notebook.id}"] > li[data-type="navigation-root"]`,
-            );
+            const reloadedRoot = getNotebookTreeItem(page, notebook.id);
             await expect(reloadedRoot.locator(":scope > .b3-list-item__text")).toHaveText(renamed);
         } finally {
             await restoreFileTree();

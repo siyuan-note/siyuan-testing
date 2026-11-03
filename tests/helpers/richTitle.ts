@@ -3,6 +3,7 @@ import {SiyuanAPI} from "./siyuanAPI";
 
 export interface ITitleSource {
     text: string;
+    format: "plain" | "inline-ast";
     empty: boolean;
     revision: string;
     blockDOM: string;
@@ -12,6 +13,11 @@ export interface ITitleSource {
 export const getTitle = (page: Page, id: string) => page.locator(
     `.protyle-title[data-node-id="${id}"]:visible .protyle-title__rich .protyle-title__input`,
 ).last();
+
+export const isDocumentTitleFocused = (title: Locator) => title.evaluate(element => {
+    const selection = getSelection();
+    return element.contains(document.activeElement) && element.contains(selection?.anchorNode || null);
+});
 
 export const readTitle = (api: SiyuanAPI, id: string) => api.post<ITitleSource>("/api/block/getDocTitle", {id});
 

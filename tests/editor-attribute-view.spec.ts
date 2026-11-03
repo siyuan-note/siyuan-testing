@@ -1,5 +1,6 @@
 import {JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
+import {isDocumentTitleFocused} from "./helpers/richTitle";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -374,8 +375,8 @@ const insertAttributeView = async (page: Page, editor: Locator, api: SiyuanAPI, 
     const protyle = editor.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
     );
-    const documentTitle = protyle.locator(".protyle-title__input");
-    await expect.poll(() => documentTitle.evaluate(element => element === document.activeElement), {
+    const documentTitle = protyle.locator(`.protyle-title[data-node-id="${docID}"]`);
+    await expect.poll(() => isDocumentTitleFocused(documentTitle), {
         timeout: 15000,
     }).toBe(true);
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();

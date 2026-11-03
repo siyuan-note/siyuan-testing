@@ -1,4 +1,6 @@
 import {expect, test} from "./fixtures";
+import {getTitle} from "./helpers/richTitle";
+import {getNotebookTreeItem, expectTreeChild, getTreeChild} from "./helpers/fileTree";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 
@@ -50,9 +52,7 @@ test.describe("document lifecycle", () => {
 
         await openWorkspace(page, `/?id=${document.docID}`);
         await getDocumentEditor(page, document.docID);
-        await expect(page.locator(
-            `.protyle-title[data-node-id="${document.docID}"]:visible`,
-        ).last()).toHaveText(renamedTitle);
+        await expect(getTitle(page, document.docID)).toHaveText(renamedTitle);
     });
 
     test("moves a document below another document", async ({page, createTestDocument, siyuanAPI}) => {
@@ -83,9 +83,7 @@ test.describe("document lifecycle", () => {
                 `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
             );
             if (!await parentItem.isVisible()) {
-                const notebookRoot = page.locator(
-                    `ul.b3-list[data-url="${parent.notebookID}"] > li[data-type="navigation-root"]`,
-                );
+                const notebookRoot = getNotebookTreeItem(page, parent.notebookID);
                 await expect(notebookRoot).toBeVisible({timeout: 15000});
                 if (!await notebookRoot.locator(
                     ":scope > .b3-list-item__toggle .b3-list-item__arrow--open",
@@ -96,23 +94,17 @@ test.describe("document lifecycle", () => {
             await expect(parentItem).toBeVisible({timeout: 15000});
             const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
             const parentToggle = parentItem.locator(":scope > .b3-list-item__toggle");
-            // 展开动画期间切换按钮不会处理点击，等待子列表就绪后再折叠。
-            await expect.poll(() => parentItem.evaluate(element => {
-                const children = element.nextElementSibling;
-                return children?.tagName === "UL" ? children.getAnimations().filter(animation =>
-                    animation.playState === "running").length : 0;
-            })).toBe(0);
+            const fileTree = page.locator(".sy__file:visible");
+            const childItem = await getTreeChild(fileTree, parentItem, child.docID);
             if (await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
                 await parentToggle.click();
-                await expect(parentArrow).not.toHaveClass(/b3-list-item__arrow--open/);
-                await expect(parentItem.locator("xpath=following-sibling::*[1][self::ul]")).toHaveCount(0);
+                await expect(parentItem).toHaveAttribute("aria-expanded", "false");
+                await expect(childItem).toHaveCount(0);
             }
             // 等待按钮位置稳定后展开，并通过实际层级验证结果。
             await parentToggle.click();
             await expect(parentArrow).toHaveClass(/b3-list-item__arrow--open/);
-            await expect(parentItem.locator(
-                `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${child.docID}"]`,
-            )).toBeVisible({timeout: 15000});
+            await expectTreeChild(fileTree, parentItem, child.docID);
         } finally {
             await restoreFileTree();
         }

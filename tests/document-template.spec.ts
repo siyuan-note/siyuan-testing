@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {ISiyuanResponse} from "./helpers/siyuanAPI";
@@ -40,9 +41,7 @@ test.describe("document creation templates", () => {
 
             const restoreFileTree = await showFileTree(page);
             try {
-                const notebookRoot = page.locator(
-                    `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
-                );
+                const notebookRoot = getNotebookTreeItem(page, notebookID);
                 await expect(notebookRoot).toBeVisible({timeout: 15000});
                 await notebookRoot.hover();
                 const createAction = notebookRoot.locator(':scope > [data-type="new"]');

@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {devices, Locator, Page} from "@playwright/test";
 import {test as base, expect} from "./fixtures";
 
@@ -19,7 +20,7 @@ const openTree = async (page: Page, docID: string, notebookID: string) => {
     await page.locator("#toolbarFile").tap();
     const tree = page.locator('[data-type="sidebar-file"]');
     await expect(tree).toBeVisible();
-    const notebook = tree.locator(`ul[data-url="${notebookID}"] > li[data-type="navigation-root"]`);
+    const notebook = getNotebookTreeItem(tree, notebookID);
     await expect(notebook).toBeVisible();
     if (!await notebook.locator(".b3-list-item__arrow--open").count()) {
         await notebook.locator(".b3-list-item__toggle").tap();

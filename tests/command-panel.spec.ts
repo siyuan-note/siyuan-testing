@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {Locator} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {commandPanel, focusCommandTarget, openCommandPanel, runPaletteCommand} from "./helpers/commandPanel";
@@ -470,9 +471,7 @@ test.describe("command palette", () => {
                 await page.reload();
                 const editor = await getDocumentEditor(page, target.docID);
                 await showFileTree(page);
-                const notebookRoot = page.locator(
-                    `.sy__file ul.b3-list[data-url="${target.notebookID}"] > li[data-type="navigation-root"]`,
-                );
+                const notebookRoot = getNotebookTreeItem(page, target.notebookID);
                 await expect(notebookRoot).toBeVisible();
                 const notebookArrow = notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
                 const wasExpanded = await notebookArrow.evaluate(element =>

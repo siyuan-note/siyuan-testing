@@ -1,8 +1,9 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {openBlockMenu} from "./helpers/blockMenu";
-import {showFileTree} from "./helpers/runtime";
-import {getDocumentEditor, ITestDocument} from "./helpers/testNotebook";
+import {openWorkspace, showFileTree} from "./helpers/runtime";
+import {getDocumentEditor, ICreatedTestNotebook} from "./helpers/testNotebook";
 
 interface ISyNode {
     ID?: string;
@@ -14,17 +15,12 @@ interface ISyNode {
 
 const flatten = (node: ISyNode): ISyNode[] => [node, ...(node.Children || []).flatMap(flatten)];
 
-const openRename = async (page: Page, document: ITestDocument) => {
+const openRename = async (page: Page, notebook: ICreatedTestNotebook) => {
+    await openWorkspace(page);
     const restoreTree = await showFileTree(page);
     try {
         const tree = page.locator(".sy__file:visible");
-        const item = tree.locator(`li[data-type="navigation-file"][data-node-id="${document.docID}"]`);
-        if (!await item.isVisible()) {
-            const root = tree.locator(`ul[data-url="${document.notebookID}"] > li[data-type="navigation-root"]`);
-            if (!await root.locator(".b3-list-item__arrow--open").isVisible()) {
-                await root.locator(":scope > .b3-list-item__toggle").click();
-            }
-        }
+        const item = getNotebookTreeItem(tree, notebook.id);
         await item.locator(":scope > .b3-list-item__text").click({button: "right"});
         await page.locator('#commonMenu:not(.fn__none) [data-id="rename"]').click();
         const dialog = page.locator('[data-key="dialog-rename"]');
@@ -56,21 +52,21 @@ test.describe("single-input dialogs", () => {
         void fullEntryVisibility;
     });
 
-    test("ignores composing Enter and saves a document title with ordinary Enter", async ({
-        page, createTestDocument, siyuanAPI,
+    test("ignores composing Enter and saves a notebook name with ordinary Enter", async ({
+        page, createTestNotebook, siyuanAPI,
     }) => {
-        const document = await createTestDocument("Input Dialog IME");
-        const {dialog, restoreTree} = await openRename(page, document);
+        const notebook = await createTestNotebook("Input Dialog IME");
+        const {dialog, restoreTree} = await openRename(page, notebook);
         const input = dialog.locator("input");
         const titles: string[] = [];
         page.on("request", request => {
-            if (new URL(request.url()).pathname === "/api/filetree/renameDoc") {
-                titles.push(request.postDataJSON().title);
+            if (new URL(request.url()).pathname === "/api/notebook/renameNotebook") {
+                titles.push(request.postDataJSON().name);
             }
         });
         try {
-            await expectInputReady(input, document.title);
-            const title = `${document.title} 中文`;
+            await expectInputReady(input, notebook.name);
+            const title = `${notebook.name} 中文`;
             // 合成组合事件验证应用事件处理；操作系统候选窗口仍需手动回归。
             await input.dispatchEvent("compositionstart", {data: ""});
             await input.fill(title);
@@ -78,23 +74,23 @@ test.describe("single-input dialogs", () => {
             await expect(dialog.locator(".b3-dialog__container")).toBeVisible();
             expect(titles).toEqual([]);
             await input.dispatchEvent("compositionend", {data: "中文"});
-            const saved = page.waitForResponse("**/api/filetree/renameDoc");
+            const saved = page.waitForResponse("**/api/notebook/renameNotebook");
             await input.press("Enter");
             expect((await (await saved).json()).code).toBe(0);
             await expect(dialog).toHaveCount(0);
             expect(titles).toEqual([title]);
             await expect.poll(async () =>
-                (await siyuanAPI.readDocument<ISyNode>(document.docID)).Properties?.title).toBe(title);
+                (await siyuanAPI.listNotebooks()).find(item => item.id === notebook.id)?.name).toBe(title);
         } finally {
             await restoreTree();
         }
     });
 
     test("keeps an invalid name open and accepts a corrected name", async ({
-        page, createTestDocument, siyuanAPI,
+        page, createTestNotebook, siyuanAPI,
     }) => {
-        const document = await createTestDocument("Input Dialog Validation");
-        const {dialog, restoreTree} = await openRename(page, document);
+        const notebook = await createTestNotebook("Input Dialog Validation");
+        const {dialog, restoreTree} = await openRename(page, notebook);
         try {
             const input = dialog.locator("input");
             await input.fill("invalid\tname");
@@ -104,25 +100,25 @@ test.describe("single-input dialogs", () => {
             await expect(input).toHaveValue("invalid\tname");
             const message = await page.evaluate(() => window.siyuan.languages.fileNameRule);
             await expect(page.locator("#message")).toContainText(message);
-            expect((await siyuanAPI.readDocument<ISyNode>(document.docID)).Properties?.title)
-                .toBe(document.title);
-            const title = `${document.title} corrected`;
+            expect((await siyuanAPI.listNotebooks()).find(item => item.id === notebook.id)?.name)
+                .toBe(notebook.name);
+            const title = `${notebook.name} corrected`;
             await input.fill(title);
             await dialog.locator(".b3-dialog__action .b3-button--text").click();
             await expect(dialog).toHaveCount(0);
             await expect.poll(async () =>
-                (await siyuanAPI.readDocument<ISyNode>(document.docID)).Properties?.title).toBe(title);
+                (await siyuanAPI.listNotebooks()).find(item => item.id === notebook.id)?.name).toBe(title);
         } finally {
             await restoreTree();
         }
     });
 
     for (const close of ["cancel", "Escape", "scrim"] as const) {
-        test(`discards a renamed title on ${close}`, async ({page, createTestDocument, siyuanAPI}) => {
-            const document = await createTestDocument(`Input Dialog Close ${close}`);
-            const {dialog, restoreTree} = await openRename(page, document);
+        test(`discards a renamed notebook name on ${close}`, async ({page, createTestNotebook, siyuanAPI}) => {
+            const notebook = await createTestNotebook(`Input Dialog Close ${close}`);
+            const {dialog, restoreTree} = await openRename(page, notebook);
             try {
-                await dialog.locator("input").fill(`${document.title} discarded`);
+                await dialog.locator("input").fill(`${notebook.name} discarded`);
                 if (close === "Escape") {
                     await dialog.locator("input").press("Escape");
                 } else if (close === "cancel") {
@@ -131,8 +127,8 @@ test.describe("single-input dialogs", () => {
                     await dialog.locator(".b3-dialog__scrim").click({position: {x: 5, y: 5}});
                 }
                 await expect(dialog).toHaveCount(0);
-                expect((await siyuanAPI.readDocument<ISyNode>(document.docID)).Properties?.title)
-                    .toBe(document.title);
+                expect((await siyuanAPI.listNotebooks()).find(item => item.id === notebook.id)?.name)
+                    .toBe(notebook.name);
             } finally {
                 await restoreTree();
             }

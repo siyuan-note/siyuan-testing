@@ -1,3 +1,4 @@
+import {getNotebookTreeItem} from "./helpers/fileTree";
 import {devices} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {createMobileTestDocument, mobileEditor, openMobileDocument} from "./helpers/mobile";
@@ -87,7 +88,7 @@ test.describe("mobile document titles", () => {
         };
         await page.locator("#toolbarFile").tap();
         await expect(tree).toBeVisible();
-        await expand(tree.locator(`ul[data-url="${root.notebookID}"] > li[data-type="navigation-root"]`));
+        await expand(getNotebookTreeItem(tree, root.notebookID));
         await expand(row(root.docID));
         await row(literal).locator(".b3-list-item__text").tap();
         await expect(page.locator("#toolbarName")).toHaveValue("A/B");

@@ -1,6 +1,7 @@
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace, showDock} from "./helpers/runtime";
+import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {readZipEntries} from "./helpers/zip";
 import {getTitle, pasteParagraphIntoTitle, readTitle} from "./helpers/richTitle";
 
@@ -50,9 +51,9 @@ test("rich title preserves inline styles and body through paste, reload and undo
     expect(saved.revision).not.toBe(initial.revision);
     expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(before.Children);
     await title.focus();
-    await title.press("ControlOrMeta+z");
+    await title.press(UNDO_SHORTCUT);
     await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe(initial.text);
-    await title.press("ControlOrMeta+y");
+    await title.press(REDO_SHORTCUT);
     await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).source).toEqual(saved.source);
     await page.reload();
     await getDocumentEditor(page, document.docID);

@@ -1,9 +1,10 @@
 import {ElementHandle, JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {expectSemanticInlineText} from "./helpers/editorText";
+import {getNotebookTreeItem, expectTreeChild} from "./helpers/fileTree";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {expectSearchIndex, submitSearch, withKeywordSearch} from "./helpers/search";
-import {IBacklinkPath} from "./helpers/siyuanAPI";
+import {IBacklinkPath, SiyuanAPI} from "./helpers/siyuanAPI";
 import {getDocumentEditor} from "./helpers/testNotebook";
 
 test.describe("file tree", () => {
@@ -16,9 +17,7 @@ test.describe("file tree", () => {
                 `li.b3-list-item[data-type="navigation-file"][data-node-id="${firstDocument.docID}"]`,
             );
             if (!await docItem.isVisible()) {
-                const notebookRoot = getVisibleFileTree(page).locator(
-                    `ul.b3-list[data-url="${firstDocument.notebookID}"] > li[data-type="navigation-root"]`,
-                );
+                const notebookRoot = getNotebookTreeItem(getVisibleFileTree(page), firstDocument.notebookID);
                 await expect(notebookRoot).toBeVisible();
                 if (!await notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").isVisible()) {
                     await notebookRoot.locator(":scope > .b3-list-item__toggle").click({force: true});
@@ -42,9 +41,7 @@ test.describe("file tree", () => {
         await openWorkspace(page, `/?id=${sourceDocument.docID}`);
         const restoreFileTree = await showFileTree(page);
         try {
-            const notebookRoot = getVisibleFileTree(page).locator(
-                `ul.b3-list[data-url="${sourceDocument.notebookID}"] > li[data-type="navigation-root"]`,
-            );
+            const notebookRoot = getNotebookTreeItem(getVisibleFileTree(page), sourceDocument.notebookID);
             await expect(notebookRoot).toBeVisible({timeout: 15000});
             await expandTreeItem(notebookRoot);
             const fileTree = getVisibleFileTree(page);
@@ -55,20 +52,14 @@ test.describe("file tree", () => {
                 `li[data-type="navigation-file"][data-node-id="${targetDocument.docID}"]`,
             );
 
-            await dragDocumentIntoWithTouch(page, source, target);
+            await dragDocumentIntoWithTouch(page, source, target, siyuanAPI);
 
             await expect.poll(async () => (await siyuanAPI.getDocumentPath(sourceDocument.docID)).path, {
                 timeout: 30000,
             }).toBe(`/${targetDocument.docID}/${sourceDocument.docID}.sy`);
-            await expect.poll(async () => Number(await target.getAttribute("data-count")), {
-                timeout: 15000,
-            }).toBeGreaterThan(0);
+            await expect(target.locator(":scope > .b3-list-item__toggle")).toBeVisible();
             await expandTreeItem(target);
-            const nestedSource = target.locator(
-                `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and ` +
-                `@data-node-id="${sourceDocument.docID}"]`,
-            );
-            await expect(nestedSource).toBeVisible({timeout: 15000});
+            const nestedSource = await expectTreeChild(fileTree, target, sourceDocument.docID);
             await expect(nestedSource).toHaveAttribute("draggable", "true");
         } finally {
             await restoreFileTree();
@@ -210,7 +201,7 @@ test.describe("file tree", () => {
             const target = getVisibleFileTree(page).locator(
                 `li[data-type="navigation-file"][data-node-id="${secondParent.docID}"]`,
             );
-            await dragDocumentInto(page, source, target);
+            await dragDocumentInto(page, source, target, siyuanAPI);
 
             await expect.poll(async () => (await siyuanAPI.getDocumentPath(child.docID)).path, {
                 timeout: 30000,
@@ -271,23 +262,16 @@ const assertNestedTree = async (page: import("@playwright/test").Page, parentID:
                                 grandchildID: string, notebookID?: string) => {
     const fileTree = getVisibleFileTree(page);
     if (notebookID) {
-        const notebookRoot = fileTree.locator(
-            `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
-        );
+        const notebookRoot = getNotebookTreeItem(fileTree, notebookID);
         await expect(notebookRoot).toBeVisible({timeout: 15000});
         await expandTreeItem(notebookRoot);
     }
     const parent = fileTree.locator(`li[data-type="navigation-file"][data-node-id="${parentID}"]`);
     await expect(parent).toBeVisible({timeout: 15000});
     await expandTreeItem(parent);
-    const child = parent.locator(
-        `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${childID}"]`,
-    );
-    await expect(child).toBeVisible({timeout: 15000});
+    const child = await expectTreeChild(fileTree, parent, childID);
     await expandTreeItem(child);
-    await expect(child.locator(
-        `xpath=following-sibling::ul[1]/li[@data-type="navigation-file" and @data-node-id="${grandchildID}"]`,
-    )).toBeVisible({timeout: 15000});
+    await expectTreeChild(fileTree, child, grandchildID);
 };
 
 const expandTreeItem = async (item: import("@playwright/test").Locator) => {
@@ -304,19 +288,24 @@ const expandTreeItem = async (item: import("@playwright/test").Locator) => {
 
 const expectFileTreeOrder = async (page: import("@playwright/test").Page, notebookID: string,
                                   expectedOrder: string[]) => {
-    const notebookRoot = getVisibleFileTree(page).locator(
-        `ul.b3-list[data-url="${notebookID}"] > li[data-type="navigation-root"]`,
-    );
+    const notebookRoot = getNotebookTreeItem(getVisibleFileTree(page), notebookID);
     await expect(notebookRoot).toBeVisible({timeout: 15000});
     await expandTreeItem(notebookRoot);
-    const documentList = notebookRoot.locator("xpath=following-sibling::ul[1]");
-    await expect(documentList.locator(":scope > li[data-type=\"navigation-file\"]")).toHaveCount(expectedOrder.length);
-    await expect.poll(() => documentList.locator(":scope > li[data-type=\"navigation-file\"]").evaluateAll(
+    const documentRows = getVisibleFileTree(page).locator(
+        `li[data-tree-key^="notebook:${notebookID}/"][aria-level="2"]`,
+    );
+    await expect(documentRows).toHaveCount(expectedOrder.length);
+    await expect.poll(() => documentRows.evaluateAll(
         items => items.map(item => item.getAttribute("data-node-id")),
     )).toEqual(expectedOrder);
+    for (const [index, id] of expectedOrder.entries()) {
+        const row = await expectTreeChild(getVisibleFileTree(page), notebookRoot, id);
+        await expect(row).toHaveAttribute("aria-posinset", String(index + 1));
+        await expect(row).toHaveAttribute("aria-setsize", String(expectedOrder.length));
+    }
 };
 
-const dragDocumentInto = async (page: Page, source: Locator, target: Locator) => {
+const dragDocumentInto = async (page: Page, source: Locator, target: Locator, api: SiyuanAPI) => {
     await expect(source).toBeVisible({timeout: 15000});
     await expect(target).toBeVisible({timeout: 15000});
     // 长文件树加载后会平滑滚动恢复位置，拖拽期间的两次坐标测量会因此漂移，
@@ -329,8 +318,8 @@ const dragDocumentInto = async (page: Page, source: Locator, target: Locator) =>
         const second = await fileTree.evaluate(element => element.scrollTop);
         return first === second;
     }, {timeout: 5000}).toBe(true);
-    const sourcePath = await source.getAttribute("data-path");
-    const targetPath = await target.getAttribute("data-path");
+    const sourcePath = (await api.getDocumentPath((await source.getAttribute("data-node-id"))!)).path;
+    const targetPath = (await api.getDocumentPath((await target.getAttribute("data-node-id"))!)).path;
     const sourceTitle = await source.locator(":scope > .b3-list-item__text").textContent();
     const targetTitle = await target.locator(":scope > .b3-list-item__text").textContent();
     expect(sourcePath).toBeTruthy();
@@ -448,12 +437,12 @@ const dispatchTouchEvent = (source: Locator, type: "touchstart" | "touchmove" | 
     }));
 }, {...options, type});
 
-const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Locator) => {
+const dragDocumentIntoWithTouch = async (page: Page, source: Locator, target: Locator, api: SiyuanAPI) => {
     await expect(source).toBeVisible({timeout: 15000});
     await expect(target).toBeVisible({timeout: 15000});
     await target.evaluate(element => element.scrollIntoView({block: "center"}));
-    const sourcePath = await source.getAttribute("data-path");
-    const targetPath = await target.getAttribute("data-path");
+    const sourcePath = (await api.getDocumentPath((await source.getAttribute("data-node-id"))!)).path;
+    const targetPath = (await api.getDocumentPath((await target.getAttribute("data-node-id"))!)).path;
     const targetNodeID = await target.getAttribute("data-node-id");
     const sourceTitle = await source.locator(":scope > .b3-list-item__text").textContent();
     const targetTitle = await target.locator(":scope > .b3-list-item__text").textContent();

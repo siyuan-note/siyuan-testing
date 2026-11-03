@@ -87,40 +87,85 @@ export class IpadNavigation {
 
     async prepareFileTree(notebook: string) {
         const original = await this.ipad.evaluate<{hidden: boolean; dock: string | null;
-            visible: boolean; expanded: boolean; scroll: number}>(`(() => {
+            visible: boolean; scroll: number}>(`(() => {
             const dock = document.querySelector('.dock__item[data-type="file"]');
             const visible = !!document.querySelector('.sy__file .block__logo')?.getBoundingClientRect().height;
             const state = {hidden:window.siyuan.config.uiLayout.hideDock, visible,
                 dock:dock.parentElement.querySelector('.dock__item--activefocus')?.dataset.type || null,
-                expanded:!!document.querySelector('.sy__file ul[data-url="${notebook}"] .b3-list-item__arrow--open'),
                 scroll:document.querySelector('.file-tree__items')?.scrollTop || 0};
             if (state.hidden) document.getElementById('barDock').click();
             if (!visible) dock.click();
             return state;
         })()`);
+        const notebookSelector = `.sy__file li[data-tree-key="notebook:${notebook}"]`;
+        let initiallyExpanded: boolean | undefined;
+        const ensureNotebookRow = async () => {
+            let offset = 0;
+            // 虚拟树只挂载窗口内的行，逐页滚动等待目标行出现，不能把未挂载当作折叠。
+            await expect.poll(async () => {
+                const result = await this.ipad.evaluate<{ready: boolean; nextOffset: number}>(`(() => {
+                    const list = document.querySelector('.sy__file .file-tree__items');
+                    if (!list || !list.getBoundingClientRect().height) return {ready:false, nextOffset:0};
+                    const row = document.querySelector(${JSON.stringify(notebookSelector)});
+                    if (row) {
+                        row.scrollIntoView({block:'nearest', inline:'nearest'});
+                        const rect = row.getBoundingClientRect();
+                        const viewport = list.getBoundingClientRect();
+                        return {ready:rect.height > 0 && rect.width > 0 && rect.bottom > viewport.top &&
+                            rect.top < viewport.bottom, nextOffset:list.scrollTop};
+                    }
+                    const max = Math.max(0, list.scrollHeight-list.clientHeight);
+                    const next = Math.min(${offset}, max);
+                    list.scrollTop = next;
+                    return {ready:false, nextOffset:next >= max ? 0 :
+                        Math.min(max, next+Math.max(1, list.clientHeight*0.75))};
+                })()`);
+                offset = result.nextOffset;
+                return result.ready;
+            }, {timeout: 15000, message: "wait for the notebook row to enter the virtual tree viewport"}).toBe(true);
+        };
         const restore = async () => {
-            await this.ipad.evaluate(`(() => {
-                const state = ${JSON.stringify(original)};
-                const root = document.querySelector('.sy__file ul[data-url="${notebook}"]');
-                if (root && !!root.querySelector('.b3-list-item__arrow--open') !== state.expanded) {
-                    root.querySelector('.b3-list-item__toggle').click();
+            try {
+                if (initiallyExpanded !== undefined) {
+                    await ensureNotebookRow();
+                    await this.ipad.evaluate(`(() => {
+                        const root = document.querySelector(${JSON.stringify(notebookSelector)});
+                        if ((root.getAttribute('aria-expanded') === 'true') !== ${initiallyExpanded}) {
+                            root.querySelector('.b3-list-item__toggle').click();
+                        }
+                        return true;
+                    })()`);
+                    await expect.poll(() => this.ipad.evaluate<boolean>(
+                        `document.querySelector(${JSON.stringify(notebookSelector)})?.getAttribute('aria-expanded') === 'true'`,
+                        true)).toBe(initiallyExpanded);
                 }
-                document.querySelector('.file-tree__items').scrollTop = state.scroll;
-                if (!state.visible) {
-                    document.querySelector('.dock__item[data-type="' + (state.dock || 'file') + '"]').click();
-                }
-                if (window.siyuan.config.uiLayout.hideDock !== state.hidden) document.getElementById('barDock').click();
-                return true;
-            })()`);
+            } finally {
+                await this.ipad.evaluate(`(() => {
+                    const state = ${JSON.stringify(original)};
+                    const list = document.querySelector('.sy__file .file-tree__items');
+                    if (list) list.scrollTop = state.scroll;
+                    if (!state.visible) {
+                        document.querySelector('.dock__item[data-type="' + (state.dock || 'file') + '"]').click();
+                    }
+                    if (window.siyuan.config.uiLayout.hideDock !== state.hidden) document.getElementById('barDock').click();
+                    return true;
+                })()`);
+            }
         };
         try {
             await expect.poll(() => this.ipad.evaluate<boolean>(
                 `!!document.querySelector('.sy__file .block__logo')?.getBoundingClientRect().height`, true)).toBe(true);
+            await ensureNotebookRow();
+            initiallyExpanded = await this.ipad.evaluate<boolean>(
+                `document.querySelector(${JSON.stringify(notebookSelector)}).getAttribute('aria-expanded') === 'true'`, true);
             await this.ipad.evaluate(`(() => {
-                const root = document.querySelector('.sy__file ul[data-url="${notebook}"]');
-                if (!root.querySelector('.b3-list-item__arrow--open')) root.querySelector('.b3-list-item__toggle').click();
+                const root = document.querySelector(${JSON.stringify(notebookSelector)});
+                if (root.getAttribute('aria-expanded') !== 'true') root.querySelector('.b3-list-item__toggle').click();
                 return true;
             })()`);
+            await expect.poll(() => this.ipad.evaluate<boolean>(
+                `document.querySelector(${JSON.stringify(notebookSelector)})?.getAttribute('aria-expanded') === 'true'`,
+                true)).toBe(true);
             return restore;
         } catch (error) {
             await restore();
