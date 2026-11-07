@@ -23,10 +23,12 @@ for (const focusMode of ["reading", "cursor-at-start", "cursor-in-view"]) {
             const tabID = await sourceHeader.getAttribute("data-id");
             const panel = page.locator(`.protyle[data-id="${tabID}"]`);
             await expect(panel).toHaveAttribute("data-loading", "finished");
-            const content = panel.locator(".protyle-content");
+            const content = panel.locator(":scope > .protyle-content");
+            const body = content.locator(":scope > .protyle-wysiwyg");
             await expect(content).toBeVisible();
+            await expect(body).toBeVisible();
             if (focusMode === "cursor-at-start") {
-                await panel.locator('.protyle-wysiwyg > [data-node-id]').first().click();
+                await body.locator(':scope > [data-node-id]').first().click();
             }
             await content.hover();
             await page.mouse.wheel(0, 1700);
@@ -46,7 +48,7 @@ for (const focusMode of ["reading", "cursor-at-start", "cursor-in-view"]) {
             }
             const before = await content.evaluate(element => {
                 const rect = element.getBoundingClientRect();
-                const blocks = Array.from(element.querySelectorAll<HTMLElement>('.protyle-wysiwyg > [data-node-id]'));
+                const blocks = Array.from(element.querySelectorAll<HTMLElement>(':scope > .protyle-wysiwyg > [data-node-id]'));
                 const anchor = blocks.find(block => block.getBoundingClientRect().bottom > rect.top + 1)!;
                 return {scrollTop: element.scrollTop, anchorID: anchor.dataset.nodeId!, text: anchor.textContent,
                     offset: anchor.getBoundingClientRect().top - rect.top, width: rect.width};

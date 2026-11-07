@@ -1,6 +1,5 @@
 import {JSHandle, Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
-import {isDocumentTitleFocused} from "./helpers/richTitle";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
@@ -375,10 +374,11 @@ const insertAttributeView = async (page: Page, editor: Locator, api: SiyuanAPI, 
     const protyle = editor.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' protyle ')][1]",
     );
-    const documentTitle = protyle.locator(`.protyle-title[data-node-id="${docID}"]`);
-    await expect.poll(() => isDocumentTitleFocused(documentTitle), {
-        timeout: 15000,
-    }).toBe(true);
+    // API 创建后打开文档不保证触发两秒内的新标题自动聚焦；等待源加载，再定位正文插入点。
+    const documentTitle = protyle.locator(
+        `.protyle-title[data-node-id="${docID}"] .protyle-title__rich .protyle-title__input`,
+    );
+    await expect(documentTitle).toBeEditable({timeout: 15000});
     const paragraph = editor.locator(':scope > [data-type="NodeParagraph"]').first();
     await focusAtEnd(paragraph);
     await page.keyboard.press("ControlOrMeta+A");

@@ -175,9 +175,10 @@ base("prefers the active file tree shortcut when the keyboard target is the page
         await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
         await recordKey(page);
         const dialog = page.locator('[data-key="dialog-rename"]');
-        await expect(dialog.locator("input")).toBeVisible();
+        const title = dialog.locator(`.protyle-title[data-node-id="${docID}"] .protyle-title__input`);
+        await expect(title).toBeEditable();
         await expect(page.locator('[data-key="dialog-commandpanel"]')).toHaveCount(0);
-        await dialog.locator("input").press("Escape");
+        await title.press("Escape");
         await expect(dialog).toHaveCount(0);
     } finally {
         await restoreFileTree?.();

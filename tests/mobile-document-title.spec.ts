@@ -1,7 +1,7 @@
 import {getNotebookTreeItem} from "./helpers/fileTree";
 import {devices} from "@playwright/test";
 import {expect, test} from "./fixtures";
-import {createMobileTestDocument, mobileEditor, openMobileDocument} from "./helpers/mobile";
+import {createMobileTestDocument, mobileEditor, mobileTitle, openMobileDocument, openMobileTitleEditor} from "./helpers/mobile";
 
 test.use({...devices["iPhone 13"], defaultBrowserType: "chromium"});
 
@@ -13,9 +13,10 @@ test.describe("mobile document titles", () => {
         const marker = `mobile-title-characters-${Date.now()}`;
         const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
             "Mobile Title Characters", marker);
-        const input = page.locator("#toolbarName");
+        const untitled = await page.evaluate(() => window.siyuan.languages._kernel[16]);
         for (const title of ["A/B", "A//B", "A／B", "A%2FB", ".", "..", "文档/测试 🚀", "**Title** / [text](link)", ""]) {
             await test.step(JSON.stringify(title), async () => {
+                const input = await openMobileTitleEditor(page, document.docID);
                 await input.fill(title);
                 await input.press("Enter");
                 await expect.poll(async () => {
@@ -31,36 +32,33 @@ test.describe("mobile document titles", () => {
                 if (title) expect(source.Properties.title).toBe(title);
                 else expect(source.Properties["custom-sy-title-empty"]).toBe("true");
                 await page.reload();
-                await expect(input).toHaveValue(title);
+                await expect(mobileTitle(page, document.docID)).toHaveText(title || untitled);
+                await expect(await openMobileTitleEditor(page, document.docID)).toHaveText(title);
                 await expect(mobileEditor(page)).toContainText(marker);
             });
         }
         await testInfo.attach("mobile-empty-title", {body: await page.screenshot(), contentType: "image/png"});
     });
 
-    test("preserves 512 Unicode characters and saves the truncated title on Enter", async ({
+    test("preserves Unicode titles at and beyond the plain creation limit after Enter and reload", async ({
         page, siyuanAPI, trackTestDocument,
     }) => {
         const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
             "Mobile Title Unicode Limit", "Unicode title body");
-        const input = page.locator("#toolbarName");
-        const boundary = "😀".repeat(512);
-        await input.fill(boundary);
-        await input.press("Enter");
-        await expect.poll(async () => (await siyuanAPI.getDocumentPaths(document.notebookID, [document.docID]))
-            .documents[0]?.title.text).toBe(boundary);
-        await page.reload();
-        await expect(input).toHaveValue(boundary);
-
-        const truncated = "🚀".repeat(512);
-        await input.fill(`${truncated}🚀`);
-        await input.press("Enter");
-        await expect(input).toHaveValue(truncated);
-        await expect.poll(async () => (await siyuanAPI.getDocumentPaths(document.notebookID, [document.docID]))
-            .documents[0]?.title.text, {timeout: 15000}).toBe(truncated);
-        await page.reload();
-        await expect(input).toHaveValue(truncated);
-        await expect(mobileEditor(page)).toContainText("Unicode title body");
+        // 完整标题编辑使用行级源校验，不能套用普通创建接口的 512 码点限制。
+        for (const title of ["😀".repeat(512), "🚀".repeat(513)]) {
+            const input = await openMobileTitleEditor(page, document.docID);
+            await input.fill(title);
+            await input.press("Enter");
+            await expect.poll(async () => (await siyuanAPI.getDocumentPaths(document.notebookID, [document.docID]))
+                .documents[0]?.title.text, {timeout: 15000}).toBe(title);
+            const persisted = await siyuanAPI.readDocument<{Properties: Record<string, string>}>(document.docID);
+            expect(persisted.Properties.title).toBe(title);
+            await page.reload();
+            await expect(mobileTitle(page, document.docID)).toHaveText(title);
+            await expect(await openMobileTitleEditor(page, document.docID)).toHaveText(title);
+            await expect(mobileEditor(page)).toContainText("Unicode title body");
+        }
     });
 
     test("opens literal slash titles and nested titles as different documents from the tree", async ({
@@ -91,12 +89,12 @@ test.describe("mobile document titles", () => {
         await expand(getNotebookTreeItem(tree, root.notebookID));
         await expand(row(root.docID));
         await row(literal).locator(".b3-list-item__text").tap();
-        await expect(page.locator("#toolbarName")).toHaveValue("A/B");
+        await expect(mobileTitle(page, literal)).toHaveText("A/B");
         await expect(mobileEditor(page)).toContainText("Mobile literal slash content");
         await page.locator("#toolbarFile").tap();
         await expand(row(parent));
         await row(child).locator(".b3-list-item__text").tap();
-        await expect(page.locator("#toolbarName")).toHaveValue("B");
+        await expect(mobileTitle(page, child)).toHaveText("B");
         await expect(mobileEditor(page)).toContainText("Mobile nested content");
         await testInfo.attach("mobile-nested-title", {body: await page.screenshot(), contentType: "image/png"});
     });
@@ -117,17 +115,19 @@ test.describe("mobile document titles", () => {
             notebookID = (await siyuanAPI.createEncryptedNotebook(name, password)).id;
             const docID = await siyuanAPI.createDocument(notebookID, "Mobile private title", marker);
             await openMobileDocument(page, docID);
-            await page.locator("#toolbarName").fill(title);
-            await page.locator("#toolbarName").press("Enter");
+            const input = await openMobileTitleEditor(page, docID);
+            await input.fill(title);
+            await input.press("Enter");
             await expect.poll(async () => (await siyuanAPI.getDocumentPaths(notebookID, [docID]))
                 .documents[0]?.title.text).toBe(title);
             await page.reload();
-            await expect(page.locator("#toolbarName")).toHaveValue(title);
+            await expect(mobileTitle(page, docID)).toHaveText(title);
             await expect(mobileEditor(page)).toContainText(marker);
             await page.waitForLoadState("networkidle");
             await siyuanAPI.lockNotebook(notebookID);
             await expect(page.locator("#editor")).not.toContainText(marker);
-            await expect(page.locator("#toolbarName")).not.toHaveValue(title);
+            await expect(mobileTitle(page, docID)).toHaveCount(0);
+            await expect(page.locator("#toolbarNameReadonly")).not.toContainText(marker);
             expect((await siyuanAPI.postResult<null>("/api/filetree/getDocPaths", {
                 notebook: notebookID, ids: [docID],
             })).code).not.toBe(0);
@@ -136,10 +136,10 @@ test.describe("mobile document titles", () => {
             expect(JSON.stringify(tabs)).not.toContain(marker);
             await siyuanAPI.unlockAndOpenNotebook(notebookID, password);
             await openMobileDocument(page, docID);
-            await expect(page.locator("#toolbarName")).toHaveValue(title);
+            await expect(mobileTitle(page, docID)).toHaveText(title);
             await expect(mobileEditor(page)).toContainText(marker);
             await page.reload();
-            await expect(page.locator("#toolbarName")).toHaveValue(title);
+            await expect(mobileTitle(page, docID)).toHaveText(title);
             await expect(mobileEditor(page)).toContainText(marker);
             await page.waitForLoadState("networkidle");
             await page.goto("about:blank");

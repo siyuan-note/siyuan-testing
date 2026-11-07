@@ -182,7 +182,7 @@ test("native escapes, entities, emoji and inline breaks remain editable without 
     expect((await readTitle(siyuanAPI, document.docID)).source).toEqual(source.source);
 });
 
-test("clearing a title persists an empty source without promoting the first body paragraph", async ({
+test("clearing a title persists canonical empty plain storage without promoting the first body paragraph", async ({
     page, createTestDocument, siyuanAPI,
 }) => {
     const document = await createTestDocument("Title Empty Source E2E", "Body stays in the body");
@@ -191,12 +191,18 @@ test("clearing a title persists an empty source without promoting the first body
     await getTitle(page, document.docID).press("Tab");
     await expect.poll(async () => {
         const title = await readTitle(siyuanAPI, document.docID);
-        return {text: title.text, empty: title.empty, nodes: inlineNodes(title.source!.content)};
-    }).toEqual({text: "", empty: true, nodes: []});
+        return {text: title.text, empty: title.empty, format: title.format, source: title.source};
+    }).toEqual({text: "", empty: true, format: "plain", source: null});
     await page.reload();
     await getDocumentEditor(page, document.docID);
-    expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(body);
-    expect((await readTitle(siyuanAPI, document.docID)).source!.content).not.toContain("Body stays in the body");
+    await expect(getTitle(page, document.docID)).toHaveText("");
+    const persisted = await siyuanAPI.readDocument<ISyDocument>(document.docID);
+    expect(persisted.Children).toEqual(body);
+    expect(persisted.DocumentTitle).toBeUndefined();
+    expect(persisted.Properties).toMatchObject({title: "", "custom-sy-title-empty": "true"});
+    expect(await readTitle(siyuanAPI, document.docID)).toMatchObject({
+        text: "", empty: true, format: "plain", source: null,
+    });
 });
 
 for (const {markdown, html} of [

@@ -115,9 +115,13 @@ test.describe("tags", () => {
             const confirmButton = page.locator("#confirmDialogConfirmBtn:visible");
             await expect(confirmButton).toBeVisible();
             const removeResponse = page.waitForResponse(response =>
-                response.url().endsWith("/api/tag/removeTag") && response.request().method() === "POST");
+                response.url().endsWith("/api/tag/removeTagWithCollections") &&
+                response.request().method() === "POST" && response.request().postDataJSON().label === renamedTag);
             await confirmButton.click();
-            expect((await removeResponse).ok()).toBe(true);
+            const removed = await removeResponse;
+            expect(removed.ok()).toBe(true);
+            expect(removed.request().postDataJSON()).toEqual({label: renamedTag, collections: []});
+            expect((await removed.json()).code).toBe(0);
 
             await expect.poll(async () => includesSearchTag(
                 (await siyuanAPI.searchTags(renamedTag)).tags,
