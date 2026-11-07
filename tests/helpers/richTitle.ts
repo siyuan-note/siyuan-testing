@@ -14,6 +14,14 @@ export const getTitle = (page: Page, id: string) => page.locator(
     `.protyle-title[data-node-id="${id}"]:visible .protyle-title__rich .protyle-title__input`,
 ).last();
 
+export const getDialogTitle = async (page: Page, id: string) => {
+    const owner = page.locator(`[data-key="dialog-rename"] .document-title-dialog[data-node-id="${id}"]`);
+    await expect(owner).toBeVisible();
+    const title = owner.locator(":scope > .document-title-dialog__editor .protyle-title__input");
+    await expect(title).toBeEditable();
+    return title;
+};
+
 export const isDocumentTitleFocused = (title: Locator) => title.evaluate(element => {
     const selection = getSelection();
     return element.contains(document.activeElement) && element.contains(selection?.anchorNode || null);

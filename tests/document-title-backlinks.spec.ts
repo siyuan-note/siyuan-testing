@@ -2,7 +2,7 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor, ITestDocument} from "./helpers/testNotebook";
 import {openWorkspace, showDock} from "./helpers/runtime";
-import {getTitle, pasteParagraphIntoTitle, readTitle} from "./helpers/richTitle";
+import {getDialogTitle, getTitle, pasteParagraphIntoTitle, readTitle} from "./helpers/richTitle";
 import {REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard";
 import {SiyuanAPI} from "./helpers/siyuanAPI";
 
@@ -71,8 +71,9 @@ test("title backlinks deduplicate root references, retain body sources, and open
         await preview.locator('[data-type~="strong"]').click();
         const dialog = page.locator('[data-key="dialog-rename"]');
         await expect(dialog.locator('[role="dialog"]')).toBeVisible();
-        await expect(dialog.locator(`.protyle-title[data-node-id="${source.docID}"]`)).toBeVisible();
-        await expect(getTitle(page, source.docID).locator('[data-type~="block-ref"]')).toHaveCount(2);
+        const title = await getDialogTitle(page, source.docID);
+        await expect(title.locator('[data-type~="strong"]')).toHaveText("Root source");
+        await expect(title.locator('[data-type~="block-ref"]')).toHaveCount(2);
         await dialog.locator('[data-type="confirm"]').click();
         await expect(dialog).toHaveCount(0);
         expect((await readTitle(siyuanAPI, source.docID)).source).toEqual(saved.source);

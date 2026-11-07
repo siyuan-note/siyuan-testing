@@ -2,6 +2,7 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test as base} from "./fixtures";
 import {showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
+import {getDialogTitle} from "./helpers/richTitle";
 
 interface IKeymapItem {
     default: string;
@@ -175,8 +176,7 @@ base("prefers the active file tree shortcut when the keyboard target is the page
         await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
         await recordKey(page);
         const dialog = page.locator('[data-key="dialog-rename"]');
-        const title = dialog.locator(`.protyle-title[data-node-id="${docID}"] .protyle-title__input`);
-        await expect(title).toBeEditable();
+        const title = await getDialogTitle(page, docID);
         await expect(page.locator('[data-key="dialog-commandpanel"]')).toHaveCount(0);
         await title.press("Escape");
         await expect(dialog).toHaveCount(0);

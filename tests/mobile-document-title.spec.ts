@@ -47,10 +47,42 @@ test.describe("mobile document titles", () => {
         const marker = "Mobile rich title body";
         const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
             "Mobile Rich Title", marker);
-        const before = await siyuanAPI.readDocument<{Children: unknown[]}>(document.docID);
+        type BodyNode = {ID: string; Type: string; Properties: Record<string, string>; Children?: unknown[]};
+        const before = await siyuanAPI.readDocument<{Children: BodyNode[]}>(document.docID);
+        expect(before.Children).toHaveLength(1);
+        expect(before.Children[0]).toMatchObject({
+            Type: "NodeParagraph", Properties: {id: before.Children[0].ID},
+            Children: [{Type: "NodeText", Data: marker}],
+        });
         const input = await openMobileTitleEditor(page, document.docID);
         await input.fill("**Title** / [text](link)");
         await input.press("Enter");
+        // 标题回车在已有非空正文前插入一个空段；标题保存和正文插入分别异步落盘。
+        const body = mobileEditor(page);
+        const blocks = body.locator(":scope > [data-node-id]");
+        await expect(blocks).toHaveCount(before.Children.length + 1);
+        const insertedID = (await blocks.first().getAttribute("data-node-id"))!;
+        expect(insertedID).toMatch(/^\d{14}-[a-z0-9]{7}$/);
+        expect(before.Children.map(node => node.ID)).not.toContain(insertedID);
+        const expectedIDs = [insertedID, ...before.Children.map(node => node.ID)];
+        const assertBodyDOM = async () => {
+            await expect.poll(() => blocks.evaluateAll(elements => elements.map(element => element.getAttribute("data-node-id"))))
+                .toEqual(expectedIDs);
+            await expect(body.locator("[data-node-id]")).toHaveCount(expectedIDs.length);
+            await expect(blocks.first()).toHaveAttribute("data-type", "NodeParagraph");
+            await expect(blocks.first().locator(':scope > [contenteditable="true"]')).toHaveText("");
+            await expect(blocks.nth(1)).toHaveAttribute("data-type", "NodeParagraph");
+            await expect(blocks.nth(1).locator(':scope > [contenteditable="true"]')).toHaveText(marker);
+        };
+        await assertBodyDOM();
+        let savedBody: BodyNode[] = [];
+        await expect.poll(async () => {
+            savedBody = (await siyuanAPI.readDocument<{Children: BodyNode[]}>(document.docID)).Children;
+            return savedBody;
+        }, {timeout: 15000}).toEqual([
+            {ID: insertedID, Type: "NodeParagraph", Properties: {id: insertedID, updated: expect.stringMatching(/^\d{14}$/)}},
+            ...before.Children,
+        ]);
         const expectedSource = {
             spec: 1, format: "inline-ast", content: JSON.stringify([
                 {Type: "NodeTextMark", TextMarkType: "strong", TextMarkTextContent: "Title"},
@@ -74,7 +106,7 @@ test.describe("mobile document titles", () => {
             expect(persisted.Properties).toMatchObject({id: document.docID, title: "Title / text"});
             expect(Number(persisted.Spec)).toBeGreaterThanOrEqual(7);
             expect(persisted.DocumentTitle).toEqual(expectedSource);
-            expect(persisted.Children).toEqual(before.Children);
+            expect(persisted.Children).toEqual(savedBody);
             expect(await readTitle(siyuanAPI, document.docID)).toMatchObject({
                 text: "Title / text", empty: false, format: "inline-ast", source: expectedSource,
             });
@@ -90,6 +122,7 @@ test.describe("mobile document titles", () => {
             await expect(title.locator('[data-type="a"]')).toHaveText("text");
             await expect(title.locator('[data-type="a"]')).toHaveAttribute("data-href", "link");
             await expect(mobileEditor(page)).toContainText(marker);
+            await assertBodyDOM();
         }
         await assertPersisted();
     });
