@@ -2,6 +2,7 @@ import {getNotebookTreeItem} from "./helpers/fileTree";
 import {devices} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {createMobileTestDocument, mobileEditor, mobileTitle, openMobileDocument, openMobileTitleEditor} from "./helpers/mobile";
+import {readTitle} from "./helpers/richTitle";
 
 test.use({...devices["iPhone 13"], defaultBrowserType: "chromium"});
 
@@ -14,7 +15,7 @@ test.describe("mobile document titles", () => {
         const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
             "Mobile Title Characters", marker);
         const untitled = await page.evaluate(() => window.siyuan.languages._kernel[16]);
-        for (const title of ["A/B", "A//B", "A／B", "A%2FB", ".", "..", "文档/测试 🚀", "**Title** / [text](link)", ""]) {
+        for (const title of ["A/B", "A//B", "A／B", "A%2FB", ".", "..", "文档/测试 🚀", ""]) {
             await test.step(JSON.stringify(title), async () => {
                 const input = await openMobileTitleEditor(page, document.docID);
                 await input.fill(title);
@@ -38,6 +39,87 @@ test.describe("mobile document titles", () => {
             });
         }
         await testInfo.attach("mobile-empty-title", {body: await page.screenshot(), contentType: "image/png"});
+    });
+
+    test("preserves rich Markdown title source and formatting after Enter and reload", async ({
+        page, siyuanAPI, trackTestDocument,
+    }) => {
+        const marker = "Mobile rich title body";
+        const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
+            "Mobile Rich Title", marker);
+        const before = await siyuanAPI.readDocument<{Children: unknown[]}>(document.docID);
+        const input = await openMobileTitleEditor(page, document.docID);
+        await input.fill("**Title** / [text](link)");
+        await input.press("Enter");
+        const expectedSource = {
+            spec: 1, format: "inline-ast", content: JSON.stringify([
+                {Type: "NodeTextMark", TextMarkType: "strong", TextMarkTextContent: "Title"},
+                {Type: "NodeText", Data: " / "},
+                {Type: "NodeTextMark", TextMarkType: "a", TextMarkAHref: "link", TextMarkTextContent: "text"},
+                // 链接末尾保留编辑器的光标占位文字，完整源不能只比较摘要。
+                {Type: "NodeText", Data: "\u200b"},
+            ]),
+        };
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).source,
+            {timeout: 15000}).toEqual(expectedSource);
+        await expect.poll(async () => (await siyuanAPI.readDocument<{
+            DocumentTitle: typeof expectedSource;
+        }>(document.docID)).DocumentTitle, {timeout: 15000}).toEqual(expectedSource);
+        const assertPersisted = async () => {
+            const persisted = await siyuanAPI.readDocument<{
+                ID: string; Spec: string; Properties: Record<string, string>;
+                DocumentTitle: typeof expectedSource; Children: unknown[];
+            }>(document.docID);
+            expect(persisted.ID).toBe(document.docID);
+            expect(persisted.Properties).toMatchObject({id: document.docID, title: "Title / text"});
+            expect(Number(persisted.Spec)).toBeGreaterThanOrEqual(7);
+            expect(persisted.DocumentTitle).toEqual(expectedSource);
+            expect(persisted.Children).toEqual(before.Children);
+            expect(await readTitle(siyuanAPI, document.docID)).toMatchObject({
+                text: "Title / text", empty: false, format: "inline-ast", source: expectedSource,
+            });
+            expect((await siyuanAPI.getDocumentPaths(document.notebookID, [document.docID])).documents[0].title)
+                .toEqual({text: "Title / text", empty: false, format: "inline-ast"});
+        };
+        await assertPersisted();
+        for (const reload of [false, true]) {
+            if (reload) await page.reload();
+            const title = await openMobileTitleEditor(page, document.docID);
+            await expect(title).toHaveText("Title / text");
+            await expect(title.locator('[data-type="strong"]')).toHaveText("Title");
+            await expect(title.locator('[data-type="a"]')).toHaveText("text");
+            await expect(title.locator('[data-type="a"]')).toHaveAttribute("data-href", "link");
+            await expect(mobileEditor(page)).toContainText(marker);
+        }
+        await assertPersisted();
+    });
+
+    test("keeps existing plain Markdown-like titles literal when opened and reloaded", async ({
+        page, siyuanAPI, trackTestDocument,
+    }) => {
+        const document = await createMobileTestDocument(page, siyuanAPI, trackTestDocument,
+            "Mobile Literal Markdown Title", "Mobile literal title body");
+        const title = "**Title** / [text](link)";
+        await siyuanAPI.renameDocument(document.docID, title);
+        await openMobileDocument(page, document.docID);
+        for (const reload of [false, true]) {
+            if (reload) await page.reload();
+            await expect(mobileTitle(page, document.docID)).toHaveText(title);
+            const input = await openMobileTitleEditor(page, document.docID);
+            await expect(input).toHaveText(title);
+            await expect(input.locator('[data-type="strong"], [data-type="a"]')).toHaveCount(0);
+            await input.press("Enter");
+            await expect.poll(async () => {
+                const saved = await readTitle(siyuanAPI, document.docID);
+                return {text: saved.text, format: saved.format, source: saved.source};
+            }).toEqual({text: title, format: "plain", source: null});
+            const persisted = await siyuanAPI.readDocument<{
+                Properties: Record<string, string>; DocumentTitle?: unknown;
+            }>(document.docID);
+            expect(persisted.Properties.title).toBe(title);
+            expect(persisted.DocumentTitle).toBeUndefined();
+            await expect(mobileEditor(page)).toContainText("Mobile literal title body");
+        }
     });
 
     test("preserves Unicode titles at and beyond the plain creation limit after Enter and reload", async ({
