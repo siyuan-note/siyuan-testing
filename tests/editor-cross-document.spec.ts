@@ -4,6 +4,10 @@ import {PRIMARY_MODIFIER, REDO_SHORTCUT, UNDO_SHORTCUT} from "./helpers/keyboard
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 
+// Keep the failing first attempt: a successful retry cannot explain why opening
+// the source tab failed before the cross-document interaction began.
+test.use({trace: "retain-on-failure"});
+
 interface ISyNode {
     ID?: string;
     Data?: string;
