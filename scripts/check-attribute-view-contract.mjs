@@ -275,4 +275,33 @@ await check("response targets retain only IDs when the insertion result contains
     assert.deepEqual(getAttributeViewResponseDiagnostics(page)[0].target, target);
     assert.doesNotThrow(() => JSON.stringify(getAttributeViewResponseDiagnostics(page)));
 });
+await check("single-cell editing commits without opening the next row", async () => {
+    const start = source.indexOf("const editCell =");
+    const end = source.indexOf("\nconst setNumberFormat", start);
+    assert.ok(start >= 0 && end > start);
+    for (const value of ["42", "-123.126", "0", ""]) {
+        let visible = true;
+        let saved;
+        let draft;
+        const input = {
+            isVisible: async () => visible,
+            fill: async text => { draft = text; },
+            press: async key => { saved = draft; visible = key === "Enter"; },
+        };
+        const page = {locator: selector => selector.includes("b3-text-field") ? input : {isVisible: async () => false}};
+        const cell = {locator: () => ({})};
+        const expect = value => ({
+            ...expectation(value),
+            toBeVisible: async () => {},
+            not: {toHaveAttribute: async () => {}},
+            toHaveCount: async count => assert.equal(visible ? 1 : 0, count),
+        });
+        const edit = new Function("expect", "requestTransaction", compile(source.slice(start, end)) + "; return editCell;")(
+            expect, async (_page, action) => action(),
+        );
+        await edit(page, cell, value);
+        assert.equal(saved, value);
+        assert.equal(visible, false);
+    }
+});
 console.log(`Attribute view contract: ${checks} checks passed`);

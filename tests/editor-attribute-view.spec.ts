@@ -585,7 +585,8 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     }
 
     await input.fill(value);
-    await requestTransaction(page, () => input.press("Enter"));
+    // Enter continues into the next row; this helper commits only the selected cell.
+    await requestTransaction(page, () => input.press("Escape"));
     await expect(input).toHaveCount(0);
 };
 
