@@ -143,23 +143,47 @@ await check("new block transaction matching excludes wrong block, AV, and action
     assert.equal(matchesAttributeViewRender({id: "other", blockID: "carrier"}, target), false);
 });
 const responseHelpers = {};
-new Function("exports", "require", compile(readFileSync(
-    new URL("../tests/helpers/attributeViewResponses.ts", import.meta.url), "utf8")))(responseHelpers, name => {
+const responseBaseline = process.argv.find(arg => arg.startsWith("--response-baseline="))?.slice("--response-baseline=".length);
+const responseSource = responseBaseline ? execFileSync("git", ["show", `${responseBaseline}:tests/helpers/attributeViewResponses.ts`],
+    {cwd: root, encoding: "utf8"}) : readFileSync(new URL("../tests/helpers/attributeViewResponses.ts", import.meta.url), "utf8");
+new Function("exports", "require", compile(responseSource))(responseHelpers, name => {
     if (name === "@playwright/test") return {expect: expectation};
     if (name === "./attributeViewContract") return contract;
     throw new Error(`Unexpected response helper import: ${name}`);
 });
 const {observeAttributeViewResponses, getAttributeViewResponseDiagnostics} = responseHelpers;
 const exchange = (path, payload, result = {code: 0, data: {viewID: "first"}}, status = 200) => {
-    const request = {url: () => `http://example.test${path}`, postDataJSON: () => payload};
+    const request = {url: () => `http://example.test${path}`, postDataJSON: () => payload, failure: () => null};
     const response = {request: () => request, url: request.url, status: () => status,
         ok: () => status >= 200 && status < 300,
+        finished: async () => null,
         text: async () => typeof result === "string" ? result : JSON.stringify(result)};
     return {request, response};
 };
 const emit = (page, item) => {page.emit("request", item.request); page.emit("response", item.response);};
 const target = {blockID: "carrier", avID: "database"};
 const renderRequest = {id: "database", blockID: "carrier"};
+await check("an aborted render is not used when a completed replacement exists", async () => {
+    const page = new EventEmitter();
+    const observer = observeAttributeViewResponses(page);
+    const aborted = exchange("/api/av/renderAttributeView", renderRequest);
+    aborted.response.finished = async () => new Error("net::ERR_ABORTED");
+    aborted.request.failure = () => ({errorText: "net::ERR_ABORTED"});
+    aborted.response.text = async () => {throw new Error("No data found for resource");};
+    emit(page, aborted);
+    emit(page, exchange("/api/av/renderAttributeView", renderRequest));
+    assert.equal((await observer.render(target)).viewID, "first");
+    await observer.stop();
+});
+await check("headers alone never make a response eligible", async () => {
+    const page = new EventEmitter();
+    const observer = observeAttributeViewResponses(page);
+    const pending = exchange("/api/av/renderAttributeView", renderRequest);
+    pending.response.finished = () => new Promise(() => {});
+    emit(page, pending);
+    await assert.rejects(observer.render(target));
+    await observer.stop();
+});
 await check("switch synchronization excludes old in-flight and pre-transaction renders", async () => {
     const page = new EventEmitter();
     const old = exchange("/api/av/renderAttributeView", renderRequest);

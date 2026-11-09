@@ -87,6 +87,7 @@ export const attachAttributeViewFailure = async (
 export const observeAttributeViewResponses = (page: Page) => {
     const requests: Request[] = [];
     const responses: Response[] = [];
+    const completed = new Set<Response>();
     const targets = new Map<string, IAttributeViewTarget>();
     const recorded = new Map<Response, Promise<{code: number; msg?: string; data: IAttributeViewRender}>>();
     const requestListener = (request: Request) => {
@@ -98,6 +99,13 @@ export const observeAttributeViewResponses = (page: Page) => {
         // Do not attribute a pre-click request's late response to this action.
         if (requests.includes(response.request())) {
             responses.push(response);
+            // The response event only guarantees headers. A newer editor render
+            // can still abort this request before its body is available.
+            void response.finished().then(error => {
+                if (!error && !response.request().failure()) {
+                    completed.add(response);
+                }
+            }).catch(() => undefined);
         }
     };
     page.on("request", requestListener);
@@ -148,6 +156,9 @@ export const observeAttributeViewResponses = (page: Page) => {
         let matched: Response | undefined;
         await expect.poll(() => {
             matched = responses.find(response => {
+                if (!completed.has(response)) {
+                    return false;
+                }
                 const path = new URL(response.url()).pathname;
                 const payload = readPayload(response.request());
                 if (!payload) {
