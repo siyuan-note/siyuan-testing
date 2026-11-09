@@ -54,17 +54,19 @@ test("synchronizes the global plugin switch across windows", async ({
     });
     const installedPluginsURL = "**/api/bazaar/getInstalledPlugin";
     let releaseDisableResponse: (() => void) | undefined;
-    await page.route(installedPluginsURL, async (route) => {
-        markInstalledPluginsRequested();
-        await installedPluginsGate;
-        await route.continue();
-    });
 
     try {
         await setBazaar({...originalBazaar, trust: true});
         await setDisabled(false);
         await openWorkspace(page);
         await openWorkspace(peer);
+
+        // Startup also loads installed plugins. Gate only the settings request after both windows are ready.
+        await page.route(installedPluginsURL, async (route) => {
+            markInstalledPluginsRequested();
+            await installedPluginsGate;
+            await route.continue();
+        });
 
         const primarySwitch = await openBazaarSettings(page);
         await installedPluginsRequested;
