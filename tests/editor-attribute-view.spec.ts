@@ -562,15 +562,18 @@ const editCell = async (page: Page, cell: Locator, value: string) => {
     await expect(openEditor).toPass({timeout: 30000});
     if (await richTextMask.isVisible()) {
         const editable = richTextMask.locator(
-            '.protyle-wysiwyg > [data-node-id] > [contenteditable="true"]',
+            '.protyle-wysiwyg[contenteditable="true"]',
         ).first();
         await expect(async () => {
             if (!await richTextMask.isVisible()) {
                 await openEditor();
             }
             await expect(editable).toBeVisible();
-            await editable.fill(value);
+            await editable.click();
+            await editable.press("ControlOrMeta+A");
+            await page.keyboard.insertText(value);
             await expect(editable).toHaveText(value);
+            await expect(editable.locator(':scope > [data-node-id] [contenteditable="true"]')).not.toHaveCount(0);
         }).toPass({timeout: 30000});
         const saveButton = richTextMask.locator('[data-type="save"]');
         await requestTransaction(page, async () => {
@@ -764,8 +767,19 @@ const deleteSelectOption = async (page: Page, panel: Locator, name: string) => {
     )).toHaveCount(0);
 };
 
+const fillDateEndpoint = async (input: Locator, value: string) => {
+    const [date, time] = value.split("T");
+    await input.fill(date);
+    if (time !== undefined) {
+        const endpoint = input.locator('xpath=ancestor::label[contains(@class, "date-picker__endpoint")][1]');
+        const timeInput = endpoint.locator('[data-date-picker-part="time"]');
+        await expect(timeInput).toBeVisible();
+        await timeInput.fill(time);
+    }
+};
+
 const editDateCell = async (page: Page, cell: Locator) => {
-    const input = page.locator(".av__panel input.b3-text-field:visible").first();
+    const input = page.locator(".av__panel input[data-date-picker-type]:visible").first();
     const block = cell.locator(
         "xpath=ancestor::*[@data-type='NodeAttributeView'][1]",
     );
@@ -775,7 +789,8 @@ const editDateCell = async (page: Page, cell: Locator) => {
         await cell.click();
         await expect(input).toBeVisible({timeout: 2000});
     }).toPass({timeout: 30000});
-    const inputType = await input.getAttribute("type");
+    const inputType = await input.getAttribute("data-date-picker-type");
+    await expect(input).toHaveAttribute("type", "text");
     expect(["date", "datetime-local"]).toContain(inputType);
     const isNotTime = inputType === "date";
     const value = isNotTime ? "2026-08-17" : "2026-08-17T14:30";
@@ -786,7 +801,7 @@ const editDateCell = async (page: Page, cell: Locator) => {
         const [year, month, day] = dateValue.split("-").map(Number);
         return new Date(year, month - 1, day).getTime();
     }, {dateValue: value, withoutTime: isNotTime});
-    await input.fill(value);
+    await fillDateEndpoint(input, value);
     await requestTransaction(page, () => input.press("Enter"));
     await expect(input).toHaveCount(0);
     return {isNotTime, timestamp};
@@ -831,24 +846,25 @@ const setTimedDateRange = async (page: Page, cell: Locator, start: string, end: 
     await expect(async () => {
         await expect(cell).toBeVisible();
         await cell.click();
-        await expect(panel.locator("input.b3-text-field").first()).toBeVisible({timeout: 2000});
+        await expect(panel.locator("input[data-date-picker-type]").first()).toBeVisible({timeout: 2000});
     }).toPass({timeout: AV_RENDER_TIMEOUT});
 
-    const dateInputs = panel.locator("input.b3-text-field");
+    const dateInputs = panel.locator("input[data-date-picker-type]");
     const toggles = panel.locator('input[type="checkbox"]');
     const endDateToggle = toggles.nth(0);
     const includeTimeToggle = toggles.nth(1);
     if (!await includeTimeToggle.isChecked()) {
         await includeTimeToggle.click();
     }
-    await expect(dateInputs.first()).toHaveAttribute("type", "datetime-local");
+    await expect(dateInputs.first()).toHaveAttribute("data-date-picker-type", "datetime-local");
+    await expect(dateInputs.first()).toHaveAttribute("type", "text");
     if (!await endDateToggle.isChecked()) {
         await endDateToggle.click();
     }
     const endInput = dateInputs.nth(1);
     await expect(endInput).toBeVisible();
-    await dateInputs.first().fill(start);
-    await endInput.fill(end);
+    await fillDateEndpoint(dateInputs.first(), start);
+    await fillDateEndpoint(endInput, end);
     const transaction = waitForResponse(page, "/api/transactions", 30000);
     await endInput.press("Enter");
     await transaction;
@@ -2321,10 +2337,8 @@ test.describe("attribute views", () => {
         const oldCount = await plannedGroup.locator(".av__gallery-item").count();
         await requestTransaction(page, () => plannedGroup.locator('[data-type="av-add-top"]').click());
         await expect(plannedGroup.locator(".av__gallery-item")).toHaveCount(oldCount + 1, {timeout: 30000});
-        const input = page.locator(".av__mask .b3-text-field");
-        await expect(input).toBeVisible();
-        await input.fill("New planned card");
-        await requestTransaction(page, () => input.press("Enter"));
+        await editCell(page, plannedGroup.locator(".av__gallery-item").first()
+            .locator('[data-dtype="block"]'), "New planned card");
 
         let newRowID = "";
         await expect.poll(async () => {
@@ -3603,6 +3617,8 @@ test.describe("attribute views", () => {
         await expect(primaryCell).toHaveAttribute("data-detached", "true");
         const bindAction = primaryCell.locator('[data-type="av-row-update"]');
         await expect(bindAction).toHaveAttribute("aria-label", labels.bind);
+        await primaryCell.hover();
+        await expect(bindAction.locator("..")).toHaveCSS("pointer-events", "auto");
         await bindAction.click();
 
         const protyle = block.locator(
@@ -3867,10 +3883,6 @@ test.describe("attribute views", () => {
         await expect(block).toHaveAttribute("data-render", "true");
         const cell = row.row.locator('[data-dtype="block"]');
         await expect(cell).toContainText("Selected row");
-        await cell.click();
-        const input = page.locator(".av__mask .b3-text-field");
-        await expect(input).toBeVisible();
-        await input.fill("Updated row");
 
         let releaseRender!: () => void;
         let renderReady!: () => void;
@@ -3891,7 +3903,7 @@ test.describe("attribute views", () => {
             }
         });
         try {
-            await requestTransaction(page, () => input.press("Enter"));
+            await editCell(page, cell, "Updated row");
             await ready;
             await expect(cell).toHaveClass(/av__cell--select/);
             await block.locator('[data-type="av-filter"]').click();
