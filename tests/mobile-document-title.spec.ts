@@ -1,4 +1,5 @@
 import {getNotebookTreeItem} from "./helpers/fileTree";
+import {revealMobileFileTreeItem} from "./helpers/mobileFileTree";
 import {devices} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {createMobileTestDocument, mobileEditor, mobileTitle, openMobileDocument, openMobileTitleEditor} from "./helpers/mobile";
@@ -195,6 +196,7 @@ test.describe("mobile document titles", () => {
         const tree = page.locator('[data-type="sidebar-file"]');
         const row = (id: string) => tree.locator(`li[data-type="navigation-file"][data-node-id="${id}"]`);
         const expand = async (item: ReturnType<typeof row>) => {
+            await revealMobileFileTreeItem(tree, item);
             if (!await item.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow--open").count()) {
                 await item.locator(":scope > .b3-list-item__toggle").tap();
             }
@@ -203,11 +205,13 @@ test.describe("mobile document titles", () => {
         await expect(tree).toBeVisible();
         await expand(getNotebookTreeItem(tree, root.notebookID));
         await expand(row(root.docID));
+        await revealMobileFileTreeItem(tree, row(literal));
         await row(literal).locator(".b3-list-item__text").tap();
         await expect(mobileTitle(page, literal)).toHaveText("A/B");
         await expect(mobileEditor(page)).toContainText("Mobile literal slash content");
         await page.locator("#toolbarFile").tap();
         await expand(row(parent));
+        await revealMobileFileTreeItem(tree, row(child));
         await row(child).locator(".b3-list-item__text").tap();
         await expect(mobileTitle(page, child)).toHaveText("B");
         await expect(mobileEditor(page)).toContainText("Mobile nested content");

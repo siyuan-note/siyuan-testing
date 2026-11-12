@@ -1,4 +1,5 @@
 import {getNotebookTreeItem} from "./helpers/fileTree";
+import {revealMobileFileTreeItem} from "./helpers/mobileFileTree";
 import {devices, Locator, Page} from "@playwright/test";
 import {test as base, expect} from "./fixtures";
 
@@ -21,6 +22,7 @@ const openTree = async (page: Page, docID: string, notebookID: string) => {
     const tree = page.locator('[data-type="sidebar-file"]');
     await expect(tree).toBeVisible();
     const notebook = getNotebookTreeItem(tree, notebookID);
+    await revealMobileFileTreeItem(tree, notebook);
     await expect(notebook).toBeVisible();
     if (!await notebook.locator(".b3-list-item__arrow--open").count()) {
         await notebook.locator(".b3-list-item__toggle").tap();
@@ -53,12 +55,14 @@ test("mobile document multi-select follows open in new tab and supports empty se
 }) => {
     const first = await createTestDocument("Mobile tree selection first", "First document");
     const second = await createTestDocument("Mobile tree selection second", "Second document");
-    const {row} = await openTree(mobilePage, first.docID, first.notebookID);
+    const {tree, row} = await openTree(mobilePage, first.docID, first.notebookID);
+    await revealMobileFileTreeItem(tree, row(first.docID));
     await row(first.docID).locator('[data-type="more-file"]').tap();
     await expect(mobilePage.locator('#commonMenu [data-id="openInNewTab"] + [data-id="multiSelect"]')).toBeVisible();
     await mobilePage.locator('#commonMenu [data-id="multiSelect"]').tap();
     const toolbar = mobilePage.locator('[data-type="sidebar-file"] > .protyle-util');
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("1");
+    await revealMobileFileTreeItem(tree, row(second.docID));
     await row(second.docID).locator(".b3-list-item__text").tap();
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("2");
     await expect(row(first.docID)).toHaveClass(/b3-list-item--focus/);
@@ -66,12 +70,15 @@ test("mobile document multi-select follows open in new tab and supports empty se
     await toolbar.locator('[data-type="menu"]').tap();
     await expect(mobilePage.locator('#commonMenu [data-id="delete"]')).toBeVisible();
     await closeMenu(mobilePage);
+    await revealMobileFileTreeItem(tree, row(first.docID));
     await row(first.docID).locator(".b3-list-item__text").tap();
+    await revealMobileFileTreeItem(tree, row(second.docID));
     await row(second.docID).locator(".b3-list-item__text").tap();
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("0");
     await expect(toolbar.locator('[data-type="menu"]')).toBeDisabled();
     await toolbar.locator('[data-type="exitMultiSelectMode"]').tap();
     await expect(toolbar).toBeHidden();
+    await revealMobileFileTreeItem(tree, row(second.docID));
     await row(second.docID).locator(".b3-list-item__text").tap();
     await expect(mobilePage.locator("#toolbarName")).toHaveValue(second.title);
     await expect(mobilePage.locator("#editor .protyle-wysiwyg:visible")).toContainText("Second document");
@@ -83,7 +90,8 @@ test("mobile multi-select keeps document and notebook expansion arrows usable", 
     const parent = await createTestDocument("Mobile tree selection parent", "Parent document");
     const child = await createTestDocument("Mobile tree selection child", "Child document");
     await siyuanAPI.moveDocuments([child.docID], parent.docID);
-    const {row, notebook} = await openTree(mobilePage, parent.docID, parent.notebookID);
+    const {tree, row, notebook} = await openTree(mobilePage, parent.docID, parent.notebookID);
+    await revealMobileFileTreeItem(tree, row(parent.docID));
     const toolbar = await enterMultiSelect(mobilePage, row(parent.docID));
     const toggle = row(parent.docID).locator(".b3-list-item__toggle");
     if (await row(parent.docID).locator(".b3-list-item__arrow--open").count()) {
@@ -98,6 +106,7 @@ test("mobile multi-select keeps document and notebook expansion arrows usable", 
     await toggle.tap();
     await expect(row(child.docID)).toHaveCount(0);
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("1");
+    await revealMobileFileTreeItem(tree, notebook);
     await notebook.locator(".b3-list-item__text").tap();
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("2");
     await expect(notebook.locator(".b3-list-item__toggle")).not.toHaveClass(/fn__hidden/);
@@ -107,7 +116,9 @@ test("mobile multi-select keeps document and notebook expansion arrows usable", 
     await expect(row(parent.docID)).toHaveCount(0);
     await expect(notebook).toHaveClass(/b3-list-item--focus/);
     await notebook.locator(".b3-list-item__toggle").tap();
+    await revealMobileFileTreeItem(tree, row(parent.docID));
     await expect(row(parent.docID)).toBeVisible();
+    await revealMobileFileTreeItem(tree, notebook);
     await expect(notebook).toHaveClass(/b3-list-item--focus/);
 });
 
@@ -115,15 +126,18 @@ test("mobile notebook menu enters multi-select and supports mixed document selec
     createTestDocument, mobilePage,
 }) => {
     const document = await createTestDocument("Mobile tree notebook selection", "Notebook selection");
-    const {row, notebook} = await openTree(mobilePage, document.docID, document.notebookID);
+    const {tree, row, notebook} = await openTree(mobilePage, document.docID, document.notebookID);
     const toolbar = await enterMultiSelect(mobilePage, notebook, "more-root");
     await expect(notebook).toHaveClass(/b3-list-item--focus/);
+    await revealMobileFileTreeItem(tree, row(document.docID));
     await row(document.docID).locator(".b3-list-item__text").tap();
     await expect(toolbar.locator(".multiSelectCount")).toHaveText("2");
     await toolbar.locator('[data-type="menu"]').tap();
     await expect(mobilePage.locator('#commonMenu [data-id="delete"]')).toBeVisible();
     await closeMenu(mobilePage);
     await toolbar.locator('[data-type="exitMultiSelectMode"]').tap();
+    await revealMobileFileTreeItem(tree, notebook);
     await expect(notebook).not.toHaveClass(/b3-list-item--focus/);
+    await revealMobileFileTreeItem(tree, row(document.docID));
     await expect(row(document.docID)).not.toHaveClass(/b3-list-item--focus/);
 });
