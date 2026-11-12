@@ -1,6 +1,6 @@
 import {expect, test} from "./fixtures";
 import {getTitle} from "./helpers/richTitle";
-import {getNotebookTreeItem, expectTreeChild, getTreeChild} from "./helpers/fileTree";
+import {getNotebookTreeItem, expectTreeChild, getTreeChild, revealFileTreeItem} from "./helpers/fileTree";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 
@@ -78,12 +78,15 @@ test.describe("document lifecycle", () => {
         await page.reload();
         await expect(await getDocumentEditor(page, child.docID)).toContainText("Moved child content");
         const restoreFileTree = await showFileTree(page);
+        const restoreScrolls: Array<() => Promise<void>> = [];
+        const fileTree = page.locator(".sy__file:visible");
         try {
             const parentItem = page.locator(
                 `li[data-type="navigation-file"][data-node-id="${parent.docID}"]`,
             );
             if (!await parentItem.isVisible()) {
                 const notebookRoot = getNotebookTreeItem(page, parent.notebookID);
+                restoreScrolls.push(await revealFileTreeItem(fileTree, notebookRoot));
                 await expect(notebookRoot).toBeVisible({timeout: 15000});
                 if (!await notebookRoot.locator(
                     ":scope > .b3-list-item__toggle .b3-list-item__arrow--open",
@@ -91,10 +94,10 @@ test.describe("document lifecycle", () => {
                     await notebookRoot.locator(":scope > .b3-list-item__toggle").click();
                 }
             }
+            restoreScrolls.push(await revealFileTreeItem(fileTree, parentItem));
             await expect(parentItem).toBeVisible({timeout: 15000});
             const parentArrow = parentItem.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
             const parentToggle = parentItem.locator(":scope > .b3-list-item__toggle");
-            const fileTree = page.locator(".sy__file:visible");
             const childItem = await getTreeChild(fileTree, parentItem, child.docID);
             if (await parentArrow.evaluate(element => element.classList.contains("b3-list-item__arrow--open"))) {
                 await parentToggle.click();
@@ -106,6 +109,7 @@ test.describe("document lifecycle", () => {
             await expect(parentArrow).toHaveClass(/b3-list-item__arrow--open/);
             await expectTreeChild(fileTree, parentItem, child.docID);
         } finally {
+            for (const restoreScroll of restoreScrolls.reverse()) await restoreScroll();
             await restoreFileTree();
         }
     });

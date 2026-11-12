@@ -1,4 +1,4 @@
-import {getNotebookTreeItem} from "./helpers/fileTree";
+import {getNotebookTreeItem, revealFileTreeItem} from "./helpers/fileTree";
 import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {ISiyuanResponse} from "./helpers/siyuanAPI";
@@ -40,8 +40,10 @@ test.describe("document creation templates", () => {
             }, configuredFileTree);
 
             const restoreFileTree = await showFileTree(page);
+            let restoreScroll: (() => Promise<void>) | undefined;
             try {
                 const notebookRoot = getNotebookTreeItem(page, notebookID);
+                restoreScroll = await revealFileTreeItem(page.locator(".sy__file:visible"), notebookRoot);
                 await expect(notebookRoot).toBeVisible({timeout: 15000});
                 await notebookRoot.hover();
                 const createAction = notebookRoot.locator(':scope > [data-type="new"]');
@@ -77,6 +79,7 @@ test.describe("document creation templates", () => {
                 expect(rows.map(row => row.content)).toContain(`Default template ${docID}`);
                 await expect(await getDocumentEditor(page, docID)).toContainText(`Default template ${docID}`);
             } finally {
+                await restoreScroll?.();
                 await restoreFileTree();
             }
         } finally {
