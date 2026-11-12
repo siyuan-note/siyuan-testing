@@ -1,4 +1,4 @@
-import {getNotebookTreeItem} from "./helpers/fileTree";
+import {getNotebookTreeItem, revealFileTreeItem} from "./helpers/fileTree";
 import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {openBlockMenu} from "./helpers/blockMenu";
@@ -18,9 +18,11 @@ const flatten = (node: ISyNode): ISyNode[] => [node, ...(node.Children || []).fl
 const openRename = async (page: Page, notebook: ICreatedTestNotebook) => {
     await openWorkspace(page);
     const restoreTree = await showFileTree(page);
+    let restoreScroll: (() => Promise<void>) | undefined;
     try {
         const tree = page.locator(".sy__file:visible");
         const item = getNotebookTreeItem(tree, notebook.id);
+        restoreScroll = await revealFileTreeItem(tree, item);
         await item.locator(":scope > .b3-list-item__text").click({button: "right"});
         await page.locator('#commonMenu:not(.fn__none) [data-id="rename"]').click();
         const dialog = page.locator('[data-key="dialog-rename"]');
@@ -30,9 +32,11 @@ const openRename = async (page: Page, notebook: ICreatedTestNotebook) => {
                 await dialog.locator("input").press("Escape");
                 await expect(dialog).toHaveCount(0);
             }
+            await restoreScroll?.();
             await restoreTree();
         }};
     } catch (error) {
+        await restoreScroll?.();
         await restoreTree();
         throw error;
     }
@@ -149,46 +153,56 @@ test.describe("single-input dialogs", () => {
         await siyuanAPI.updateBlock(paragraphID!, `[${name}](${assetPath})`);
         await page.reload();
         const editor = await getDocumentEditor(page, document.docID);
-        await editor.locator(`span[data-type="a"][data-href="${assetPath}"]`).click({button: "right"});
-        await page.locator('#commonMenu:not(.fn__none) [data-id="rename"]').click();
-        const dialog = page.locator('[data-key="dialog-renameassets"]');
-        await expect(dialog.locator(".b3-dialog__container")).toBeVisible();
-        const newName = `renamed-${Date.now()}.txt`;
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => { release = resolve; });
-        let received!: () => void;
-        const arrived = new Promise<void>(resolve => { received = resolve; });
-        // 暂停真实请求的响应，不使用计时等待模拟慢网络。
-        await page.route("**/api/asset/renameAsset", async route => {
-            const response = await route.fetch();
-            received();
-            await gate;
-            await route.fulfill({response});
-        });
+        const floatingFileTree = page.locator('.layout__dockl.layout--float .sy__file:visible');
+        const restoreFloatingTree = await floatingFileTree.count() > 0;
+        if (restoreFloatingTree) {
+            await page.locator('.dock__item[data-type="file"]').first().click();
+            await expect(floatingFileTree).toHaveCount(0);
+        }
         try {
-            await dialog.locator("input").fill(newName);
-            const saved = page.waitForResponse("**/api/asset/renameAsset");
-            await dialog.locator("input").press("Enter");
-            await arrived;
+            await editor.locator(`span[data-type="a"][data-href="${assetPath}"]`).click({button: "right"});
+            await page.locator('#commonMenu:not(.fn__none) [data-id="rename"]').click();
+            const dialog = page.locator('[data-key="dialog-renameassets"]');
             await expect(dialog.locator(".b3-dialog__container")).toBeVisible();
-            await expect(dialog.locator("input")).toHaveValue(newName);
-            release();
-            const response = await (await saved).json();
-            expect(response.code).toBe(0);
-            await expect(dialog).toHaveCount(0);
-            const newPath = response.data.newPath as string;
-            expect(newPath).not.toBe(assetPath);
-            await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(document.docID)), {
-                timeout: 30000,
-            }).toContain(newPath);
-            await page.reload();
-            await expect((await getDocumentEditor(page, document.docID))
-                .locator(`span[data-type="a"][data-href="${newPath}"]`)).toBeVisible();
-            expect(await siyuanAPI.readWorkspaceText(`/data/${newPath}`)).toBe(content);
-            await siyuanAPI.removeWorkspaceFile(`/data/${newPath}`);
+            const newName = `renamed-${Date.now()}.txt`;
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            let received!: () => void;
+            const arrived = new Promise<void>(resolve => { received = resolve; });
+            // 暂停真实请求的响应，不使用计时等待模拟慢网络。
+            await page.route("**/api/asset/renameAsset", async route => {
+                const response = await route.fetch();
+                received();
+                await gate;
+                await route.fulfill({response});
+            });
+            try {
+                await dialog.locator("input").fill(newName);
+                const saved = page.waitForResponse("**/api/asset/renameAsset");
+                await dialog.locator("input").press("Enter");
+                await arrived;
+                await expect(dialog.locator(".b3-dialog__container")).toBeVisible();
+                await expect(dialog.locator("input")).toHaveValue(newName);
+                release();
+                const response = await (await saved).json();
+                expect(response.code).toBe(0);
+                await expect(dialog).toHaveCount(0);
+                const newPath = response.data.newPath as string;
+                expect(newPath).not.toBe(assetPath);
+                await expect.poll(async () => JSON.stringify(await siyuanAPI.readDocument(document.docID)), {
+                    timeout: 30000,
+                }).toContain(newPath);
+                await page.reload();
+                await expect((await getDocumentEditor(page, document.docID))
+                    .locator(`span[data-type="a"][data-href="${newPath}"]`)).toBeVisible();
+                expect(await siyuanAPI.readWorkspaceText(`/data/${newPath}`)).toBe(content);
+                await siyuanAPI.removeWorkspaceFile(`/data/${newPath}`);
+            } finally {
+                release();
+                await page.unrouteAll({behavior: "wait"});
+            }
         } finally {
-            release();
-            await page.unrouteAll({behavior: "wait"});
+            if (restoreFloatingTree) await showFileTree(page);
         }
     });
 

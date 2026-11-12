@@ -1,4 +1,4 @@
-import {getNotebookTreeItem} from "./helpers/fileTree";
+import {getNotebookTreeItem, revealFileTreeItem} from "./helpers/fileTree";
 import {Locator} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {commandPanel, focusCommandTarget, openCommandPanel, runPaletteCommand} from "./helpers/commandPanel";
@@ -463,6 +463,7 @@ test.describe("command palette", () => {
             const fileTreeFilter = page.locator(".sy__file:visible input.b3-text-field.search__label");
             const originalFilter = await fileTreeFilter.count() > 0 ? await fileTreeFilter.inputValue() : "";
             let collapseNotebook: (() => Promise<void>) | undefined;
+            const restoreScrolls: Array<() => Promise<void>> = [];
             try {
                 if (originalFilter) {
                     await fileTreeFilter.fill("");
@@ -472,6 +473,7 @@ test.describe("command palette", () => {
                 const editor = await getDocumentEditor(page, target.docID);
                 await showFileTree(page);
                 const notebookRoot = getNotebookTreeItem(page, target.notebookID);
+                restoreScrolls.push(await revealFileTreeItem(page.locator(".sy__file:visible"), notebookRoot));
                 await expect(notebookRoot).toBeVisible();
                 const notebookArrow = notebookRoot.locator(":scope > .b3-list-item__toggle .b3-list-item__arrow");
                 const wasExpanded = await notebookArrow.evaluate(element =>
@@ -485,6 +487,8 @@ test.describe("command palette", () => {
                         }
                     };
                 }
+                restoreScrolls.push(await revealFileTreeItem(page.locator(".sy__file:visible"),
+                    page.locator(`.sy__file li[data-node-id="${target.docID}"]`)));
                 await expect(page.locator(`.sy__file li[data-node-id="${target.docID}"]`)).toHaveCount(1);
                 const before = (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id);
                 await focusCommandTarget(editor.locator('[data-type="NodeParagraph"]'));
@@ -505,9 +509,12 @@ test.describe("command palette", () => {
                 expected.splice(before.indexOf(target.docID) + (key === "newDocBelow" ? 1 : 0), 0, createdID);
                 await expect.poll(async () => (await siyuanAPI.listDocuments(target.notebookID)).map(doc => doc.id),
                     {timeout: 30000}).toEqual(expected);
+                await revealFileTreeItem(page.locator(".sy__file:visible"),
+                    page.locator(`.sy__file li[data-node-id="${createdID}"]`));
                 await expect(page.locator(`.sy__file li[data-node-id="${createdID}"]`)).toHaveCount(1);
             } finally {
                 await siyuanAPI.setNotebookConf(target.notebookID, original);
+                for (const restoreScroll of restoreScrolls.reverse()) await restoreScroll();
                 await collapseNotebook?.();
                 if (originalFilter && await fileTreeFilter.count() > 0) {
                     await fileTreeFilter.fill(originalFilter);

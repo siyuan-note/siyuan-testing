@@ -67,7 +67,7 @@ body {margin:40px;font:16px/24px sans-serif} .fn__none {display:none!important}
         const blank = () => Object.assign(document.createElement("div"), {className: "fn__none"});
         const noop = () => {};
         window.siyuan = {
-            config: {editor: {fontSize: 16}, system: {container: "browser"}, appearance: {},
+            config: {editor: {fontSize: 16, spellcheck: false}, system: {container: "browser"}, appearance: {entryVisibility: {active: "full", profiles: []}},
                 keymap: structuredClone(navigationTest.Constants.SIYUAN_KEYMAP)},
             languages: {}, menus: {menu: {element: blank(), remove: noop}}, storage: {}, dialogs: [],
             layout: {}, blockPanels: [], mobile: undefined,
@@ -94,7 +94,7 @@ body {margin:40px;font:16px/24px sans-serif} .fn__none {display:none!important}
     const paragraph = (id, text = id) => `<div class="p" data-node-id="${id}" data-type="NodeParagraph"><div contenteditable="true">${text}</div></div>`;
     const setHTML = async html => page.evaluate(html => {
         navigationTest.destroyTabsRender(testProtyle.wysiwyg.element);
-        navigationTest.resetVerticalNavigation(testProtyle.wysiwyg.element);
+        testProtyle.wysiwyg.element.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true}));
         testProtyle.wysiwyg.element.innerHTML = html;
     }, html);
     const anchor = () => page.evaluate(() => {

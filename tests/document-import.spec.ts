@@ -1,4 +1,4 @@
-import {getNotebookTreeItem} from "./helpers/fileTree";
+import {getNotebookTreeItem, revealFileTreeItem} from "./helpers/fileTree";
 import {expect, test} from "./fixtures";
 import {openWorkspace, showFileTree} from "./helpers/runtime";
 import {getDocumentEditor} from "./helpers/testNotebook";
@@ -98,18 +98,11 @@ test.describe("document import", () => {
         await expect.poll(() => siyuanAPI.findDocumentPath(source.docID)).toBeUndefined();
         await openWorkspace(page);
         const restoreFileTree = await showFileTree(page);
+        let restoreScroll: (() => Promise<void>) | undefined;
         try {
             const notebookRoot = getNotebookTreeItem(page, source.notebookID);
+            restoreScroll = await revealFileTreeItem(page.locator(".sy__file:visible"), notebookRoot);
             await expect(notebookRoot).toBeVisible();
-            // 长文件树加载后会平滑滚动恢复位置，滚动动画期间坐标会漂移导致点击落空，
-            // 这里等待滚动稳定后再交互
-            const fileTree = page.locator(".sy__file");
-            await expect.poll(async () => {
-                const first = await fileTree.evaluate(element => element.scrollTop);
-                await page.waitForTimeout(50);
-                const second = await fileTree.evaluate(element => element.scrollTop);
-                return first === second;
-            }, {timeout: 5000}).toBe(true);
             await notebookRoot.hover();
             await notebookRoot.locator(':scope > [data-type="more-root"]').click();
 
@@ -134,6 +127,7 @@ test.describe("document import", () => {
             const result = await response.json() as {code: number; msg: string};
             expect(result).toMatchObject({code: 0});
         } finally {
+            await restoreScroll?.();
             await restoreFileTree();
         }
 
