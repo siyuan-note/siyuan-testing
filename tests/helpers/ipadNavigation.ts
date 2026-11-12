@@ -175,8 +175,32 @@ export class IpadNavigation {
 
     async openFromTree(id: string) {
         const selector = `.sy__file li[data-node-id="${id}"] .b3-list-item__text`;
-        await expect.poll(() => this.ipad.evaluate<boolean>(
-            `!!document.querySelector(${JSON.stringify(selector)})`, true)).toBe(true);
+        // The notebook can be visible while its target document is outside the virtual viewport.
+        await this.ipad.evaluate(`(() => {
+            document.querySelector('.sy__file .file-tree__items').scrollTop = 0;
+            return true;
+        })()`);
+        let previousVisible = "";
+        await expect.poll(async () => {
+            const state = await this.ipad.evaluate<{visible: boolean; position: string}>(`(() => {
+                const list = document.querySelector('.sy__file .file-tree__items');
+                if (!list) throw Error('File tree scroller is missing');
+                const target = document.querySelector(${JSON.stringify(selector)});
+                const rect = target?.getBoundingClientRect();
+                const viewport = list.getBoundingClientRect();
+                if (rect?.height && rect.top >= viewport.top && rect.bottom <= viewport.bottom) {
+                    return {visible:true, position:JSON.stringify([rect.top, rect.bottom, list.scrollTop])};
+                }
+                const delta = rect ? (rect.top + rect.bottom - viewport.top - viewport.bottom) / 2 :
+                    Math.max(1, Math.floor(list.clientHeight / 2));
+                list.scrollTop = Math.max(0, Math.min(list.scrollHeight - list.clientHeight, list.scrollTop + delta));
+                return {visible:false, position:''};
+            })()`);
+            const stable = state.visible && state.position === previousVisible;
+            previousVisible = state.visible ? state.position : "";
+            return stable;
+        }, {timeout: 30000, intervals: [100], message: "native file tree target must be rendered and stably visible"})
+            .toBe(true);
         await this.ipad.tap(await this.point(selector), this.testInfo);
         // iOS 首次触摸可能只显示悬停状态，第二次触摸才生成点击。
         const active = await this.ipad.evaluate<string>(`Array.from(document.querySelectorAll(

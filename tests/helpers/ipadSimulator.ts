@@ -175,7 +175,7 @@ export class IpadSimulator {
                     const title = document.querySelector('.protyle-title[data-node-id="${docID}"]');
                     const protyle = title?.closest('.protyle');
                     return protyle?.getAttribute('data-loading') === 'finished' &&
-                        !!protyle.querySelector('.protyle-wysiwyg [data-node-id]');
+                        !!protyle.querySelector('.protyle-wysiwyg:not(.protyle-title .protyle-wysiwyg) [data-node-id]');
                 })()`);
             } catch {
                 return false;
@@ -199,7 +199,7 @@ export class IpadSimulator {
                 .find(element => element.getBoundingClientRect().height > 0) :
                 document.querySelector('.protyle-title[data-node-id="${this.docID}"]');
             const protyle = title.closest('.protyle');
-            const editor = protyle.querySelector('.protyle-wysiwyg');
+            const editor = protyle.querySelector('.protyle-wysiwyg:not(.protyle-title .protyle-wysiwyg)');
             const content = protyle.querySelector('.protyle-content');
             const rect = element => {
                 const r = element.getBoundingClientRect();
