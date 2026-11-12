@@ -919,15 +919,7 @@ const addRow = async (page: Page, block: Locator, content: string) => {
     const row = rows.last();
     const rowID = await row.getAttribute("data-id");
     expect(rowID).toBeTruthy();
-    const input = page.locator(".av__mask .b3-text-field");
-    try {
-        await input.waitFor({state: "visible", timeout: 2000});
-    } catch {
-        await row.locator('[data-dtype="block"]').evaluate(element => (element as HTMLElement).click());
-    }
-    await expect(input).toBeVisible({timeout: 15000});
-    await input.fill(content);
-    await requestTransaction(page, () => input.press("Enter"));
+    await editCell(page, row.locator('[data-dtype="block"]'), content);
     return {id: rowID!, row: block.locator(`.av__row[data-id="${rowID}"]`)};
 };
 

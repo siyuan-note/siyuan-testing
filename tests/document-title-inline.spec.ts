@@ -205,18 +205,17 @@ test("clearing a title persists canonical empty plain storage without promoting 
     });
 });
 
-for (const {markdown, html} of [
-    {markdown: "- First\n- Second", html: "<ul><li>First</li><li>Second</li></ul>"},
-    {markdown: "| A | B |\n| --- | --- |\n| 1 | 2 |", html: "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"},
-    {markdown: "First paragraph\n\nSecond paragraph", html: "<p>First paragraph</p><p>Second paragraph</p>"},
+for (const {markdown, html, expected} of [
+    {markdown: "- First\n- Second", html: "<ul><li>First</li><li>Second</li></ul>", expected: "First Second"},
+    {markdown: "| A | B |\n| --- | --- |\n| 1 | 2 |", html: "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>", expected: "A B 1 2"},
+    {markdown: "First paragraph\n\nSecond paragraph", html: "<p>First paragraph</p><p>Second paragraph</p>", expected: "First paragraph Second paragraph"},
 ]) {
-    test(`block-level paste preserves the title and body: ${markdown.split("\n")[0]}`, async ({
+    test(`block-level paste joins title content and preserves the body: ${markdown.split("\n")[0]}`, async ({
         page, createTestDocument, siyuanAPI,
     }) => {
-        const document = await createTestDocument("Title Reject Block Paste E2E", markdown);
+        const document = await createTestDocument("Title Flatten Block Paste E2E", markdown);
         const before = await readTitle(siyuanAPI, document.docID);
         const body = (await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children;
-        const message = await page.evaluate(() => window.siyuan.languages.documentTitleInlineOnly);
         const title = getTitle(page, document.docID);
         await title.focus();
         await title.evaluate((element, clipboard) => {
@@ -229,12 +228,21 @@ for (const {markdown, html} of [
             data.setData("text/plain", clipboard.markdown);
             element.dispatchEvent(new ClipboardEvent("paste", {bubbles: true, cancelable: true, clipboardData: data}));
         }, {html, markdown});
-        await expect(page.locator(".b3-snackbar__content").filter({hasText: message})).toBeVisible();
-        expect(await readTitle(siyuanAPI, document.docID)).toEqual(before);
+        await expect(title).toHaveText(expected);
+        await title.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe(expected);
         expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(body);
+        await title.focus();
+        await title.press(UNDO_SHORTCUT);
+        await expect(title).toHaveText(before.text);
+        await title.press(REDO_SHORTCUT);
+        await expect(title).toHaveText(expected);
+        await title.press("Tab");
+        await expect.poll(async () => (await readTitle(siyuanAPI, document.docID)).text).toBe(expected);
         await page.reload();
         await getDocumentEditor(page, document.docID);
-        await expect(getTitle(page, document.docID)).toHaveText(before.text);
+        await expect(getTitle(page, document.docID)).toHaveText(expected);
+        expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(body);
     });
 }
 
