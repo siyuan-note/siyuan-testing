@@ -8,6 +8,7 @@ final class SelectionTests: XCTestCase {
 
     struct Gesture: Decodable {
         let kind: String?
+        let pressDuration: Double?
         let start: Point
         let end: Point
         let viewport: Viewport
@@ -36,7 +37,7 @@ final class SelectionTests: XCTestCase {
         if gesture.kind == "tap" {
             start.tap()
         } else {
-            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            start.press(forDuration: gesture.pressDuration ?? 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         }
         let screenshot = XCTAttachment(screenshot: safari.screenshot())
         screenshot.lifetime = .keepAlways

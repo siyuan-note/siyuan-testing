@@ -67,3 +67,53 @@ test("touch scrolling inside content does not select blocks", async ({createTest
     expect(after.tracking).toBe(false);
     expect(after.hiddenRange).toBe(false);
 });
+
+
+test("selected gutter retains native tap menus and long-press block dragging", async ({
+    createTestDocument, baseURL,
+}, testInfo) => {
+    const document = await createTestDocument("iPad gutter touch ownership", markdown);
+    await ipad.open(baseURL!, document.docID);
+    const before = await ipad.snapshot();
+    const first = before.blocks[0];
+    const start = {x: first.rect.left - 12, y: first.rect.top + 6};
+    const after = await ipad.drag(start, {x: start.x, y: before.blocks[3].rect.bottom - 6}, testInfo);
+    expect(after.selected).toEqual(before.blocks.slice(0, 4).map(block => block.id));
+    expect(await ipad.evaluate<boolean>(`!!document.elementFromPoint(${start.x}, ${start.y})
+        ?.closest('.protyle-gutters button')`, true)).toBe(true);
+    await ipad.tap(start, testInfo);
+    await expect.poll(() => ipad.evaluate<boolean>(`(() => {
+        const menu=window.siyuan.menus.menu.element;
+        return !!menu.getBoundingClientRect().height && !menu.classList.contains('fn__none');
+    })()`, true)).toBe(true);
+    await ipad.evaluate(`(() => {
+        window.siyuan.menus.menu.remove();
+        window.__gutterDragEvents=[];
+        window.__gutterDragRecord=e=>{
+            if(e.type==='dragstart') window.__gutterDragSource=e.target;
+            window.__gutterDragEvents.push({type:e.type, source:e.target===window.__gutterDragSource});
+        };
+        document.addEventListener('dragstart',window.__gutterDragRecord,true);
+        document.addEventListener('dragend',window.__gutterDragRecord,true);
+        return true;
+    })()`);
+    try {
+        expect((await ipad.snapshot()).selected).toEqual(after.selected);
+        expect(await ipad.evaluate<boolean>(`!!document.elementFromPoint(${start.x}, ${start.y})
+            ?.closest('.protyle-gutters button')`, true)).toBe(true);
+        const released = await ipad.drag(start, {x:start.x+15, y:start.y+15}, testInfo, 0.6);
+        const events = await ipad.evaluate<Array<{type: string; source: boolean}>>(`window.__gutterDragEvents`, true);
+        expect(events.filter(event => event.source).map(event => event.type)).toEqual(['dragstart', 'dragend']);
+        expect(events.filter(event => !event.source).every(event => event.type === 'dragend')).toBe(true);
+        expect(await ipad.evaluate<boolean>(`!!window.siyuan.touchDragActive`, true)).toBe(false);
+        expect(released.tracking).toBe(false);
+        expect(released.hiddenRange).toBe(false);
+    } finally {
+        await ipad.evaluate(`(() => {
+            document.removeEventListener('dragstart',window.__gutterDragRecord,true);
+            document.removeEventListener('dragend',window.__gutterDragRecord,true);
+            delete window.__gutterDragRecord;delete window.__gutterDragEvents;
+            delete window.__gutterDragSource;return true;
+        })()`);
+    }
+});

@@ -219,8 +219,8 @@ export class IpadSimulator {
         })()`, true);
     }
 
-    async drag(start: IPoint, end: IPoint, testInfo: TestInfo) {
-        return this.gesture("drag", start, end, testInfo);
+    async drag(start: IPoint, end: IPoint, testInfo: TestInfo, pressDuration = 0.1) {
+        return this.gesture("drag", start, end, testInfo, pressDuration);
     }
 
     async tap(point: IPoint, testInfo: TestInfo) {
@@ -276,12 +276,12 @@ export class IpadSimulator {
         })()`, true);
     }
 
-    private async gesture(kind: "tap" | "drag", start: IPoint, end: IPoint, testInfo: TestInfo) {
+    private async gesture(kind: "tap" | "drag", start: IPoint, end: IPoint, testInfo: TestInfo, pressDuration = 0.1) {
         const configuredRun = path.join(path.dirname(this.testRun), "gesture.xctestrun");
         const resultBundle = testInfo.outputPath(`gesture-${Date.now()}.xcresult`);
         const before = await this.snapshot(true);
         await run("python3", [path.join(scripts, "configure-test-run.py"), this.testRun, configuredRun], {
-            kind, start, end, viewport: before.viewport,
+            kind, start, end, pressDuration, viewport: before.viewport,
         });
         try {
             await run("xcodebuild", ["test-without-building", "-xctestrun", configuredRun,
