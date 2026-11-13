@@ -2,6 +2,19 @@ import {expect, test} from "@playwright/test";
 import {extractKernelErrors} from "./helpers/kernelLog";
 
 test.describe("kernel log audit", () => {
+    test("consumes only explicitly expected errors for the same document and exact count", () => {
+        const message = "document_title.go: set document title [doc-id] failed: invalid document title source";
+        const expected = "E 2026/11/13 14:51:36 document_title.go:154: set document title [doc-id] failed: invalid document title source";
+        const otherDocument = expected.replace("[doc-id]", "[other-id]");
+        const otherError = expected.replace("invalid document title source", "unexpected storage failure");
+        const otherSource = expected.replace("document_title.go", "other.go");
+        expect(extractKernelErrors(expected)).toEqual([expected]);
+        expect(extractKernelErrors(expected, [message])).toEqual([]);
+        expect(extractKernelErrors([expected, otherDocument, otherError, otherSource, expected].join("\n"), [message]))
+            .toEqual([otherDocument, otherError, otherSource, expected]);
+        expect(extractKernelErrors([expected, expected].join("\n"), [message, message])).toEqual([]);
+    });
+
     test("distinguishes retried repository changes from terminal and unrelated errors", () => {
         const retried = [
             "E 2026/07/22 20:20:10 repo.go:1209: file changed [data/sort.json], size [1 -> 2]",

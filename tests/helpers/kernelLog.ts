@@ -1,4 +1,5 @@
-import {mkdir, open, readFile, stat, writeFile} from "node:fs/promises";
+import {randomUUID} from "node:crypto";
+import {mkdir, open, readFile, readdir, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
 
 interface IKernelLogBaseline {
@@ -6,6 +7,7 @@ interface IKernelLogBaseline {
     logPath?: string;
     offset?: number;
     reason?: string;
+    expectedErrorsDir?: string;
 }
 
 export interface IKernelLogAudit {
@@ -34,7 +36,8 @@ const isLoadAfterConfirmedRemoval = (lines: string[], index: number) => {
     });
 };
 
-export const extractKernelErrors = (log: string) => {
+export const extractKernelErrors = (log: string, expectedErrors: string[] = []) => {
+    const remaining = [...expectedErrors];
     const lines = log.split(/\r?\n/);
     return lines.filter((line, index) => {
         if (line.includes("PANIC RECOVERED") ||
@@ -42,6 +45,12 @@ export const extractKernelErrors = (log: string) => {
             return true;
         }
         if (!/^E \d{4}\/\d{2}\/\d{2} /.test(line)) {
+            return false;
+        }
+        const message = line.match(/^E \d{4}\/\d{2}\/\d{2} \S+ (\S+\.go):\d+: (.*)$/);
+        const expectedIndex = message ? remaining.indexOf(`${message[1]}: ${message[2]}`) : -1;
+        if (expectedIndex !== -1) {
+            remaining.splice(expectedIndex, 1);
             return false;
         }
         if (isLoadAfterConfirmedRemoval(lines, index)) {
@@ -64,7 +73,28 @@ const BASELINE_PATH = path.resolve(
 
 const writeBaseline = async (baseline: IKernelLogBaseline) => {
     await mkdir(path.dirname(BASELINE_PATH), {recursive: true});
-    await writeFile(BASELINE_PATH, JSON.stringify(baseline, null, 2), "utf8");
+    await writeFile(BASELINE_PATH, JSON.stringify({
+        ...baseline,
+        expectedErrorsDir: path.join(path.dirname(BASELINE_PATH), `.kernel-log-expected-${randomUUID()}`),
+    }, null, 2), "utf8");
+};
+
+export const expectKernelLogError = async (message: string) => {
+    if (!/^\S+\.go: [^\r\n]+$/.test(message)) {
+        throw new Error("Expected kernel error must include its source file and exact single-line message");
+    }
+    const baseline = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as IKernelLogBaseline;
+    if (!baseline.enabled) {
+        return;
+    }
+    if (!baseline.expectedErrorsDir) {
+        throw new Error("Kernel log audit has no expectation directory");
+    }
+    await mkdir(baseline.expectedErrorsDir, {recursive: true});
+    await writeFile(path.join(baseline.expectedErrorsDir, `${randomUUID()}.json`), JSON.stringify(message), {
+        encoding: "utf8",
+        flag: "wx",
+    });
 };
 
 export const startKernelLogAudit = async (workspaceDir: string, baseURL: string) => {
@@ -106,7 +136,22 @@ export const finishKernelLogAudit = async (): Promise<IKernelLogAudit> => {
         if (buffer.length > 0) {
             await handle.read(buffer, 0, buffer.length, offset);
         }
-        const errors = extractKernelErrors(buffer.toString("utf8"));
+        let expectedErrors: string[] = [];
+        if (baseline.expectedErrorsDir) {
+            let files: string[];
+            try {
+                files = await readdir(baseline.expectedErrorsDir);
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                    throw error;
+                }
+                files = [];
+            }
+            expectedErrors = await Promise.all(files.map(async file =>
+                JSON.parse(await readFile(path.join(baseline.expectedErrorsDir!, file), "utf8")) as string,
+            ));
+        }
+        const errors = extractKernelErrors(buffer.toString("utf8"), expectedErrors);
         return {enabled: true, errors, logPath: baseline.logPath};
     } finally {
         await handle.close();

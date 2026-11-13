@@ -2,6 +2,7 @@ import {Locator, Page} from "@playwright/test";
 import {expect, test} from "./fixtures";
 import {getDocumentEditor} from "./helpers/testNotebook";
 import {getTitle, readTitle, setTitleSource} from "./helpers/richTitle";
+import {expectKernelLogError} from "./helpers/kernelLog";
 import {UNDO_SHORTCUT, REDO_SHORTCUT} from "./helpers/keyboard";
 
 interface IInlineNode extends Record<string, unknown> {
@@ -389,6 +390,9 @@ for (const {name, source} of invalidSources) {
         }});
         expect(response.ok()).toBe(true);
         expect((await response.json() as {code: number}).code).not.toBe(0);
+        await expectKernelLogError(
+            `document_title.go: set document title [${document.docID}] failed: invalid document title source`,
+        );
         expect(await readTitle(siyuanAPI, document.docID)).toEqual(before);
         expect((await siyuanAPI.readDocument<ISyDocument>(document.docID)).Children).toEqual(body);
         await page.reload();
