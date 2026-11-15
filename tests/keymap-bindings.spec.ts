@@ -187,8 +187,18 @@ base("prefers the active file tree shortcut when the keyboard target is the page
     }
 });
 
-test("combines assignment filters with search and updates them after editing", async ({page, siyuanAPI, shortcutRow}) => {
+test("preserves assignment search results while editing and updates them on explicit filtering", async ({page, siyuanAPI, shortcutRow}) => {
     const filter = async (value: string) => page.locator(`[data-keymap-filter-value="${value}"]`).click();
+    const search = page.locator("#keymapInput");
+    const query = (await shortcutRow.locator(".b3-list-item__text").textContent())!.trim();
+    const expectSaved = async (keys: string[]) => {
+        await expect.poll(async () => {
+            const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
+            return conf.keymap.general[action].bindings?.keys;
+        }).toEqual(keys);
+        await expect(shortcutRow).toHaveAttribute("data-keys", JSON.stringify(keys));
+        await expect(shortcutRow).toBeVisible();
+    };
     await filter("assigned");
     await expect(shortcutRow).toBeVisible();
     await filter("customized");
@@ -206,14 +216,26 @@ test("combines assignment filters with search and updates them after editing", a
     await expect(shortcutRow).toBeVisible();
     await shortcutRow.locator('[data-index="1"]').hover();
     await shortcutRow.locator('[data-index="1"] [data-type="remove"]').click();
+    await expectSaved(["⌘5"]);
+    await expect(shortcutRow).toHaveAttribute("data-customized", "false");
+    await expect(page.locator('[data-keymap-filter-value="customized"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(search).toHaveValue(query);
+    await search.fill(`${query} `);
     await expect(shortcutRow).toBeHidden();
     await filter("assigned");
     await clickAction(shortcutRow, "remove");
+    await expectSaved([]);
+    await expect(page.locator('[data-keymap-filter-value="assigned"]')).toHaveAttribute("aria-pressed", "true");
+    await filter("assigned");
     await expect(shortcutRow).toBeHidden();
     await filter("unassigned");
     await expect(shortcutRow).toBeVisible();
     await expect(shortcutRow.locator("[data-index]")).toHaveCount(0);
     await clickAction(shortcutRow, "reset");
+    await expectSaved(["⌘5"]);
+    await expect(shortcutRow).toHaveAttribute("data-customized", "false");
+    await expect(page.locator('[data-keymap-filter-value="unassigned"]')).toHaveAttribute("aria-pressed", "true");
+    await filter("unassigned");
     await expect(shortcutRow).toBeHidden();
     await filter("assigned");
     await expect(shortcutRow).toBeVisible();
@@ -223,7 +245,7 @@ test("combines assignment filters with search and updates them after editing", a
     }).toEqual(["⌘5"]);
 });
 
-test("shows the conflict filter only when needed and colors only conflicting bindings", async ({page, siyuanAPI, shortcutRow}) => {
+test("preserves active conflict results after editing and hides the empty filter when leaving it", async ({page, siyuanAPI, shortcutRow}) => {
     void shortcutRow;
     const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
     // 构造两个独立默认绑定，排除测试工作空间中已有冲突的影响。
@@ -270,13 +292,54 @@ test("shows the conflict filter only when needed and colors only conflicting bin
     await expect(page.locator('#keymapList .config-keymap__row:visible')).toHaveCount(2);
     await chip.hover();
     await chip.locator('[data-type="remove"]').click();
+    await expect.poll(async () => {
+        const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
+        return conf.keymap.general[action].bindings?.keys;
+    }).toEqual(["⌘5"]);
+    await expect(row).toHaveAttribute("data-keys", JSON.stringify(["⌘5"]));
+    await expect(row).toHaveAttribute("data-conflict", "false");
+    await expect(page.locator(".config-keymap__chip--conflict")).toHaveCount(0);
+    await expect(conflictFilter).toBeVisible();
+    await expect(conflictFilter).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('#keymapList .config-keymap__row:visible')).toHaveCount(2);
+    await page.locator("#keymapInput").fill((await row.locator(".b3-list-item__text").textContent())!.trim());
+    await expect(page.locator('#keymapList .config-keymap__row:visible')).toHaveCount(0);
+    await expect(conflictFilter).toHaveAttribute("aria-pressed", "true");
+    await page.locator('[data-keymap-filter-value="all"]').click();
     await expect(conflictFilter).toBeHidden();
     await expect(page.locator('[data-keymap-filter-value="all"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(row).toBeVisible();
     await expect(page.locator(".config-keymap__chip--conflict")).toHaveCount(0);
     await expect.poll(async () => {
         const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
         return conf.keymap.general[action].bindings?.keys;
     }).toEqual(["⌘5"]);
+});
+
+test("preserves shortcut search results after removing a binding until the next key search", async ({page, siyuanAPI, shortcutRow}) => {
+    const search = page.locator("#searchByKey");
+    const query = await page.locator("#keymapInput").inputValue();
+    await search.press("ControlOrMeta+5");
+    await expect(search).toHaveAttribute("data-keymap", "⌘5");
+    await expect(shortcutRow).toBeVisible();
+    await clickAction(shortcutRow, "remove");
+    await expect.poll(async () => {
+        const {conf} = await siyuanAPI.post<{conf: {keymap: IKeymap}}>("/api/system/getConf", {});
+        return conf.keymap.general[action].bindings?.keys;
+    }).toEqual([]);
+    await expect(shortcutRow).toHaveAttribute("data-keys", "[]");
+    await expect(shortcutRow.locator("[data-index]")).toHaveCount(0);
+    await expect(shortcutRow).toBeVisible();
+    await expect(search).toHaveAttribute("data-keymap", "⌘5");
+    await expect(page.locator("#keymapInput")).toHaveValue(query);
+    await search.press("ControlOrMeta+5");
+    await expect(shortcutRow).toBeHidden();
+    await page.locator("#clearSearchBtn").click();
+    await expect(search).toHaveAttribute("data-keymap", "");
+    await expect(page.locator("#keymapInput")).toHaveValue("");
+    await page.locator('[data-keymap-filter-value="unassigned"]').click();
+    await expect(shortcutRow).toBeVisible();
+    await expect(shortcutRow.locator("[data-index]")).toHaveCount(0);
 });
 
 test("always shows shortcut removal buttons without shifting on hover and labels the add button", async ({page, siyuanAPI, shortcutRow}) => {
