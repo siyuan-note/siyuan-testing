@@ -604,9 +604,10 @@ const setNumberFormat = async (page: Page, header: Locator,
         await headerMenu.locator('[data-id="edit"]').click();
         await expect(panel.locator('[data-type="numberFormat"]')).toBeVisible({timeout: 2000});
     }).toPass({timeout: AV_RENDER_TIMEOUT});
-    await panel.locator('[data-type="numberFormat"]').click();
+    const numberFormat = panel.locator('[data-type="numberFormat"]');
+    await numberFormat.hover();
 
-    const menu = page.locator('#commonMenu[data-name="av-col-format-number"]:not(.fn__none)');
+    const menu = numberFormat.locator(".b3-menu__submenu");
     await expect(menu).toBeVisible();
     const label = await page.evaluate(value => {
         if (value === "commas") {
@@ -617,9 +618,7 @@ const setNumberFormat = async (page: Page, header: Locator,
         }
         return window.siyuan.languages.numberFormatUSD;
     }, format);
-    const option = menu.locator(".b3-menu__item").filter({
-        has: page.locator(".b3-menu__label", {hasText: label}),
-    });
+    const option = menu.getByRole("button", {name: label, exact: true});
     await expect(option).toBeVisible();
     await requestTransaction(page, () => option.click());
     await expect(panel).toHaveCount(0);
