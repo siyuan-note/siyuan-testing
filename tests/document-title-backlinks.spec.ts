@@ -175,6 +175,18 @@ test("title-to-title dependencies update dynamic body anchors while static ancho
     const middle = await createTestDocument("Title Dependency Middle E2E", `Middle ((${base.docID} '${base.title}'))`);
     await pasteParagraphIntoTitle(middle.editor.locator(':scope > [data-type="NodeParagraph"] > [contenteditable="true"]'),
         getTitle(page, middle.docID), true);
+    await expect.poll(async () => {
+        const saved = await readTitle(siyuanAPI, middle.docID);
+        const nodes = saved.source ? JSON.parse(saved.source.content) as Array<{
+            TextMarkBlockRefID?: string; TextMarkBlockRefSubtype?: string;
+        }> : [];
+        return {
+            text: saved.text,
+            dynamicReference: nodes.some(node => node.TextMarkBlockRefID === base.docID &&
+                node.TextMarkBlockRefSubtype === "d"),
+        };
+    }, {timeout: 15000, message: "waiting for the pasted dynamic title before navigating away"})
+        .toEqual({text: `Middle ${base.title}`, dynamicReference: true});
     const source = await createTestDocument("Title Dependency Body E2E",
         `((${middle.docID} 'Dynamic anchor')) / ((${middle.docID} "Static anchor"))`);
     await openWorkspace(page, `/?id=${base.docID}`);
