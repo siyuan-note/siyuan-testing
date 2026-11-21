@@ -30,8 +30,8 @@ const expectResizeBounds = async (page: Page, input: Locator) => {
 };
 
 const openHistory = async (page: Page) => {
-    await page.locator("#barWorkspace").click();
-    await page.locator('.b3-menu[data-name="barWorkspace"]:not(.fn__none) [data-id="dataHistory"]').click();
+    await page.locator("#barMainMenu").click();
+    await page.locator('.b3-menu[data-name="barMainMenu"]:not(.fn__none) [data-id="dataHistory"]').click();
     const history = page.locator('[data-key="dialog-history"]');
     await expect(history.locator(".b3-dialog__container")).toBeVisible();
     await history.locator('.layout-tab-bar [data-type="repo"]').click();

@@ -21,8 +21,8 @@ test.describe("editor font families", () => {
             await expect.poll(() => page.evaluate(() => window.siyuan.config.editor.fontFamilies))
                 .toEqual(clearedEditor.fontFamilies);
 
-            await page.locator("#barWorkspace").click();
-            const workspaceMenu = page.locator('.b3-menu[data-name="barWorkspace"]:not(.fn__none)');
+            await page.locator("#barMainMenu").click();
+            const workspaceMenu = page.locator('.b3-menu[data-name="barMainMenu"]:not(.fn__none)');
             await expect(workspaceMenu).toBeVisible();
             await workspaceMenu.locator('[data-id="config"]').click();
 

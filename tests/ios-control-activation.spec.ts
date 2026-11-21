@@ -10,7 +10,7 @@ const settings = (page: Page) => page.locator('[data-key="dialog-setting"].b3-di
 const menu = (page: Page) => page.locator('#commonMenu:not(.fn__none)');
 
 const openSettings = async (page: Page) => {
-    await tapOnce(page, page.locator("#barWorkspace"));
+    await tapOnce(page, page.locator("#barMainMenu"));
     await expect(menu(page)).toBeVisible();
     await tapOnce(page, menu(page).locator('[data-id="config"]'));
     await expect(settings(page).locator(".b3-dialog__container")).toBeVisible();
