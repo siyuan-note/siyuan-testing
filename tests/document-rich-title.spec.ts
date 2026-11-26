@@ -185,7 +185,8 @@ test("title-only images stay referenced through native import and native and Mar
     await siyuanAPI.flushTransactions();
     const saved = await siyuanAPI.readDocument<ISyDocument>(document.docID);
     expect(JSON.stringify(saved.Children)).not.toContain(asset);
-    const titleSource = (await readTitle(siyuanAPI, document.docID)).source;
+    const titleSource = (await readTitle(siyuanAPI, document.docID)).source!;
+    const originalImage = await siyuanAPI.downloadFile(asset);
     const unused = await siyuanAPI.post<unknown[]>("/api/asset/getUnusedAssets", {});
     expect(JSON.stringify(unused)).not.toContain(asset);
     let nativeArchive: Buffer | undefined;
@@ -218,10 +219,20 @@ test("title-only images stay referenced through native import and native and Mar
         return importedID;
     }, {timeout: 30000}).not.toBe("");
     trackTestDocument({id: importedID, notebookID: document.notebookID, title: "Imported rich title"});
-    expect((await readTitle(siyuanAPI, importedID)).source).toEqual(titleSource);
+    // Reimporting into the same workspace can allocate a new asset path.
+    const importedSource = (await readTitle(siyuanAPI, importedID)).source!;
+    type InlineNode = {Type: string; Data?: string; Children?: InlineNode[]};
+    const importedImage = (JSON.parse(importedSource.content) as InlineNode[]).find(node => node.Type === "NodeImage");
+    const importedAsset = importedImage?.Children?.find(node => node.Type === "NodeLinkDest")?.Data || "";
+    expect(importedAsset).toMatch(/^assets\/[^/]+\.png$/);
+    expect(importedSource).toEqual({
+        ...titleSource,
+        content: titleSource.content.replace(JSON.stringify(asset), JSON.stringify(importedAsset)),
+    });
+    expect(await siyuanAPI.downloadFile(importedAsset)).toEqual(originalImage);
     await openWorkspace(page, `/?id=${importedID}`);
     await getDocumentEditor(page, importedID);
-    await expect(getTitle(page, importedID).locator("img")).toHaveAttribute("src", asset);
+    await expect(getTitle(page, importedID).locator("img")).toHaveAttribute("src", importedAsset);
     await expect(getTitle(page, importedID).locator('[data-type~="strong"]')).toHaveText("Image title");
 });
 

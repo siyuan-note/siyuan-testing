@@ -1,8 +1,8 @@
 import {expect, Locator} from "@playwright/test";
 
-// Mobile uses a direct flex scroller, not the desktop .file-tree__items wrapper.
+// The role=tree element can be nested inside the shared pinned/regular tree scroller.
 export const revealMobileFileTreeItem = async (tree: Locator, item: Locator) => {
-    const scroller = tree.locator(':scope > .fn__flex-1').filter({has: tree.page().locator(':scope > [role="tree"]')});
+    const scroller = tree.locator(':scope > [data-file-tree-scroll]');
     await expect(scroller).toBeVisible();
     const originalTop = await scroller.evaluate(element => element.scrollTop);
     const restore = async () => {
@@ -18,7 +18,7 @@ export const revealMobileFileTreeItem = async (tree: Locator, item: Locator) => 
             await settleRender();
             const position = await item.evaluateAll(elements => {
                 const row = elements[0];
-                const container = row?.closest('[role="tree"]')?.parentElement;
+                const container = row?.closest('[data-file-tree-scroll]');
                 if (!row || !container) return null;
                 const rect = row.getBoundingClientRect();
                 const viewport = container.getBoundingClientRect();
