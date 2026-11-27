@@ -1206,26 +1206,29 @@ test.describe("table editing", () => {
         );
         const table = editor.locator(':scope > [data-type="NodeTable"]');
         const firstColumnCells = table.locator("tbody tr td:first-child");
-        // #18537 后单元格多选通过拖拽框选完成，再右键选中的单元格打开菜单合并
-        await dragSelectCells(page, firstColumnCells.nth(0), firstColumnCells.nth(1));
-        await firstColumnCells.nth(1).click({button: "right"});
-        const menu = page.locator("#commonMenu:not(.fn__none)");
-        await expect(menu).toBeVisible();
-        const mergeLabel = await page.evaluate(() => window.siyuan.languages.mergeCell);
-        await requestTransaction(page, () => getMenuItemByLabel(page, menu, mergeLabel).click());
+        await mergeTableCells(page, firstColumnCells.nth(0), firstColumnCells.nth(1));
+        const mergedCell = firstColumnCells.first();
+        await expect(mergedCell).toHaveAttribute("rowspan", "2");
+        await mergedCell.scrollIntoViewIfNeeded();
 
         const bodyRows = table.locator("tbody tr");
+        const mergedCellBox = await mergedCell.boundingBox();
         const firstRowBox = await bodyRows.nth(0).boundingBox();
         const secondRowBox = await bodyRows.nth(1).boundingBox();
+        expect(mergedCellBox).not.toBeNull();
         expect(firstRowBox).not.toBeNull();
         expect(secondRowBox).not.toBeNull();
-        const secondRowCell = bodyRows.nth(1).locator("td:not(.fn__none)").first();
-        await hoverTableControl(page, secondRowCell, "row");
+        // 命中第一列合并单元格覆盖第二行的部分，避开表格底部居中的高度手柄。
+        await mergedCell.hover({position: {
+            x: Math.min(16, mergedCellBox!.width / 2),
+            y: secondRowBox!.y + secondRowBox!.height / 2 - mergedCellBox!.y,
+        }});
         const rowControl = getVisibleTableControl(page, "row");
+        await expect(rowControl).toBeVisible();
         const rowControlBox = await rowControl.boundingBox();
         expect(rowControlBox).not.toBeNull();
         expect(rowControlBox!.width).toBeCloseTo(16, 0);
-        expect(rowControlBox!.height).toBeCloseTo(secondRowBox!.height, 0);
+        expect(rowControlBox!.height).toBeCloseTo(firstRowBox!.height, 0);
         // #18537 后合并单元格的行手柄锚定在合并单元格的起始行（合并区域的锚点行），
         // 允许 2px 的像素取整误差
         expect(Math.abs((rowControlBox!.y + rowControlBox!.height / 2) -
